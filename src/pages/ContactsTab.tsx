@@ -59,8 +59,8 @@ const TrashIcon = ({ size = 16 }: { size?: number }) => (
   </svg>
 );
 
-const GripIcon = ({ size = 16 }: { size?: number }) => (
-  <svg {...iconProps} width={size} height={size}>
+const GripIcon = ({ size = 16, style }: { size?: number; style?: React.CSSProperties }) => (
+  <svg {...iconProps} width={size} height={size} style={style}>
     <circle cx="9" cy="5" r="1" />
     <circle cx="15" cy="5" r="1" />
     <circle cx="9" cy="12" r="1" />
@@ -195,7 +195,7 @@ function CategoryBadge({ category }: { category: string }) {
 }
 
 /** Segment pills shown above the table (mirrors the existing cTypeFilter values). */
-const DEFAULT_TYPE_TABS: { id: string; label: string }[] = [
+const DEFAULT_TYPE_TABS: { id: string; label: string; count?: number }[] = [
   { id: 'all', label: 'All Contacts' },
   { id: 'Existing Client', label: 'Clients' },
   { id: 'New Lead', label: 'Leads' },
@@ -975,7 +975,7 @@ export default function ContactsTab({
                     .substring(0, 2)
                     .toUpperCase() || '??';
 
-                  const handleDragStart = (e: React.DragEvent) => {
+                  const handleDragStart = (e: React.DragEvent<HTMLTableRowElement>) => {
                     const contactData = {
                       id: c.id,
                       name: c.name,
@@ -987,7 +987,7 @@ export default function ContactsTab({
                     e.currentTarget.style.opacity = '0.5';
                   };
 
-                  const handleDragEnd = (e: React.DragEvent) => {
+                  const handleDragEnd = (e: React.DragEvent<HTMLTableRowElement>) => {
                     e.currentTarget.style.opacity = '1';
                     setDraggedContactId(null);
                   };

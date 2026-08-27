@@ -437,7 +437,7 @@ export default function CampaignsTab({
   const [selectedTemplate, setSelectedTemplate] = useState<EmailTemplate | null>(null);
   const [audienceContacts, setAudienceContacts] = useState<Contact[]>([]);
   const [contactTypes, setContactTypes] = useState<ContactType[]>([]);
-  const [contactTypesLoading, setContactTypesLoading] = useState(true);
+  const [, setContactTypesLoading] = useState(true);
   const [saving, setSaving] = useState(false);
 
   // ─── EDITOR STATE ───
@@ -461,7 +461,7 @@ export default function CampaignsTab({
   const [sendInBatches, setSendInBatches] = useState(false);
   const [batchSize, setBatchSize] = useState(30);
   const [batchDelayHours, setBatchDelayHours] = useState(1);
-  const [selectedContacts, setSelectedContacts] = useState<Contact[]>([]);
+  const [selectedContacts] = useState<Contact[]>([]);
 
   const DELAY_OPTIONS = [
     { value: 0.25, label: '15 Minutes' },
