@@ -5,8 +5,15 @@
  * save to Supabase → fetch audience → sync Mailchimp → create campaign →
  * upload content → send/schedule → update Supabase.
  */
-const API_URL: string =
+const rawApiUrl: string =
   (import.meta.env.VITE_API_URL as string | undefined) || 'http://localhost:5000';
+
+// The request helpers below already prefix every route with `/api`
+// (e.g. `/api/campaigns`). Strip a trailing `/api` from the configured base so
+// we don't end up with a doubled prefix like `/api/api/campaigns`. This lets
+// `VITE_API_URL=/api` resolve to same-origin `/api/...` requests that are then
+// forwarded by the Vercel rewrite to the backend.
+const API_URL: string = rawApiUrl.replace(/\/api\/?$/, '');
 
 import type {
   FollowupConfig,
