@@ -99,6 +99,14 @@ app.get("/api/test-email", async (req, res) => {
   }
 });
 
+// Root health-check so `GET /` does not fall through to the 404 handler.
+app.get('/', (req, res) => {
+  res.json({
+    success: true,
+    message: 'IUOVA SIGN API is running',
+  });
+});
+
 // ─── 404 handler ──────────────────────────────────────────────────────────
 
 app.use((req, res) => {
