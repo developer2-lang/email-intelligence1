@@ -754,3 +754,131 @@ export function wrapHtmlDocument(html: string): string {
     '</html>',
   ].join('\n');
 }
+
+const CANONICAL_LINK_STYLE = 'color:#0066cc !important;text-decoration:underline !important;overflow-wrap:anywhere;word-break:break-word;';
+
+function isButtonAnchor(anchor: string): boolean {
+  return /data-te-button/.test(anchor);
+}
+
+function isSocialAnchor(anchor: string): boolean {
+  return /<img\b[^>]*>/i.test(anchor) && !/<svg\b/i.test(anchor);
+}
+
+function getAnchorHref(anchor: string): string {
+  const match = anchor.match(/\bhref\s*=\s*["']([^"']*)["']/i);
+  return match ? match[1] : '';
+}
+
+function getAnchorContent(anchor: string): string {
+  const openEnd = anchor.indexOf('>');
+  const closeStart = anchor.lastIndexOf('</a>');
+  if (openEnd === -1 || closeStart === -1 || closeStart < openEnd) return '';
+  return anchor.slice(openEnd + 1, closeStart);
+}
+
+function setAnchorStyle(anchor: string, style: string): string {
+  const styleRe = /\sstyle\s*=\s*["']([^"']*)["']/i;
+  if (styleRe.test(anchor)) {
+    return anchor.replace(styleRe, ` style="${style}"`);
+  }
+  return anchor.replace(/>\s*$/, ` style="${style}">`);
+}
+
+function setAnchorContent(anchor: string, content: string): string {
+  const openEnd = anchor.indexOf('>');
+  const closeStart = anchor.lastIndexOf('</a>');
+  if (openEnd === -1 || closeStart === -1 || closeStart < openEnd) return anchor;
+  return anchor.slice(0, openEnd + 1) + content + anchor.slice(closeStart);
+}
+
+function extractOriginalUrlFromTracking(href: string): string {
+  const urlParam = href.match(/[?&]url=([^&#]+)/i);
+  if (urlParam) {
+    try {
+      return decodeURIComponent(urlParam[1]);
+    } catch {
+      return urlParam[1];
+    }
+  }
+  return href;
+}
+
+function normalizeAnchorContent(content: string, href: string): string {
+  let normalized = content;
+  
+  // Remove nested spans that override color
+  normalized = normalized.replace(/<span\b[^>]*style\s*=\s*["'][^"']*color\s*:\s*#[0-9a-fA-F]{3,6}[^"']*["'][^>]*>([\s\S]*?)<\/span>/gi, '$1');
+  
+  // If content contains the full URL, keep it; otherwise use href
+  if (normalized.includes(href)) {
+    return normalized;
+  }
+  
+  // Check if content is a truncated version of href
+  const hrefLower = href.toLowerCase();
+  const contentLower = normalized.toLowerCase();
+  if (hrefLower.startsWith(contentLower.replace(/\s+/g, ''))) {
+    return href;
+  }
+  
+  return normalized;
+}
+
+export function normalizeEmailLinks(html: string): string {
+  if (!html) return html;
+  
+  const anchors: Array<{ full: string; href: string; content: string; index: number }> = [];
+  let match;
+  const anchorRegex = /<a\b[^>]*>[\s\S]*?<\/a>/gi;
+  
+  while ((match = anchorRegex.exec(html)) !== null) {
+    const full = match[0];
+    const href = getAnchorHref(full);
+    const content = getAnchorContent(full);
+    anchors.push({ full, href, content, index: match.index });
+  }
+  
+  if (anchors.length === 0) return html;
+  
+  let result = html;
+  let offset = 0;
+  
+  for (const anchor of anchors) {
+    if (isButtonAnchor(anchor.full) || isSocialAnchor(anchor.full)) {
+      continue;
+    }
+    
+    const originalUrl = extractOriginalUrlFromTracking(anchor.href);
+    const normalizedContent = normalizeAnchorContent(anchor.content, originalUrl);
+    
+    let newAnchor = anchor.full;
+    newAnchor = setAnchorStyle(newAnchor, CANONICAL_LINK_STYLE);
+    newAnchor = setAnchorContent(newAnchor, normalizedContent);
+    
+    const start = anchor.index + offset;
+    const end = start + anchor.full.length;
+    result = result.slice(0, start) + newAnchor + result.slice(end);
+    offset += newAnchor.length - anchor.full.length;
+  }
+  
+  // Handle split URLs (text after </a> that continues the URL)
+  // This is a simplified version - looks for text immediately after </a> that looks like a URL continuation
+  result = result.replace(
+    /<\/a>\s*([a-zA-Z0-9\/\-_\.?=&%#]+)/gi,
+    (match, continuation) => {
+      // Check if the preceding anchor's href contains this continuation
+      const beforeMatch = result.slice(0, result.indexOf(match)).match(/<a\b[^>]*href\s*=\s*["']([^"']*)["']/i);
+      if (beforeMatch) {
+        const href = beforeMatch[1];
+        const originalUrl = extractOriginalUrlFromTracking(href);
+        if (originalUrl.includes(continuation)) {
+          return ''; // Remove the continuation as it's already in the anchor
+        }
+      }
+      return match;
+    }
+  );
+  
+  return result;
+}
