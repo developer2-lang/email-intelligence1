@@ -43,6 +43,15 @@ app.get('/api/health', (req, res) => {
   });
 });
 
+// Health-check for the root path so `GET /` does not fall through to the
+// 404 handler (which produces `Route not found: GET /` on Vercel).
+app.get('/', (req, res) => {
+  res.json({
+    success: true,
+    message: 'IUOVA SIGN API is running',
+  });
+});
+
 app.use('/api/campaigns', campaignRoutes);
 app.use('/api/tracking', trackingRoutes);
 app.use('/api/track', trackingRoutes);
