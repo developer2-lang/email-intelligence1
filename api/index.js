@@ -52,6 +52,15 @@ app.get('/', (req, res) => {
   });
 });
 
+app.get('/api', (req, res) => {
+  res.json({
+    success: true,
+    status: 'ok',
+    service: 'email-intelligence-backend',
+    message: 'API is running',
+  });
+});
+
 app.use('/api/campaigns', campaignRoutes);
 app.use('/api/tracking', trackingRoutes);
 app.use('/api/track', trackingRoutes);
