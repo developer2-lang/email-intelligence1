@@ -20,3 +20,4 @@ dist/
 
 supabase/.temp/
 supabase-backup-2026-08-22/
+.vercel

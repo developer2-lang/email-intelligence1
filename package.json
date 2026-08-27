@@ -16,6 +16,7 @@
     "@netlify/functions": "^5.3.0",
     "@supabase/supabase-js": "^2.111.0",
     "cors": "^2.8.6",
+    "dotenv": "^16.4.5",
     "express": "^5.2.1",
     "grapesjs": "^0.23.5",
     "node-cron": "^4.6.0",
