@@ -310,9 +310,29 @@ function batchSizeOf(sequence: any): number {
   return Number.isFinite(value) && value > 0 ? value : 30;
 }
 
+/** Ensure a step has its batch queue row (the runner also does this lazily). */
+async function ensureStepBatchState(sequence: any, step: any): Promise<any | null> {
+  const existing = await loadStepBatchState(sequence.id, step.id);
+  if (existing) return existing;
+  try {
+    const { error } = await supabase.rpc('create_sequence_batch_state', {
+      p_sequence_id: sequence.id,
+      p_sequence_step_id: step.id,
+      p_batch_size: batchSizeOf(sequence),
+      p_batch_enabled: true,
+      p_first_delay: Number(sequence.first_batch_delay_hours) || 0,
+      p_subsequent_delay: Number(sequence.subsequent_batch_delay_hours) || 1,
+    });
+    if (error) logErr(`Failed to create batch state for step ${step.id}: ${error.message}`);
+  } catch (error) {
+    logErr(`Failed to create batch state for step ${step.id}: ${(error as Error).message}`);
+  }
+  return loadStepBatchState(sequence.id, step.id);
+}
+
 async function manualBatchGate(sequence: any, step: any): Promise<{ allowed: boolean; reason?: string; deferredTo?: string }> {
   if (!sequence || !step || !sequence.batch_enabled) return { allowed: true };
-  const state = await loadStepBatchState(sequence.id, step.id);
+  const state = await ensureStepBatchState(sequence, step);
   if (!state || !state.batch_enabled) return { allowed: true };
   const nowMs = Date.now();
   const nextAt = state.next_batch_at ? new Date(state.next_batch_at).getTime() : 0;

@@ -3613,8 +3613,14 @@ export default function SequencesTab({ onPersistSequences, onToast }: SequencesT
                   const totalRecipients = audienceCount ?? 0;
                   const estimatedBatches =
                     totalRecipients > 0 && batchSize > 0 ? Math.ceil(totalRecipients / batchSize) : 0;
-                  const delayLabel =
-                    DELAY_OPTIONS.find((o) => o.value === batchDelayHours)?.label || '1 Hour';
+                  // Match the dropdown's selected delay by numeric value with a
+                  // small tolerance — batchDelayHours is a float (5/60 etc.) and
+                  // the stored/parsed value can drift by an ULP, which made the
+                  // exact === match fall through to a hardcoded '1 Hour'.
+                  const selectedDelay =
+                    DELAY_OPTIONS.find((o) => Math.abs(o.value - batchDelayHours) < 1e-9) ||
+                    DELAY_OPTIONS[0];
+                  const delayLabel = selectedDelay?.label || '1 Hour';
 
                   return (
                     <div
@@ -3677,7 +3683,9 @@ export default function SequencesTab({ onPersistSequences, onToast }: SequencesT
                             Send next batch after
                           </label>
                           <select
-                            value={batchDelayHours}
+                            value={
+                              (DELAY_OPTIONS.find((o) => Math.abs(o.value - batchDelayHours) < 1e-9) || { value: '' }).value
+                            }
                             onChange={(e) => setBatchDelayHours(parseFloat(e.target.value))}
                             style={{
                               width: '100%',
