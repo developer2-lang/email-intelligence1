@@ -103,6 +103,97 @@ function enumValue(value: unknown, name: string, allowed: string[]): string | un
   return v;
 }
 
+// ─── Per-step batching config (shared config, per-step runtime queue) ───────
+// One batch configuration is inherited by every step (sequences.batch_*). The
+// runtime keeps a SEPARATE queue per step (sequence_step_batch_state) so each
+// step schedules its own batches without blocking or being blocked by others.
+
+const BATCH_SIZE_DEFAULT = 30;
+const FIRST_BATCH_DELAY_DEFAULT = 0;
+const SUBSEQUENT_BATCH_DELAY_DEFAULT = 1;
+
+interface BatchConfig {
+  batch_enabled: boolean;
+  batch_size: number;
+  first_batch_delay_hours: number;
+  subsequent_batch_delay_hours: number;
+}
+
+function normalizeBatchConfig(payload: any): BatchConfig {
+  const batchEnabled =
+    payload && payload.batch_enabled !== undefined ? Boolean(payload.batch_enabled) : false;
+  const batchSize =
+    payload && payload.batch_size !== undefined ? Number(payload.batch_size) : BATCH_SIZE_DEFAULT;
+  if (!Number.isInteger(batchSize) || batchSize < 1) {
+    badRequest('batch_size must be an integer >= 1');
+  }
+  const firstDelay =
+    payload && payload.first_batch_delay_hours !== undefined
+      ? Number(payload.first_batch_delay_hours)
+      : FIRST_BATCH_DELAY_DEFAULT;
+  if (!Number.isFinite(firstDelay) || firstDelay < 0) {
+    badRequest('first_batch_delay_hours must be a number >= 0');
+  }
+  const subsequentDelay =
+    payload && payload.subsequent_batch_delay_hours !== undefined
+      ? Number(payload.subsequent_batch_delay_hours)
+      : SUBSEQUENT_BATCH_DELAY_DEFAULT;
+  if (!Number.isFinite(subsequentDelay) || subsequentDelay < 0) {
+    badRequest('subsequent_batch_delay_hours must be a number >= 0');
+  }
+  return {
+    batch_enabled: batchEnabled,
+    batch_size: batchSize,
+    first_batch_delay_hours: firstDelay,
+    subsequent_batch_delay_hours: subsequentDelay,
+  };
+}
+
+/**
+ * (Re)sync the per-step batch queue rows for every step of a sequence to the
+ * SHARED sequence config. Best-effort: the sequence-runner also lazily creates
+ * a step's row on first send, so a missed RPC here is never fatal. Creating the
+ * rows at activation arms the first-batch delay (next_batch_at = now + delay);
+ * a config refresh preserves any in-flight progress in the rows.
+ */
+async function syncSequenceBatchState(sequenceId: string): Promise<void> {
+  try {
+    const sequence = await getSequenceRow(sequenceId);
+    const steps = await listSteps(sequenceId);
+    for (const step of steps) {
+      await supabase.rpc('create_sequence_batch_state', {
+        p_sequence_id: sequenceId,
+        p_sequence_step_id: step.id,
+        p_batch_size: Number(sequence.batch_size) > 0 ? Number(sequence.batch_size) : BATCH_SIZE_DEFAULT,
+        p_batch_enabled: !!sequence.batch_enabled,
+        p_first_delay: Number(sequence.first_batch_delay_hours) || 0,
+        p_subsequent_delay: Number(sequence.subsequent_batch_delay_hours) || SUBSEQUENT_BATCH_DELAY_DEFAULT,
+      });
+    }
+  } catch (err) {
+    console.warn('[sequenceApi] batch-state sync failed:', (err as Error).message);
+  }
+}
+
+/** Load every step's batch state row for a sequence (for progress display). */
+async function loadSequenceBatchStates(sequenceId: string): Promise<Map<string, any>> {
+  const map = new Map<string, any>();
+  try {
+    const { data, error } = await supabase
+      .from('sequence_step_batch_state')
+      .select('*')
+      .eq('sequence_id', sequenceId);
+    if (error) {
+      console.warn('[sequenceApi] batch-state load failed:', error.message);
+      return map;
+    }
+    for (const row of data || []) map.set(row.sequence_step_id, row);
+  } catch (err) {
+    console.warn('[sequenceApi] batch-state load failed:', (err as Error).message);
+  }
+  return map;
+}
+
 // ─── Step helpers ──────────────────────────────────────────────────────────
 
 function normalizeBranch(value: unknown): StepParentBranch | null {
@@ -807,6 +898,7 @@ export function createSequence(payload: SequenceInput): Promise<Sequence> {
     }
     const recipientType = enumValue(payload && payload.recipient_type, 'recipient_type', RECIPIENT_TYPES) || 'all';
     const sendMode = enumValue(payload && payload.send_mode, 'send_mode', SEND_MODES) || 'both';
+    const batch = normalizeBatchConfig(payload || {});
     const now = new Date().toISOString();
 
     const { data, error } = await supabase
@@ -817,6 +909,10 @@ export function createSequence(payload: SequenceInput): Promise<Sequence> {
         trigger_type: triggerType,
         recipient_type: recipientType,
         send_mode: sendMode,
+        batch_enabled: batch.batch_enabled,
+        batch_size: batch.batch_size,
+        first_batch_delay_hours: batch.first_batch_delay_hours,
+        subsequent_batch_delay_hours: batch.subsequent_batch_delay_hours,
         status: 'draft',
         created_at: now,
         updated_at: now,

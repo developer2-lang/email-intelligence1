@@ -115,6 +115,18 @@ export interface Sequence {
   /** How it sends: automatic | manual | both. */
   send_mode: SendMode
   status: SequenceStatus
+  /**
+   * Per-step batching config. One shared configuration is INHERITED by every
+   * step of the sequence; the runtime tracks each step's own queue via
+   * `sequence_step_batch_state` (see SequenceStepBatchState).
+   */
+  batch_enabled: boolean
+  /** Max recipients per batch window (per step). */
+  batch_size: number
+  /** Hours to wait before the FIRST batch window opens (0 = immediately). */
+  first_batch_delay_hours: number
+  /** Hours between subsequent batch windows (0.25 = 15m, 0.5 = 30m, 1 = 1h, …). */
+  subsequent_batch_delay_hours: number
   /** Decorated step count (list endpoint). */
   steps_count?: number
   /** Steps included by GET /api/sequences/:id. */
@@ -182,6 +194,34 @@ export interface SequenceStepProgress {
     label: string
     subject: string | null
   }>
+  /** Batch queue state for THIS step (empty when batching is disabled). */
+  batch_enabled?: boolean
+  /** Which batch is currently open (0 = not started). */
+  current_batch_number?: number
+  /** How many recipients already sent in the current batch. */
+  batch_sent?: number
+  /** Batch size for this step's queue. */
+  batch_size?: number
+  /** When the NEXT batch window opens (null → window open / not scheduled). */
+  next_batch_at?: string | null
+  /** When this step's queue was marked fully drained (all sends delivered). */
+  batch_completed_at?: string | null
+}
+
+/** One row of the per-step runtime batch queue (sequence_step_batch_state). */
+export interface SequenceStepBatchState {
+  sequence_id: string
+  sequence_step_id: string
+  batch_size: number
+  batch_enabled: boolean
+  first_batch_delay_hours: number
+  subsequent_batch_delay_hours: number
+  current_batch_number: number
+  batch_sent: number
+  next_batch_at: string | null
+  completed_at: string | null
+  created_at: string | null
+  updated_at: string | null
 }
 
 /** Payload for POST/PUT /api/sequences. */
@@ -191,6 +231,11 @@ export interface SequenceInput {
   trigger_type: TriggerType
   recipient_type?: RecipientType
   send_mode?: SendMode
+  /** Per-step batching config (optional; defaults to disabled with size 30). */
+  batch_enabled?: boolean
+  batch_size?: number
+  first_batch_delay_hours?: number
+  subsequent_batch_delay_hours?: number
 }
 
 /** Payload for POST/PUT /api/sequences/:id/steps. */

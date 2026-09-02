@@ -260,15 +260,17 @@ export default function FollowupsTab({
   const [sendInBatches, setSendInBatches] = useState(false)
   const [batchDelayHours, setBatchDelayHours] = useState(1)
 
-  const DELAY_OPTIONS = [
-    { value: 0.25, label: '15 Minutes' },
-    { value: 0.5, label: '30 Minutes' },
-    { value: 1, label: '1 Hour' },
-    { value: 2, label: '2 Hours' },
-    { value: 4, label: '4 Hours' },
-    { value: 8, label: '8 Hours' },
-    { value: 24, label: '24 Hours' },
-  ]
+const DELAY_OPTIONS = [
+  { value: 5 / 60, label: '5 Minutes' },
+  { value: 10 / 60, label: '10 Minutes' },
+  { value: 0.25, label: '15 Minutes' },
+  { value: 0.5, label: '30 Minutes' },
+  { value: 1, label: '1 Hour' },
+  { value: 2, label: '2 Hours' },
+  { value: 4, label: '4 Hours' },
+  { value: 8, label: '8 Hours' },
+  { value: 24, label: '24 Hours' },
+]
 
   const [activeConfig, setActiveConfig] = useState<FollowupConfigRow | null>(null)
   const [openedContacts, setOpenedContacts] = useState<OpenedContact[]>([])

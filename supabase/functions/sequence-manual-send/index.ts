@@ -13,6 +13,15 @@
  *   response: { results: [{contact_id, status, email_type?, error?, skipped?}],
  *               sent, scheduled, skipped }
  *
+ * BATCHING:
+ *   Manual sends SHARE the step's batch queue (sequence_step_batch_state) with
+ *   the sequence-runner worker. When the sequence has batch_enabled=true:
+ *     - recipients in a closed window / a full batch are reported
+ *       status='batch_scheduled' (deferred, never sent now);
+ *     - everyone inside the open window/capacity is sent, and the queue is
+ *       incremented after each provider-confirmed send, so automatic and manual
+ *       triggers never double-count slots.
+ *
  * SAFETY (never trusts the frontend selection blindly):
  *   - The sequence must be 'active' and NOT in 'automatic'-only send mode.
  *   - Every recipient is re-validated against the canonical branch resolver
@@ -270,6 +279,61 @@ async function evaluateNodeEligibility({
     clicked,
     clicked_at: clickedAt,
   };
+}
+
+// ─── Per-step batching (cloud-scheduled, same queue as the runner) ──────────
+// Manual sends RESPECT batching: they share the step's sequence_step_batch_state
+// queue with the sequence-runner worker, so a "Send Now" trigger can never blast
+// a batched step. The gate mirrors the runner exactly:
+//   * sequence.batch_enabled=false / no state row  -> send immediately
+//   * next_batch_at in the future (window closed)  -> defer (batch_scheduled)
+//   * batch already full in the open window        -> defer (batch_scheduled)
+//   * otherwise the window is open                 -> send, then increment the
+//     queue so the batch slot is consumed atomically.
+
+async function loadStepBatchState(sequenceId: string, stepId: string): Promise<any | null> {
+  const { data, error } = await supabase
+    .from('sequence_step_batch_state')
+    .select('*')
+    .eq('sequence_id', sequenceId)
+    .eq('sequence_step_id', stepId)
+    .maybeSingle();
+  if (error) {
+    logErr(`Failed to read batch state for sequence ${sequenceId} step ${stepId}: ${error.message}`);
+    return null;
+  }
+  return data || null;
+}
+
+function batchSizeOf(sequence: any): number {
+  const value = Number(sequence && sequence.batch_size);
+  return Number.isFinite(value) && value > 0 ? value : 30;
+}
+
+async function manualBatchGate(sequence: any, step: any): Promise<{ allowed: boolean; reason?: string; deferredTo?: string }> {
+  if (!sequence || !step || !sequence.batch_enabled) return { allowed: true };
+  const state = await loadStepBatchState(sequence.id, step.id);
+  if (!state || !state.batch_enabled) return { allowed: true };
+  const nowMs = Date.now();
+  const nextAt = state.next_batch_at ? new Date(state.next_batch_at).getTime() : 0;
+  if (nextAt > nowMs) {
+    return { allowed: false, reason: 'window_closed', deferredTo: new Date(state.next_batch_at).toISOString() };
+  }
+  if (state.current_batch_number > 0 && state.batch_sent >= state.batch_size) {
+    return { allowed: false, reason: 'batch_full' };
+  }
+  return { allowed: true };
+}
+
+/** Call AFTER a provider-confirmed manual send so the queue stays in sync with the runner. */ async function recordStepBatchSend(sequence: any, step: any): Promise<void> {
+  if (!sequence || !sequence.batch_enabled || !step) return;
+  const { error } = await supabase.rpc('increment_sequence_batch_count', {
+    p_sequence_id: sequence.id,
+    p_sequence_step_id: step.id,
+    p_batch_size: batchSizeOf(sequence),
+    p_next_delay_hours: Number(sequence.subsequent_batch_delay_hours) || 1,
+  });
+  if (error) logErr(`Failed to record batch send for step ${step.id}: ${error.message}`);
 }
 
 function resolveStepContent(step: any, emailType: 'increment' | 'normal') {
@@ -1128,6 +1192,22 @@ Deno.serve(async (req: Request) => {
         continue;
       }
 
+      // Per-step batching gate — manual sends respect the step's batch queue.
+      // A closed window / full batch defers this recipient (status
+      // 'batch_scheduled'); the automatic worker delivers them at the next
+      // window, matching the cloud-scheduled behavior of the runner.
+      const batchGate = await manualBatchGate(sequence, step);
+      if (!batchGate.allowed) {
+        results.push({
+          contact_id: contactId,
+          status: 'batch_scheduled',
+          skipped: true,
+          reason: batchGate.reason,
+          next_batch_at: batchGate.deferredTo || null,
+        });
+        continue;
+      }
+
       try {
         const enrollment = { sequence_id: sequenceId, contact_id: contactId };
         const emailType = emailTypeForNode(step);
@@ -1141,6 +1221,8 @@ Deno.serve(async (req: Request) => {
         if (insertError) throw toError(insertError, 'Failed to log sequence step');
 
         await ensureEnrollmentAndAdvance({ sequenceId, contactId, sequence, contact, step });
+        // Consume the batch slot only after the provider confirmed the send.
+        await recordStepBatchSend(sequence, step);
         alreadySent.add(contactId);
         results.push({ contact_id: contactId, status: 'sent', email_type: emailType });
         log(`Sent step ${step.step_number} (${emailType}) to ${contact.email}`);
@@ -1151,7 +1233,7 @@ Deno.serve(async (req: Request) => {
     }
 
     const sent = results.filter((r: any) => r.status === 'sent').length;
-    const scheduled = results.filter((r: any) => r.status === 'increment_scheduled').length;
+    const scheduled = results.filter((r: any) => r.status === 'increment_scheduled' || r.status === 'batch_scheduled').length;
     const skipped = results.filter((r: any) => r.skipped).length;
 
     return respond(200, { success: true, data: { results, sent, scheduled, skipped } });

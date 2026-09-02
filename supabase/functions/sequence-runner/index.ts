@@ -415,6 +415,127 @@ async function isLinearChild(sequenceId, step) {
   const list = siblings || [];
   return list.length > 0 && list.every((s)=>s.parent_branch === BRANCH_OPENED);
 }
+// ─── Per-step batching (cloud-scheduled) ──────────────────────────────────
+// Every step owns an INDEPENDENT batch queue: sequence_step_batch_state row per
+// (sequence_id, sequence_step_id) holds that step's batch_size/counters and its
+// own next_batch_at. The shared sequences.batch_* columns are the single
+// user-facing configuration; the runtime queue paces each step autonomously.
+//
+// GATE RULE (single source of truth — checked at the START of processStepSend,
+// so the DESTINATION step's queue paces the send):
+//   * sequence.batch_enabled=false OR no batch state row  -> send immediately
+//   * next_batch_at in the future (first-batch or between-batch window) ->
+//     DEFER the enrollment: next_run_at = next_batch_at. The cloud cron keeps
+//     ticking (laptop off); when the window opens the due enrollment re-enters
+//     the drain loop and is sent. A browser/laptop timer is never the agent.
+//   * otherwise the window is open -> send (increment_sequence_batch_count
+//     records the send atomically and rolls into the next batch when full).
+async function loadStepBatchState(sequenceId, stepId) {
+  if (!stepId) return null;
+  const { data, error } = await supabase.from('sequence_step_batch_state').select('*').eq('sequence_id', sequenceId).eq('sequence_step_id', stepId).maybeSingle();
+  if (error) {
+    logErr(`[BATCH] Failed to read batch state for sequence ${sequenceId} step ${stepId}: ${error.message}`);
+    return null;
+  }
+  return data || null;
+}
+
+/** Ensure a step has its batch queue row (defensive — the API also creates rows on activation/config save). */ async function ensureStepBatchState(sequence, step) {
+  const existing = await loadStepBatchState(sequence.id, step.id);
+  if (existing) return existing;
+  try {
+    const { error } = await supabase.rpc('create_sequence_batch_state', {
+      p_sequence_id: sequence.id,
+      p_sequence_step_id: step.id,
+      p_batch_size: batchSizeOf(sequence),
+      p_batch_enabled: true,
+      p_first_delay: Number(sequence.first_batch_delay_hours) || 0,
+      p_subsequent_delay: Number(sequence.subsequent_batch_delay_hours) || 1
+    });
+    if (error) logErr(`[BATCH] Failed to create batch state for step ${step.id}: ${error.message}`);
+  } catch (error) {
+    logErr(`[BATCH] Failed to create batch state for step ${step.id}: ${error.message}`);
+  }
+  return loadStepBatchState(sequence.id, step.id);
+}
+
+/** Batch gate: { allowed } or { allowed:false, deferredTo } where deferredTo is the next batch window. */ async function stepBatchGate(sequence, step) {
+  if (!sequence || !step || !sequence.batch_enabled) return {
+    allowed: true
+  };
+  const state = await ensureStepBatchState(sequence, step);
+  if (!state || !state.batch_enabled) return {
+    allowed: true
+  };
+  const nextAt = state.next_batch_at ? new Date(state.next_batch_at).getTime() : 0;
+  if (nextAt > Date.now()) {
+    return {
+      allowed: false,
+      deferredTo: new Date(state.next_batch_at).toISOString()
+    };
+  }
+  return {
+    allowed: true
+  };
+}
+
+/** Call AFTER a provider-confirmed send to record the batch slot (atomic, rolls into the next scheduled batch when full). */ async function recordStepBatchSend(sequence, step) {
+  if (!sequence || !sequence.batch_enabled || !step) return;
+  try {
+    const { data, error } = await supabase.rpc('increment_sequence_batch_count', {
+      p_sequence_id: sequence.id,
+      p_sequence_step_id: step.id,
+      p_batch_size: batchSizeOf(sequence),
+      p_next_delay_hours: Number(sequence.subsequent_batch_delay_hours) || 1
+    });
+    if (error) {
+      logErr(`[BATCH] Failed to record step send for step ${step.id}: ${error.message}`);
+      return;
+    }
+    const first = data && data[0];
+    if (first && first.scheduled) {
+      log(`[BATCH] step ${step.id}/${step.step_number} — batch ${first.batch_number - 1} filled (${batchSizeOf(sequence)} sent), next batch window ${first.next_batch_at} (cloud-scheduled)`);
+    }
+  } catch (error) {
+    logErr(`[BATCH] Failed to record step send for step ${step.id}: ${error.message}`);
+  }
+}
+
+/**
+ * End-of-tick pass: mark a step's batch queue COMPLETED once every enrollment
+ * that was positioned on it has moved on (i.e. all eligible sends for the step
+ * are delivered). Only steps that already STARTED are considered (a fresh
+ * branch could still receive enrollments), and any later send clears
+ * completed_at via the increment, so late branch arrivals stay consistent.
+ */
+async function completeDrainedStepBatches(sequenceIds) {
+  for (const sequenceId of sequenceIds || []){
+    try {
+      const { data: states, error: stateError } = await supabase.from('sequence_step_batch_state').select('*').eq('sequence_id', sequenceId);
+      if (stateError) continue;
+      for (const state of states || []){
+        if (state.completed_at || state.current_batch_number <= 0) continue;
+        const { count } = await supabase.from('sequence_enrollments').select('id', {
+          count: 'exact',
+          head: true
+        }).eq('sequence_id', sequenceId).eq('status', 'active').eq('current_step_id', state.sequence_step_id);
+        if (count === 0) {
+          await supabase.rpc('complete_sequence_batch_state', {
+            p_sequence_id: sequenceId,
+            p_sequence_step_id: state.sequence_step_id
+          });
+          log(`[BATCH] step ${state.sequence_step_id} queue fully drained — marked completed`);
+        }
+      }
+    } catch (error) {
+      logErr(`[BATCH] completion pass failed for sequence ${sequenceId}: ${error.message}`);
+    }
+  }
+}
+function batchSizeOf(sequence) {
+  const value = Number(sequence && sequence.batch_size);
+  return Number.isFinite(value) && value > 0 ? value : 30;
+}
 // ─── Sending ──────────────────────────────────────────────────────────────
 function resolveStepContent(step, emailType) {
   if (emailType === 'increment' && step.increment_subject && step.increment_body) {
@@ -1000,6 +1121,22 @@ async function processEnrollmentChain(initial) {
   };
 }
 async function processStepSend({ enrollment, sequence, context, currentStep, contact, existingStepLog }) {
+  // Per-step batching gate — the DESTINATION step's own queue decides whether
+  // this recipient may be sent NOW. A closed window defers the enrollment by
+  // pushing next_run_at to next_batch_at; the cloud cron re-arms it when the
+  // window opens (laptop can stay closed). Nothing else runs in here.
+  const gate = await stepBatchGate(sequence, currentStep);
+  if (!gate.allowed && gate.deferredTo) {
+    await supabase.from('sequence_enrollments').update({
+      next_run_at: gate.deferredTo,
+      updated_at: new Date().toISOString()
+    }).eq('id', enrollment.id);
+    log(`[BATCH] step ${currentStep.id}/${currentStep.step_number} window not open (next ${gate.deferredTo}) — deferred enrollment ${enrollment.id}`);
+    return {
+      deferred: true,
+      deferredTo: gate.deferredTo
+    };
+  }
   const emailType = emailTypeForNode(currentStep);
   try {
     log('[SENDING]', contact && contact.email || enrollment.contact_id, '[STEP]', `${currentStep.id}/${currentStep.step_number}`, '[PARENT]', currentStep.parent_step_id, '[BRANCH]', currentStep.parent_branch, '[SEQUENCE]', sequence.id);
@@ -1052,6 +1189,10 @@ async function processStepSend({ enrollment, sequence, context, currentStep, con
       step: currentStep,
       sentAtIso: new Date().toISOString()
     });
+    // Record the send in the step's batch queue (atomic; rolls into the next
+    // scheduled batch when it fills). Never called for failed sends, so a
+    // provider failure never burns a batch slot.
+    await recordStepBatchSend(sequence, currentStep);
     log('[SENT]', contact && contact.email || enrollment.contact_id, '[STEP]', `${currentStep.id}/${currentStep.step_number}`, '[SEQUENCE]', sequence.id);
     const advanced = await advanceAfterSend({
       enrollment,
@@ -1162,6 +1303,7 @@ async function logBranchSnapshot(sequenceId) {
 function outcomeLabel(result) {
   if (!result) return 'done';
   if (result.sent) return 'sent';
+  if (result.deferred) return `deferred-until-${result.deferredTo || 'next-batch'}`;
   if (result.failed) return 'failed';
   if (result.completed) return 'completed';
   if (result.skipped) return 'skipped';
@@ -1281,6 +1423,10 @@ async function checkDueEnrollments(sequenceIdsOverride) {
     }
     if (progress === 0) break;
   }
+
+  await completeDrainedStepBatches([
+    ...seenSequences
+  ]);
 
   log(`Summary — due=${summary.due} processed=${summary.processed} revived=${summary.revived} repaired=${summary.repaired} skipped=${summary.skipped} failed=${summary.failed}`);
   if (sequenceIdsOverride) {
