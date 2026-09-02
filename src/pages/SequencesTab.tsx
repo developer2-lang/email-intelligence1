@@ -2020,6 +2020,23 @@ export default function SequencesTab({ onPersistSequences, onToast }: SequencesT
   const [fRecipientType, setFRecipientType] = useState<RecipientType>('all');
   const [fSendMode, setFSendMode] = useState<SendMode>('both');
   const [stepDrafts, setStepDrafts] = useState<StepDraft[]>([newStepDraft()]);
+  // ─── BATCH SENDING STATE (mirrors Campaigns / Follow-ups UI) ───
+  const [sendInBatches, setSendInBatches] = useState(false);
+  const [batchSize, setBatchSize] = useState(30);
+  const [batchDelayHours, setBatchDelayHours] = useState(1);
+
+  const DELAY_OPTIONS = [
+    { value: 5 / 60, label: '5 Minutes' },
+    { value: 10 / 60, label: '10 Minutes' },
+    { value: 0.25, label: '15 Minutes' },
+    { value: 0.5, label: '30 Minutes' },
+    { value: 1, label: '1 Hour' },
+    { value: 2, label: '2 Hours' },
+    { value: 4, label: '4 Hours' },
+    { value: 8, label: '8 Hours' },
+    { value: 24, label: '24 Hours' },
+  ];
+
   const [searchTerm, setSearchTerm] = useState('');
   const [filterMode, setFilterMode] = useState<'all' | SendMode>('all');
 
@@ -2495,6 +2512,9 @@ export default function SequencesTab({ onPersistSequences, onToast }: SequencesT
     setFRecipientType('all');
     setFSendMode('both');
     setStepDrafts([newStepDraft()]);
+    setSendInBatches(false);
+    setBatchSize(30);
+    setBatchDelayHours(1);
     void loadTemplates();
     setModalOpen(true);
   };
@@ -2517,6 +2537,13 @@ export default function SequencesTab({ onPersistSequences, onToast }: SequencesT
     setFTrigger(source.trigger_type);
     setFRecipientType(source.recipient_type || 'all');
     setFSendMode(source.send_mode || 'both');
+    setSendInBatches(!!source.batch_enabled);
+    setBatchSize(Number(source.batch_size) > 0 ? Number(source.batch_size) : 30);
+    setBatchDelayHours(
+      Number(source.subsequent_batch_delay_hours) >= 0
+        ? Number(source.subsequent_batch_delay_hours)
+        : 1,
+    );
     let existing = source.steps && source.steps.length > 0 ? source.steps.map(stepToDraft) : [];
     // Pair each Not Opened branch node with its Opened sibling (same parent
     // node + same step number) so one card edits BOTH branches: the increment
@@ -2639,6 +2666,12 @@ export default function SequencesTab({ onPersistSequences, onToast }: SequencesT
         trigger_type: fTrigger,
         recipient_type: fRecipientType,
         send_mode: fSendMode,
+        // Batch sending configuration (shared config, per-step runtime; mirrors
+        // the Campaigns / Follow-ups batching UI fields).
+        batch_enabled: sendInBatches,
+        batch_size: sendInBatches ? batchSize : undefined,
+        first_batch_delay_hours: sendInBatches ? batchDelayHours : undefined,
+        subsequent_batch_delay_hours: sendInBatches ? batchDelayHours : undefined,
       } as SequenceInput;
       let sequenceId: string;
       if (editing) {
@@ -3527,6 +3560,199 @@ export default function SequencesTab({ onPersistSequences, onToast }: SequencesT
                     );
                   })}
                 </div>
+              </div>
+
+              {/* Sending Limits / Batch Sending (matches Campaigns & Follow-ups UI) */}
+              <div
+                style={{
+                  height: '1px',
+                  background: 'var(--border)',
+                  margin: '4px 0 16px',
+                }}
+              />
+              <div
+                style={{
+                  fontSize: '12px',
+                  letterSpacing: '0.05em',
+                  color: 'var(--text4)',
+                  marginBottom: '12px',
+                  fontWeight: 700,
+                  textTransform: 'uppercase',
+                }}
+              >
+                Sending Limits
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', marginBottom: '16px' }}>
+                <label
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '10px',
+                    fontSize: '13px',
+                    color: '#334155',
+                    cursor: 'pointer',
+                    fontWeight: 500,
+                  }}
+                >
+                  <input
+                    type="checkbox"
+                    checked={sendInBatches}
+                    onChange={(e) => setSendInBatches(e.target.checked)}
+                    style={{
+                      accentColor: '#2563EB',
+                      width: '16px',
+                      height: '16px',
+                      cursor: 'pointer',
+                      margin: 0,
+                    }}
+                  />
+                  Send in batches
+                </label>
+
+                {sendInBatches && (() => {
+                  const totalRecipients = audienceCount ?? 0;
+                  const estimatedBatches =
+                    totalRecipients > 0 && batchSize > 0 ? Math.ceil(totalRecipients / batchSize) : 0;
+                  const delayLabel =
+                    DELAY_OPTIONS.find((o) => o.value === batchDelayHours)?.label || '1 Hour';
+
+                  return (
+                    <div
+                      style={{
+                        display: 'flex',
+                        flexDirection: 'column',
+                        gap: '12px',
+                        padding: '16px',
+                        background: '#F8FAFC',
+                        border: '1px solid #E2E8F0',
+                        borderRadius: '10px',
+                      }}
+                    >
+                      <div style={{ display: 'flex', gap: '24px' }}>
+                        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                          <label
+                            style={{
+                              fontSize: '12px',
+                              fontWeight: 600,
+                              color: '#64748B',
+                              textTransform: 'uppercase',
+                              letterSpacing: '0.05em',
+                            }}
+                          >
+                            Batch Size
+                          </label>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                            <input
+                              type="number"
+                              value={batchSize}
+                              onChange={(e) => setBatchSize(Math.max(1, parseInt(e.target.value) || 1))}
+                              min={1}
+                              max={1000}
+                              style={{
+                                width: '100px',
+                                height: '40px',
+                                padding: '0 12px',
+                                border: '1px solid #E2E8F0',
+                                borderRadius: '8px',
+                                fontSize: '13px',
+                                outline: 'none',
+                                background: '#FFFFFF',
+                                color: '#334155',
+                                textAlign: 'center',
+                              }}
+                            />
+                            <span style={{ fontSize: '13px', color: '#64748B' }}>contacts</span>
+                          </div>
+                        </div>
+                        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                          <label
+                            style={{
+                              fontSize: '12px',
+                              fontWeight: 600,
+                              color: '#64748B',
+                              textTransform: 'uppercase',
+                              letterSpacing: '0.05em',
+                            }}
+                          >
+                            Send next batch after
+                          </label>
+                          <select
+                            value={batchDelayHours}
+                            onChange={(e) => setBatchDelayHours(parseFloat(e.target.value))}
+                            style={{
+                              width: '100%',
+                              height: '40px',
+                              padding: '0 12px',
+                              border: '1px solid #E2E8F0',
+                              borderRadius: '8px',
+                              fontSize: '13px',
+                              outline: 'none',
+                              background: '#FFFFFF',
+                              color: '#334155',
+                              cursor: 'pointer',
+                            }}
+                          >
+                            {DELAY_OPTIONS.map((opt) => (
+                              <option key={opt.value} value={opt.value}>
+                                {opt.label}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                      </div>
+
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                        <div style={{ fontSize: '13px', color: '#1D4ED8', fontWeight: 500 }}>
+                          {batchSize} contacts will be sent every {delayLabel}.
+                        </div>
+                        {fAudience ? (
+                          <div style={{ fontSize: '12px', color: '#475569' }}>
+                            Audience: {fAudience} ({totalRecipients})
+                          </div>
+                        ) : (
+                          <div style={{ fontSize: '12px', color: '#475569' }}>
+                            Audience: {fAudience || 'Not selected'} ({totalRecipients})
+                          </div>
+                        )}
+                        <div style={{ fontSize: '12px', color: '#475569', fontWeight: 500 }}>
+                          Estimated batches: {estimatedBatches}
+                        </div>
+
+                        {estimatedBatches > 0 && (
+                          <div
+                            style={{
+                              maxHeight: '200px',
+                              overflowY: 'auto',
+                              fontSize: '12px',
+                              color: '#334155',
+                              background: '#FFFFFF',
+                              border: '1px solid #E2E8F0',
+                              borderRadius: '8px',
+                              padding: '12px',
+                            }}
+                          >
+                            {Array.from({ length: estimatedBatches }, (_, i) => {
+                              const start = i * batchSize + 1;
+                              const end = Math.min((i + 1) * batchSize, totalRecipients);
+                              return (
+                                <div
+                                  key={i}
+                                  style={{
+                                    padding: '4px 0',
+                                    borderBottom:
+                                      i < estimatedBatches - 1 ? '1px solid #F1F5F9' : 'none',
+                                  }}
+                                >
+                                  Batch {i + 1}: S.No. {start}–{end}
+                                </div>
+                              );
+                            })}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })()}
               </div>
 
               {/* Steps */}

@@ -197,14 +197,14 @@ async function getActiveSequenceIds(onlyId) {
 async function getDueEnrollments(sequenceIds) {
   if (sequenceIds.length === 0) return [];
   const nowIso = new Date().toISOString();
-  const { data, error } = await supabase.from('sequence_enrollments').select('*, sequences(id, campaign_id, name, status, recipient_type, send_mode), ' + 'contacts(*)').in('sequence_id', sequenceIds).eq('status', 'active').lte('next_run_at', nowIso).order('next_run_at', {
+  const { data, error } = await supabase.from('sequence_enrollments').select('*, sequences(id, campaign_id, name, status, recipient_type, send_mode, batch_enabled, batch_size, first_batch_delay_hours, subsequent_batch_delay_hours), ' + 'contacts(*)').in('sequence_id', sequenceIds).eq('status', 'active').lte('next_run_at', nowIso).order('next_run_at', {
     ascending: true
   });
   if (error) throw toError(error, 'Failed to fetch due sequence enrollments');
   return data || [];
 }
 async function reloadEnrollment(enrollmentId) {
-  const { data, error } = await supabase.from('sequence_enrollments').select('*, sequences(id, campaign_id, name, status, recipient_type, send_mode), ' + 'contacts(*)').eq('id', enrollmentId).maybeSingle();
+  const { data, error } = await supabase.from('sequence_enrollments').select('*, sequences(id, campaign_id, name, status, recipient_type, send_mode, batch_enabled, batch_size, first_batch_delay_hours, subsequent_batch_delay_hours), ' + 'contacts(*)').eq('id', enrollmentId).maybeSingle();
   if (error) throw toError(error, 'Failed to reload sequence enrollment');
   return data || null;
 }
@@ -467,11 +467,25 @@ async function loadStepBatchState(sequenceId, stepId) {
   if (!state || !state.batch_enabled) return {
     allowed: true
   };
+  const nowMs = Date.now();
   const nextAt = state.next_batch_at ? new Date(state.next_batch_at).getTime() : 0;
-  if (nextAt > Date.now()) {
+  if (nextAt > nowMs) {
     return {
       allowed: false,
       deferredTo: new Date(state.next_batch_at).toISOString()
+    };
+  }
+  // The window is OPEN. The batch counter is authoritative: when a previous
+  // send has already filled the current batch (batch_sent >= batch_size) but
+  // the next batch window has not yet been armed (e.g. a concurrent invocation
+  // incremented AFTER this read, or the window marker lags), do NOT send. Defer
+  // to the next window so concurrent runner invocations can never push more
+  // than batch_size sends into a single batch.
+  if (Number(state.current_batch_number) > 0 && Number(state.batch_sent) >= Number(state.batch_size)) {
+    const deferredTo = new Date(nowMs + Math.max(0, Number(sequence.subsequent_batch_delay_hours) || 0) * 3600 * 1000).toISOString();
+    return {
+      allowed: false,
+      deferredTo
     };
   }
   return {
