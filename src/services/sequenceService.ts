@@ -54,6 +54,11 @@ export function fetchAudienceOptions(): Promise<AudienceOption[]> {
   return sequenceApi.fetchAudienceOptions();
 }
 
+/** Count contacts that would be enrolled for a given target audience segment. */
+export function countContactsForAudience(audienceSegment: string): Promise<number> {
+  return sequenceApi.countContactsForAudience(audienceSegment);
+}
+
 /** Flat branch-step rows (sequence_branch_steps) for one sequence. */
 export function fetchBranchSteps(sequenceId: string): Promise<SequenceBranchStep[]> {
   return sequenceApi.fetchBranchSteps(sequenceId);

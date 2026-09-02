@@ -243,6 +243,25 @@ function wrapHtmlDocument(html) {
   if (!value.trim()) return value;
   if (/<!doctype\b|<\s*html\b|<\s*head\b/i.test(value)) return value;
 
+  // A document that already contains a <body> (but no outer <html>/<head>) must
+  // be COMPLETED into a single, well-formed document — NOT re-wrapped. Re-wrapping
+  // nests a second <body>, and mail clients strip the inner <body>'s content,
+  // which is exactly where the open-tracking pixel lives. So those templates
+  // silently lost their open pixel. Completing keeps exactly one <body>.
+  if (/<body\b/i.test(value)) {
+    return [
+      '<!DOCTYPE html>',
+      '<html lang="en">',
+      '<head>',
+      '<meta charset="utf-8" />',
+      '<meta name="viewport" content="width=device-width, initial-scale=1" />',
+      '<style>img{border:0;max-width:100%;}a{color:#1a73e8;}table{border-collapse:collapse;}</style>',
+      '</head>',
+      value,
+      '</html>',
+    ].join('\n');
+  }
+
   return [
     '<!DOCTYPE html>',
     '<html lang="en">',

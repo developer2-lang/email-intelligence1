@@ -1060,7 +1060,7 @@ function normalizeTimeToStore(timeStr?: string | null): string | null {
   ].join(':')
 }
 
-function buildScheduleRow(input: CampaignScheduleInput): Record<string, any> {
+export function buildScheduleRow(input: CampaignScheduleInput): Record<string, any> {
   const row: Record<string, any> = {
     schedule_type: input.schedule_type,
     start_date: input.start_date || null,

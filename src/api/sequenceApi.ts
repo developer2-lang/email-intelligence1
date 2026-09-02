@@ -39,7 +39,6 @@ const ENROLLMENTS_TABLE = 'sequence_enrollments';
 const STEP_LOGS_TABLE = 'sequence_step_logs';
 const BRANCH_STEPS_TABLE = 'sequence_branch_steps';
 const CONTACTS_TABLE = 'contacts';
-const CONTACT_TYPES_TABLE = 'contact_types';
 
 // ─── Domain constants (mirror backend/services/sequenceService.js) ─────────
 
@@ -880,7 +879,21 @@ export function deleteSequence(id: string): Promise<void> {
 
 // ─── Selector data (from the database) ─────────────────────────────────────
 
-/** Target-audience options derived from existing database data. */
+/**
+ * Target-audience options — sourced EXCLUSIVELY from the Contacts table.
+ *
+ * The Contacts table is the single source of truth for who a sequence can
+ * target. Every sequence's `audience_segment` is resolved at enrollment time
+ * against `contacts.contact_type` (see resolveContactsForAudience), so the
+ * dropdown MUST list the unique, real `contact_type` values that actually
+ * exist in the contacts table — NOT `company_category`, campaign segments, or
+ * the `contact_types` reference table (those values never match the
+ * `contact_type` column and would enroll zero contacts).
+ *
+ * Because the list is derived straight from the live column, adding a new
+ * contact type in Contacts makes it appear here automatically — nothing is
+ * hardcoded.
+ */
 export function fetchAudienceOptions(): Promise<AudienceOption[]> {
   return (async () => {
     const audiences = new Map<string, AudienceOption>();
@@ -888,24 +901,42 @@ export function fetchAudienceOptions(): Promise<AudienceOption[]> {
       const v = String(value || '').trim();
       if (v && !audiences.has(v)) audiences.set(v, { id: v, label: v });
     };
+    // "All Contacts" is a meta-audience (enroll everyone); the real, per-type
+    // audiences are appended below from the contacts table.
     add('All Contacts');
 
-    const { data: contactTypes } = await supabase.from(CONTACTS_TABLE).select('contact_type');
+    const { data: contactTypes, error } = await supabase
+      .from(CONTACTS_TABLE)
+      .select('contact_type')
+      .not('contact_type', 'is', null)
+      .neq('contact_type', '');
+    if (error) throw toError(error, 'Failed to load audiences from contacts');
     if (contactTypes) for (const row of contactTypes) add(row.contact_type);
 
-    const { data: categories } = await supabase.from(CONTACTS_TABLE).select('company_category');
-    if (categories) for (const row of categories) add(row.company_category);
-
-    const { data: segments } = await supabase.from('campaigns').select('audience_segment');
-    if (segments) for (const row of segments) add(row.audience_segment);
-
-    const { data: contactTypeRows } = await supabase
-      .from(CONTACT_TYPES_TABLE)
-      .select('name')
-      .eq('is_active', true);
-    if (contactTypeRows) for (const row of contactTypeRows) add(row.name);
-
     return [...audiences.values()];
+  })();
+}
+
+/**
+ * Count the contacts that would be enrolled for a given target audience.
+ * Mirrors the same filter used by resolveContactsForAudience / activateSequence
+ * so the UI preview and the actual enrollment always agree.
+ *
+ *  - 'All Contacts' (or empty) → every contact in the table.
+ *  - any other value        → contacts whose `contact_type` equals it.
+ */
+export function countContactsForAudience(audienceSegment: string): Promise<number> {
+  return (async () => {
+    const segment = String(audienceSegment || '').trim();
+    let query = supabase
+      .from(CONTACTS_TABLE)
+      .select('id', { count: 'exact', head: true });
+    if (segment && segment !== 'All Contacts') {
+      query = (query as any).eq('contact_type', segment);
+    }
+    const { count, error } = await query;
+    if (error) throw toError(error, 'Failed to count contacts for audience');
+    return count || 0;
   })();
 }
 

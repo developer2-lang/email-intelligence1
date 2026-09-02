@@ -548,11 +548,36 @@ async function sendSmtp(opts: {
 async function getCampaign(campaignId: string): Promise<any | null> {
   const { data, error } = await supabase
     .from('campaigns')
-    .select('*')
+    .select('id, campaign_name, subject_line, from_name, audience_segment, campaign_type, email_body, html_content, template_name, status, mailchimp_campaign_id, recipient_count, sent_at, scheduled_at, created_at, updated_at')
     .eq('id', campaignId)
     .maybeSingle();
   if (error) throw new Error(`Failed to fetch campaign: ${error.message}`);
   return data || null;
+}
+
+/**
+ * True when a follow-up campaign has an active schedule (a `campaign_schedules`
+ * row) and is set to `status='scheduled'`. Such follow-ups are delivered by the
+ * campaign scheduler to openers only at the scheduled times — they must NOT be
+ * sent on-open (sync_pending) or on-demand (send_selected / send_pending).
+ */
+async function isScheduledFollowup(followupCampaignId: string): Promise<boolean> {
+  if (!followupCampaignId) return false;
+  const { data: schedule, error: scheduleError } = await supabase
+    .from('campaign_schedules')
+    .select('id')
+    .eq('campaign_id', followupCampaignId)
+    .limit(1);
+  if (scheduleError) return false;
+  if (!schedule || schedule.length === 0) return false;
+
+  const { data: campaign, error: campaignError } = await supabase
+    .from('campaigns')
+    .select('status')
+    .eq('id', followupCampaignId)
+    .maybeSingle();
+  if (campaignError) return false;
+  return campaign && String(campaign.status).toLowerCase() === 'scheduled';
 }
 
 // ─── Attachments (mirrors send-campaign) ───────────────────────────────────
@@ -992,6 +1017,12 @@ async function handleSendSelected(payload: any): Promise<any[]> {
     throw new Error('A campaign cannot be its own follow-up campaign');
   }
 
+  // A scheduled follow-up is delivered by the campaign scheduler at its
+  // scheduled times — it cannot be sent on-demand via the manual panel.
+  if (await isScheduledFollowup(followupCampaignId)) {
+    throw new Error('This follow-up is scheduled — it will be sent automatically at its scheduled time');
+  }
+
   const openedByContact = await getOpenedByContact(campaignId, isAll, contactIds);
 
   let contacts: any[] = [];
@@ -1090,6 +1121,12 @@ async function handleSendPending(pendingId: string): Promise<{ id: string; statu
     throw new Error('This follow-up has already been sent');
   }
 
+  // A scheduled follow-up is delivered by the campaign scheduler — a queued
+  // pending row cannot be force-sent on-demand.
+  if (await isScheduledFollowup(String(pending.followup_campaign_id))) {
+    throw new Error('This follow-up is scheduled — it will be sent automatically at its scheduled time');
+  }
+
   // Re-verify the recipient genuinely opened the original campaign before
   // sending. A follow-up must NEVER go to a non-opener — even via a queued row.
   const { data: openedCheck, error: openedCheckError } = await supabase
@@ -1158,6 +1195,10 @@ async function handleSyncPending(): Promise<{ created: number; total_configs: nu
     if (!config.campaign_id || !config.followup_campaign_id) continue;
     const originalCampaignId = String(config.campaign_id);
     const followupCampaignId = String(config.followup_campaign_id);
+
+    // Scheduled follow-ups are delivered by the campaign scheduler at their
+    // scheduled times — do not queue them as on-open pending rows here.
+    if (await isScheduledFollowup(followupCampaignId)) continue;
 
     const { data: openedLogs, error: openedError } = await supabase
       .from('email_logs')

@@ -13,6 +13,7 @@ import {
   removeCampaignAttachment,
   fixBrokenImageUrls,
   formatFileSize,
+  buildScheduleInput,
 } from '../services/campaignService'
 import {
   uploadFollowupAttachment,
@@ -32,11 +33,13 @@ import {
 import { supabase } from '../supabase'
 import type {
   CampaignAttachment,
+  CampaignScheduleInput,
   EmailTemplate,
   FollowupConfigRow,
   FollowupMode,
   OpenedContact,
   PendingFollowup,
+  ScheduleType,
 } from '../types/campaign'
 
 interface FollowupsTabProps {
@@ -51,6 +54,11 @@ const DEFAULT_FROM_NAME = 'Rupali Sirsath — IUOVA Design Consultancy'
 const MERGE_TAGS = ['{{first_name}}', '{{company}}', '{{designation}}', '{{city}}', '{{month}}']
 
 const FOLLOWUP_PAGE_SIZE = 10
+
+const WEEKDAY_NAMES = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
+const MONTHLY_POSITIONS = ['First', 'Second', 'Third', 'Fourth', 'Last']
+const MONTHLY_WEEKDAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday']
+const MONTHLY_RULES = MONTHLY_POSITIONS.flatMap((p) => MONTHLY_WEEKDAYS.map((d) => `${p} ${d}`))
 
 function formatDateTime(input?: string | null): string {
   if (!input) return '—'
@@ -225,11 +233,38 @@ export default function FollowupsTab({
   const [isActive, setIsActive] = useState(true)
   const [creating, setCreating] = useState(false)
 
+  // ─── FOLLOW-UP SCHEDULE STATE (composer) ───
+  const [enableSchedule, setEnableSchedule] = useState(false)
+  const [scheduleType, setScheduleType] = useState<ScheduleType>('one_time')
+  const [compDate, setCompDate] = useState('')
+  const [compTime, setCompTime] = useState('10:00 AM')
+  const [repeatEvery, setRepeatEvery] = useState(1)
+  const [selectedDays, setSelectedDays] = useState<string[]>([])
+  const [monthlyOption, setMonthlyOption] = useState<'day' | 'weekday'>('day')
+  const [dayOfMonth, setDayOfMonth] = useState(15)
+  const [weekdayRule, setWeekdayRule] = useState('First Monday')
+
   // ─── ATTACHMENTS STATE (composer) ───
   const [attachments, setAttachments] = useState<CampaignAttachment[]>([])
   const [uploadingAttachment, setUploadingAttachment] = useState(false)
   const [attachmentError, setAttachmentError] = useState<string | null>(null)
   const attachmentInputRef = useRef<HTMLInputElement>(null)
+
+  // ─── BATCH SENDING STATE (composer — mirrors Campaigns) ───
+  // NOTE: Follow-up batch size is HARDCODED to 30 (not configurable).
+  const FOLLOWUP_BATCH_SIZE = 30
+  const [sendInBatches, setSendInBatches] = useState(false)
+  const [batchDelayHours, setBatchDelayHours] = useState(1)
+
+  const DELAY_OPTIONS = [
+    { value: 0.25, label: '15 Minutes' },
+    { value: 0.5, label: '30 Minutes' },
+    { value: 1, label: '1 Hour' },
+    { value: 2, label: '2 Hours' },
+    { value: 4, label: '4 Hours' },
+    { value: 8, label: '8 Hours' },
+    { value: 24, label: '24 Hours' },
+  ]
 
   const [activeConfig, setActiveConfig] = useState<FollowupConfigRow | null>(null)
   const [openedContacts, setOpenedContacts] = useState<OpenedContact[]>([])
@@ -348,11 +383,11 @@ export default function FollowupsTab({
     setTemplatesLoading(false)
   }, [])
 
-  const loadOpenedContacts = useCallback(async (campaignId: string) => {
+  const loadOpenedContacts = useCallback(async (campaignId: string, followupCampaignId?: string | null) => {
     setOpenedLoading(true)
     setOpenedError(null)
     try {
-      const data = await fetchOpenedContacts(campaignId)
+      const data = await fetchOpenedContacts(campaignId, followupCampaignId)
       setOpenedContacts(data || [])
       setSelectedOpenedIds([])
     } catch (err) {
@@ -407,7 +442,7 @@ export default function FollowupsTab({
   const handleSelectConfig = (config: FollowupConfigRow) => {
     setActiveConfig(config)
     setSelectedOpenedIds([])
-    void loadOpenedContacts(config.campaign_id)
+    void loadOpenedContacts(config.campaign_id, config.followup_campaign_id)
   }
 
   const openComposer = () => {
@@ -427,6 +462,8 @@ export default function FollowupsTab({
     setTemplateLoadError(null)
     setAttachments([])
     setAttachmentError(null)
+    setSendInBatches(false)
+    setBatchDelayHours(1)
     setTab('compose')
   }
 
@@ -609,8 +646,32 @@ export default function FollowupsTab({
       }
     }
 
+    if (enableSchedule) {
+      if (scheduleType === 'one_time' && !compDate) {
+        onToast('Select a schedule date for the one-time follow-up', 'error')
+        return
+      }
+      if (scheduleType === 'weekly' && selectedDays.length === 0) {
+        onToast('Select at least one weekday for the weekly follow-up', 'error')
+        return
+      }
+    }
+
     setCreating(true)
     try {
+      const schedule: CampaignScheduleInput | null = enableSchedule
+        ? buildScheduleInput({
+            scheduleType,
+            compDate,
+            compTime,
+            repeatEvery,
+            selectedDays,
+            monthlyOption,
+            dayOfMonth,
+            weekdayRule,
+          })
+        : null
+
       const result = await createFollowupConfig({
         original_campaign_id: originalId,
         followup_campaign_id: reuseExisting ? existingFollowupId : null,
@@ -622,6 +683,11 @@ export default function FollowupsTab({
         template_name: selectedTemplate?.name || undefined,
         followup_mode: followupMode,
         is_active: isActive,
+        schedule,
+        send_in_batches: sendInBatches,
+        batch_size: FOLLOWUP_BATCH_SIZE,
+        first_batch_delay_hours: sendInBatches ? batchDelayHours : undefined,
+        subsequent_batch_delay_hours: 1,
       })
 
       // Persist the follow-up's attachments against the follow-up campaign
@@ -667,6 +733,17 @@ export default function FollowupsTab({
       setTemplateLoadError(null)
       setAttachments([])
       setAttachmentError(null)
+      setEnableSchedule(false)
+      setScheduleType('one_time')
+      setCompDate('')
+      setCompTime('10:00 AM')
+      setRepeatEvery(1)
+      setSelectedDays([])
+      setMonthlyOption('day')
+      setDayOfMonth(15)
+      setWeekdayRule('First Monday')
+      setSendInBatches(false)
+      setBatchDelayHours(1)
 
       await refreshAll()
       setTab('active')
@@ -695,20 +772,61 @@ export default function FollowupsTab({
     }
     setSendingSelected(true)
     try {
-      const results = await sendSelectedFollowups(activeConfig.campaign_id, {
-        contact_ids: selectedOpenedIds,
-        followup_campaign_id: activeConfig.followup_campaign_id,
-      })
-      const sent = results.filter((r) => r.status === 'sent').length
-      const skipped = results.filter((r) => r.status === 'skipped').length
-      const failed = results.filter((r) => r.status === 'failed').length
+      // Resolve the configured first-batch delay from the follow-up campaign
+      // row (falls back to 1 hour). Subsequent batches always wait 1 hour.
+      let firstBatchDelayHours = batchDelayHours
+      if (activeConfig.followup_campaign_id) {
+        try {
+          const { data: fuCampaign } = await supabase
+            .from('campaigns')
+            .select('first_batch_delay_hours')
+            .eq('id', String(activeConfig.followup_campaign_id))
+            .maybeSingle()
+          if (fuCampaign && Number.isFinite(fuCampaign.first_batch_delay_hours)) {
+            firstBatchDelayHours = Number(fuCampaign.first_batch_delay_hours)
+          }
+        } catch {
+          // batch column may be missing before the migration — keep composer value
+        }
+      }
+
+      // Send the chosen contacts in fixed slices of exactly 30. Batch 1 sends
+      // immediately, then the configured first-batch delay before batch 2, and
+      // 1 hour between every subsequent batch.
+      const contactIds = [...selectedOpenedIds]
+      const totalBatches = Math.ceil(contactIds.length / FOLLOWUP_BATCH_SIZE)
+      let sent = 0
+      let skipped = 0
+      let failed = 0
+      for (let b = 1; b <= totalBatches; b++) {
+        const slice = contactIds.slice((b - 1) * FOLLOWUP_BATCH_SIZE, b * FOLLOWUP_BATCH_SIZE)
+        const results = await sendSelectedFollowups(activeConfig.campaign_id, {
+          contact_ids: slice,
+          followup_campaign_id: activeConfig.followup_campaign_id,
+        })
+        const batchSent = results.filter((r) => r.status === 'sent').length
+        const batchSkipped = results.filter((r) => r.status === 'skipped').length
+        const batchFailed = results.filter((r) => r.status === 'failed').length
+        sent += batchSent
+        skipped += batchSkipped
+        failed += batchFailed
+
+        // Delay before the next batch: the configured first-batch delay for
+        // the transition to batch 2, then 1 hour between subsequent batches.
+        if (b < totalBatches) {
+          const delayHours = b === 1 ? firstBatchDelayHours : 1
+          onToast(`Batch ${b}/${totalBatches} sent (${batchSent} sent). Waiting ${delayHours} hour(s) before the next batch…`, 'info')
+          await new Promise((resolve) => setTimeout(resolve, delayHours * 60 * 60 * 1000))
+        }
+      }
+
       const parts: string[] = []
       if (sent > 0) parts.push(`${sent} sent`)
       if (skipped > 0) parts.push(`${skipped} skipped`)
       if (failed > 0) parts.push(`${failed} failed`)
       onToast(`Follow-up processed: ${parts.join(', ') || 'no recipients'}`, 'success')
       setSelectedOpenedIds([])
-      await loadOpenedContacts(activeConfig.campaign_id)
+      await loadOpenedContacts(activeConfig.campaign_id, activeConfig.followup_campaign_id)
       await refreshAll()
     } catch (err) {
       onToast(err instanceof Error ? err.message : 'Failed to send follow-up', 'error')
@@ -981,9 +1099,11 @@ export default function FollowupsTab({
                       const isSelected = activeConfig && String(activeConfig.id) === String(config.id)
                       const followUpCampaign = campaignsById.get(String(config.followup_campaign_id || ''))
                       const scheduleText =
-                        followUpCampaign?.scheduleText && followUpCampaign.scheduleText !== '--'
-                          ? followUpCampaign.scheduleText
-                          : '—'
+                        (config.schedule_text && config.schedule_text !== '--')
+                          ? config.schedule_text
+                          : (followUpCampaign?.scheduleText && followUpCampaign.scheduleText !== '--')
+                            ? followUpCampaign.scheduleText
+                            : '—'
                       const delivered = config.followup_delivered
                       return (
                         <tr key={String(config.id)} className={isSelected ? 'fu-selected' : undefined}>
@@ -1073,7 +1193,14 @@ export default function FollowupsTab({
                           <td>
                             <div className="fu-cell-actions">
                               <div className="fu-cell-actions-row">
-                                {config.followup_mode === 'manual' &&
+                                {config.is_scheduled ? (
+                                  <span
+                                    className="tag tag-client"
+                                    title={scheduleText}
+                                  >
+                                    Scheduled
+                                  </span>
+                                ) : config.followup_mode === 'manual' &&
                                   (config.remaining_eligible > 0 ? (
                                     <button
                                       className="fu-btn-xs"
@@ -1093,7 +1220,8 @@ export default function FollowupsTab({
                                   value={config.followup_mode === 'automatic' ? 'automatic' : 'manual'}
                                   onChange={(e) => void handleModeChange(config, e.target.value as FollowupMode)}
                                   className="fu-mode-select"
-                                  title="Follow-up mode"
+                                  title={config.is_scheduled ? 'Scheduled follow-ups are delivered at their schedule' : 'Follow-up mode'}
+                                  disabled={config.is_scheduled}
                                 >
                                   <option value="manual">Manual</option>
                                   <option value="automatic">Automatic</option>
@@ -1201,24 +1329,35 @@ export default function FollowupsTab({
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '12px' }}>
                 <div>
                   <div style={sectionLabel}>
-                    Send Follow-up · Manual Mode
+                    {activeConfig.is_scheduled
+                      ? `Send Follow-up · Scheduled`
+                      : `Send Follow-up · Manual Mode`}
                   </div>
                   <div style={{ fontSize: '13px', color: '#334155', fontWeight: 600, marginTop: '4px' }}>
                     {activeConfig.original_campaign_name} → {activeConfig.followup_campaign_name}
                   </div>
                   <div style={{ fontSize: '11.5px', color: '#8A94A6', marginTop: '2px' }}>
-                    Only contacts who opened the original campaign are shown. Already-sent contacts are
-                    skipped.
-                    {activeConfig.remaining_eligible === 0
-                      ? ' Every eligible opener has already received the follow-up.'
-                      : ` ${activeConfig.remaining_eligible} eligible opener(s) still remain.`}
+                    {activeConfig.is_scheduled ? (
+                      <>
+                        This follow-up is scheduled for automatic delivery — manual on-demand sending is
+                        disabled. Delivery: <strong>{activeConfig.schedule_text || '—'}</strong> (IST).
+                      </>
+                    ) : (
+                      <>
+                        Only contacts who opened the original campaign are shown. Already-sent contacts are
+                        skipped.
+                        {activeConfig.remaining_eligible === 0
+                          ? ' Every eligible opener has already received the follow-up.'
+                          : ` ${activeConfig.remaining_eligible} eligible opener(s) still remain.`}
+                      </>
+                    )}
                   </div>
                 </div>
                 <button
                   type="button"
                   className="btn btn-secondary btn-sm"
                   disabled={openedLoading}
-                  onClick={() => void loadOpenedContacts(activeConfig.campaign_id)}
+                  onClick={() => void loadOpenedContacts(activeConfig.campaign_id, activeConfig.followup_campaign_id)}
                 >
                   {openedLoading ? 'Loading…' : '⟳ Refresh'}
                 </button>
@@ -1278,7 +1417,7 @@ export default function FollowupsTab({
                   <button
                     type="button"
                     onClick={() => void handleSendSelected()}
-                    disabled={sendingSelected || selectedOpenedIds.length === 0 || activeConfig.remaining_eligible === 0}
+                    disabled={activeConfig.is_scheduled || sendingSelected || selectedOpenedIds.length === 0 || activeConfig.remaining_eligible === 0}
                     style={{
                       marginTop: '12px',
                       background: '#2563EB',
@@ -1290,18 +1429,20 @@ export default function FollowupsTab({
                       fontSize: '13px',
                       fontWeight: 600,
                       cursor:
-                        sendingSelected || selectedOpenedIds.length === 0 || activeConfig.remaining_eligible === 0
+                        activeConfig.is_scheduled || sendingSelected || selectedOpenedIds.length === 0 || activeConfig.remaining_eligible === 0
                           ? 'not-allowed'
                           : 'pointer',
                       opacity:
-                        sendingSelected || selectedOpenedIds.length === 0 || activeConfig.remaining_eligible === 0
+                        activeConfig.is_scheduled || sendingSelected || selectedOpenedIds.length === 0 || activeConfig.remaining_eligible === 0
                           ? 0.5
                           : 1,
                     }}
                   >
-                    {sendingSelected
-                      ? 'Sending…'
-                      : `Send Follow-up to Selected (${selectedOpenedIds.length})`}
+                    {activeConfig.is_scheduled
+                      ? 'Scheduled · Manual send disabled'
+                      : sendingSelected
+                        ? 'Sending…'
+                        : `Send Follow-up to Selected (${selectedOpenedIds.length})`}
                   </button>
                 </>
               )}
@@ -1499,6 +1640,325 @@ export default function FollowupsTab({
                   When a recipient opens the original campaign's email, the follow-up is sent
                   (Automatic) or queued for review (Manual) to that opener only.
                 </div>
+              </div>
+            </div>
+
+            <div className="card" style={cardStyle}>
+              <div style={{ ...sectionLabel, marginBottom: '12px' }}>Follow-up Schedule Settings</div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                <label style={radioLabelStyle}>
+                  <input
+                    type="checkbox"
+                    checked={enableSchedule}
+                    onChange={(e) => setEnableSchedule(e.target.checked)}
+                    style={radioStyle}
+                  />
+                  Schedule this follow-up for automatic delivery
+                </label>
+                <div style={{ fontSize: '11px', color: '#8A94A6' }}>
+                  When a schedule is set, the follow-up is delivered by the campaign scheduler to
+                  the original campaign's openers only at the scheduled times (One Time / Weekly /
+                  Monthly, IST). A scheduled follow-up is not sent on-open and its Manual send
+                  controls are disabled. Toggle off to keep automatic / manual on-open delivery.
+                </div>
+
+                {enableSchedule && (
+                  <>
+                    <div style={{ height: '1px', background: '#E5E7EB', margin: '4px 0 8px' }} />
+                    <div style={{ fontSize: '12px', letterSpacing: '0.05em', color: '#8A94A6', marginBottom: '12px', fontWeight: 700, textTransform: 'uppercase' }}>Schedule Settings</div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                      <div>
+                        <div style={{ fontSize: '14px', fontWeight: 600, color: '#334155', marginBottom: '8px' }}>Schedule Type</div>
+                        <div style={{ display: 'flex', gap: '24px' }}>
+                          {([
+                            { key: 'one_time', label: 'One Time' },
+                            { key: 'weekly', label: 'Weekly' },
+                            { key: 'monthly', label: 'Monthly' },
+                          ] as { key: ScheduleType; label: string }[]).map(({ key, label }) => (
+                            <label key={key} style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px', color: '#334155', cursor: 'pointer', fontWeight: 500 }}>
+                              <input
+                                type="radio"
+                                name="fuScheduleType"
+                                checked={scheduleType === key}
+                                onChange={() => setScheduleType(key)}
+                                style={{ accentColor: '#2563EB', width: '16px', height: '16px', cursor: 'pointer', margin: 0 }}
+                              />
+                              {label}
+                            </label>
+                          ))}
+                        </div>
+                      </div>
+
+                      {scheduleType === 'one_time' && (
+                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 120px', gap: '12px' }}>
+                          <div className="form-group" style={{ margin: 0 }}>
+                            <label style={{ fontSize: '14px', fontWeight: 600, color: '#334155', display: 'block', marginBottom: '6px' }}>Schedule Date</label>
+                            <input
+                              type="date"
+                              value={compDate}
+                              onChange={(e) => setCompDate(e.target.value)}
+                              style={{ width: '100%', height: '48px', padding: '0 16px', border: '1px solid #E2E8F0', borderRadius: '10px', fontSize: '13px', outline: 'none' }}
+                            />
+                          </div>
+                          <div className="form-group" style={{ margin: 0 }}>
+                            <label style={{ fontSize: '14px', fontWeight: 600, color: '#334155', display: 'block', marginBottom: '6px' }}>Time (IST)</label>
+                            <input
+                              type="text"
+                              value={compTime}
+                              onChange={(e) => setCompTime(e.target.value)}
+                              style={{ width: '100%', height: '48px', padding: '0 16px', border: '1px solid #E2E8F0', borderRadius: '10px', fontSize: '13px', outline: 'none' }}
+                            />
+                          </div>
+                        </div>
+                      )}
+
+                      {scheduleType === 'weekly' && (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                            <span style={{ fontSize: '14px', fontWeight: 600, color: '#334155' }}>Repeat Every</span>
+                            <input
+                              type="number"
+                              min={1}
+                              value={repeatEvery}
+                              onChange={(e) => setRepeatEvery(Math.max(1, Number(e.target.value) || 1))}
+                              style={{ width: '64px', height: '40px', padding: '0 8px', border: '1px solid #E2E8F0', borderRadius: '10px', fontSize: '13px', outline: 'none', textAlign: 'center' }}
+                            />
+                            <span style={{ fontSize: '13px', color: '#64748B' }}>Week(s)</span>
+                          </div>
+                          <div>
+                            <div style={{ fontSize: '14px', fontWeight: 600, color: '#334155', marginBottom: '8px' }}>Send On</div>
+                            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(96px, 1fr))', gap: '8px' }}>
+                              {WEEKDAY_NAMES.map((day) => {
+                                const isChecked = selectedDays.includes(day)
+                                return (
+                                  <label key={day} style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px', color: '#334155', cursor: 'pointer', fontWeight: 500 }}>
+                                    <input
+                                      type="checkbox"
+                                      checked={isChecked}
+                                      onChange={() => setSelectedDays((prev) => (isChecked ? prev.filter((d) => d !== day) : [...prev, day]))}
+                                      style={{ accentColor: '#2563EB', width: '16px', height: '16px', cursor: 'pointer', margin: 0 }}
+                                    />
+                                    {day}
+                                  </label>
+                                )
+                              })}
+                            </div>
+                          </div>
+                          <div>
+                            <label style={{ fontSize: '14px', fontWeight: 600, color: '#334155', display: 'block', marginBottom: '6px' }}>Time (IST)</label>
+                            <input
+                              type="text"
+                              value={compTime}
+                              onChange={(e) => setCompTime(e.target.value)}
+                              style={{ width: '160px', height: '48px', padding: '0 16px', border: '1px solid #E2E8F0', borderRadius: '10px', fontSize: '13px', outline: 'none' }}
+                            />
+                          </div>
+                        </div>
+                      )}
+
+                      {scheduleType === 'monthly' && (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                            <span style={{ fontSize: '14px', fontWeight: 600, color: '#334155' }}>Repeat Every</span>
+                            <input
+                              type="number"
+                              min={1}
+                              value={repeatEvery}
+                              onChange={(e) => setRepeatEvery(Math.max(1, Number(e.target.value) || 1))}
+                              style={{ width: '64px', height: '40px', padding: '0 8px', border: '1px solid #E2E8F0', borderRadius: '10px', fontSize: '13px', outline: 'none', textAlign: 'center' }}
+                            />
+                            <span style={{ fontSize: '13px', color: '#64748B' }}>Month(s)</span>
+                          </div>
+                          <div>
+                            <div style={{ fontSize: '14px', fontWeight: 600, color: '#334155', marginBottom: '8px' }}>Monthly Schedule</div>
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                              <label style={{ display: 'flex', alignItems: 'center', gap: '10px', fontSize: '13px', color: '#334155', cursor: 'pointer', fontWeight: 500 }}>
+                                <input
+                                  type="radio"
+                                  name="fuMonthlyOption"
+                                  checked={monthlyOption === 'day'}
+                                  onChange={() => setMonthlyOption('day')}
+                                  style={{ accentColor: '#2563EB', width: '16px', height: '16px', cursor: 'pointer', margin: 0 }}
+                                />
+                                Day of Month
+                                <input
+                                  type="number"
+                                  min={1}
+                                  max={31}
+                                  value={dayOfMonth}
+                                  disabled={monthlyOption !== 'day'}
+                                  onChange={(e) => setDayOfMonth(Math.min(31, Math.max(1, Number(e.target.value) || 1)))}
+                                  style={{ width: '64px', height: '40px', padding: '0 8px', border: '1px solid #E2E8F0', borderRadius: '10px', fontSize: '13px', outline: 'none', textAlign: 'center', background: monthlyOption === 'day' ? '#FFFFFF' : '#F8FAFC', opacity: monthlyOption === 'day' ? 1 : 0.5 }}
+                                />
+                              </label>
+                              <label style={{ display: 'flex', alignItems: 'center', gap: '10px', fontSize: '13px', color: '#334155', cursor: 'pointer', fontWeight: 500 }}>
+                                <input
+                                  type="radio"
+                                  name="fuMonthlyOption"
+                                  checked={monthlyOption === 'weekday'}
+                                  onChange={() => setMonthlyOption('weekday')}
+                                  style={{ accentColor: '#2563EB', width: '16px', height: '16px', cursor: 'pointer', margin: 0 }}
+                                />
+                                Weekday
+                                <select
+                                  value={weekdayRule}
+                                  disabled={monthlyOption !== 'weekday'}
+                                  onChange={(e) => setWeekdayRule(e.target.value)}
+                                  style={{ height: '40px', padding: '0 10px', border: '1px solid #E2E8F0', borderRadius: '10px', fontSize: '13px', outline: 'none', background: monthlyOption === 'weekday' ? '#FFFFFF' : '#F8FAFC', cursor: 'pointer', opacity: monthlyOption === 'weekday' ? 1 : 0.5, minWidth: '150px' }}
+                                >
+                                  {MONTHLY_RULES.map((rule) => (
+                                    <option key={rule} value={rule}>{rule}</option>
+                                  ))}
+                                </select>
+                              </label>
+                            </div>
+                          </div>
+                          <div>
+                            <label style={{ fontSize: '14px', fontWeight: 600, color: '#334155', display: 'block', marginBottom: '6px' }}>Time (IST)</label>
+                            <input
+                              type="text"
+                              value={compTime}
+                              onChange={(e) => setCompTime(e.target.value)}
+                              style={{ width: '160px', height: '48px', padding: '0 16px', border: '1px solid #E2E8F0', borderRadius: '10px', fontSize: '13px', outline: 'none' }}
+                            />
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  </>
+                )}
+              </div>
+            </div>
+
+            <div className="card" style={cardStyle}>
+              <div style={{ ...sectionLabel, marginBottom: '12px' }}>Sending Limits</div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '10px', fontSize: '13px', color: '#334155', cursor: 'pointer', fontWeight: 500 }}>
+                  <input
+                    type="checkbox"
+                    checked={sendInBatches}
+                    onChange={(e) => setSendInBatches(e.target.checked)}
+                    style={{ accentColor: '#2563EB', width: '16px', height: '16px', cursor: 'pointer', margin: 0 }}
+                  />
+                  Send in batches
+                </label>
+
+                {sendInBatches && (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', padding: '16px', background: '#F8FAFC', border: '1px solid #E2E8F0', borderRadius: '10px' }}>
+                    <div style={{ display: 'flex', gap: '24px' }}>
+                      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                        <label style={{ fontSize: '12px', fontWeight: 600, color: '#64748B', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Batch Size</label>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                          <input
+                            type="number"
+                            value={FOLLOWUP_BATCH_SIZE}
+                            readOnly
+                            disabled
+                            min={1}
+                            max={1000}
+                            style={{
+                              width: '100px',
+                              height: '40px',
+                              padding: '0 12px',
+                              border: '1px solid #E2E8F0',
+                              borderRadius: '8px',
+                              fontSize: '13px',
+                              outline: 'none',
+                              background: '#F1F5F9',
+                              color: '#334155',
+                              textAlign: 'center',
+                              cursor: 'not-allowed',
+                            }}
+                          />
+                          <span style={{ fontSize: '13px', color: '#64748B' }}>contacts</span>
+                        </div>
+                        <div style={{ fontSize: '11px', color: '#8A94A6' }}>
+                          Follow-up batch size is fixed at 30.
+                        </div>
+                      </div>
+                      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                        <label style={{ fontSize: '12px', fontWeight: 600, color: '#64748B', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Send next batch after</label>
+                        <select
+                          value={batchDelayHours}
+                          onChange={(e) => setBatchDelayHours(parseFloat(e.target.value))}
+                          style={{
+                            width: '100%',
+                            height: '40px',
+                            padding: '0 12px',
+                            border: '1px solid #E2E8F0',
+                            borderRadius: '8px',
+                            fontSize: '13px',
+                            outline: 'none',
+                            background: '#FFFFFF',
+                            color: '#334155',
+                            cursor: 'pointer',
+                          }}
+                        >
+                          {DELAY_OPTIONS.map(opt => (
+                            <option key={opt.value} value={opt.value}>{opt.label}</option>
+                          ))}
+                        </select>
+                        <div style={{ fontSize: '11px', color: '#8A94A6' }}>
+                          Delay between the first and second batch. Subsequent batches wait 1 hour each.
+                        </div>
+                      </div>
+                    </div>
+
+                    {(() => {
+                      const totalRecipients =
+                        originalId === 'all'
+                          ? allOpened.length
+                          : Number(selectedOriginal?.opened ?? 0)
+                      const estimatedBatches = totalRecipients > 0 ? Math.ceil(totalRecipients / FOLLOWUP_BATCH_SIZE) : 0
+                      const delayLabel = DELAY_OPTIONS.find(o => o.value === batchDelayHours)?.label || '1 Hour'
+                      const audienceLabel =
+                        originalId === 'all'
+                          ? 'All eligible campaigns'
+                          : originalId && selectedOriginal
+                            ? String(selectedOriginal.name)
+                            : originalId
+                              ? 'Selected campaign'
+                              : 'No campaign selected'
+
+                      return (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                          <div style={{ fontSize: '13px', color: '#1D4ED8', fontWeight: 500 }}>
+                            {FOLLOWUP_BATCH_SIZE} contacts will be sent every {delayLabel}.
+                          </div>
+                          <div style={{ fontSize: '12px', color: '#475569' }}>
+                            Audience: {audienceLabel} ({totalRecipients})
+                          </div>
+                          <div style={{ fontSize: '12px', color: '#475569', fontWeight: 500 }}>
+                            Estimated batches: {estimatedBatches}
+                          </div>
+
+                          {estimatedBatches > 0 && (
+                            <div style={{
+                              maxHeight: '200px',
+                              overflowY: 'auto',
+                              fontSize: '12px',
+                              color: '#334155',
+                              background: '#FFFFFF',
+                              border: '1px solid #E2E8F0',
+                              borderRadius: '8px',
+                              padding: '12px'
+                            }}>
+                              {Array.from({ length: estimatedBatches }, (_, i) => {
+                                const start = i * FOLLOWUP_BATCH_SIZE + 1
+                                const end = Math.min((i + 1) * FOLLOWUP_BATCH_SIZE, totalRecipients)
+                                return (
+                                  <div key={i} style={{ padding: '4px 0', borderBottom: i < estimatedBatches - 1 ? '1px solid #F1F5F9' : 'none' }}>
+                                    Batch {i + 1}: S.No. {start}–{end}
+                                  </div>
+                                )
+                              })}
+                            </div>
+                          )}
+                        </div>
+                      )
+                    })()}
+                  </div>
+                )}
               </div>
             </div>
 
@@ -1953,6 +2413,11 @@ export default function FollowupsTab({
                 ) : (
                   pending.map((p) => {
                     const canSend = p.status === 'pending' || p.status === 'failed'
+                    const isScheduled = configs.some(
+                      (c) =>
+                        c.is_scheduled &&
+                        String(c.followup_campaign_id) === String(p.followup_campaign_id)
+                    )
                     return (
                       <tr key={String(p.id)}>
                         <td>
@@ -1973,7 +2438,11 @@ export default function FollowupsTab({
                           </span>
                         </td>
                         <td>
-                          {canSend ? (
+                          {isScheduled ? (
+                            <span className="tag tag-client" title="Delivered automatically at its schedule">
+                              Scheduled
+                            </span>
+                          ) : canSend ? (
                             <button
                               className="btn btn-secondary btn-xs"
                               disabled={sendingPendingId === String(p.id)}

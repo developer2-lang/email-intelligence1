@@ -366,6 +366,13 @@ export async function recordClick(input) {
     console.error(`[Tracking] Step-log click sync failed (non-fatal): ${error.message}`);
   }
 
+  // Opens are NOT manufactured from a click. Per the tracking design,
+  // email_logs.opened is set ONLY by recordOpen() when the open pixel
+  // (/api/tracking/open/:trackingId) is actually requested by the mail client.
+  // A click proves interaction but must not back-fill opened=true — otherwise
+  // opens could never be measured independently of clicks. The campaign
+  // statistics below are recomputed from the authoritative email_logs rows.
+
   const stats = await supabase
     .from('email_logs')
     .select('id, status, opened, clicked')

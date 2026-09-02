@@ -13,7 +13,17 @@
  * real recipients. We warn loudly in that case.
  */
 const configured = (process.env.TRACKING_BASE_URL || '').trim();
-const baseUrl = configured.replace(/\/+$/, '');
+// The URL builders below always append `/api/tracking/...`. If an operator sets
+// TRACKING_BASE_URL to `https://host/api` (a common mistake — the tracking
+// routes are mounted at `/api/tracking`, so the origin alone is correct), the
+// result would be `https://host/api/api/tracking/open/:id`, which does NOT match
+// the mounted route and 404s — so the open pixel (and click links) silently
+// never reach the backend. Normalise the origin here by stripping a trailing
+// `/api` segment (and any trailing slash) so the final URL is always exactly
+// `https://host/api/tracking/...` no matter how the env var is written.
+const baseUrl = configured
+  .replace(/\/+$/, '')
+  .replace(/\/api$/i, '');
 
 if (!baseUrl) {
   console.warn('═══════════════════════════════════════════════════════════════════');

@@ -34,6 +34,7 @@ import {
   updateSequence,
   deleteSequence,
   fetchAudienceOptions,
+  countContactsForAudience,
   fetchBranchSteps,
   updateBranchStep,
   createStep,
@@ -2012,6 +2013,9 @@ export default function SequencesTab({ onPersistSequences, onToast }: SequencesT
 
   const [fName, setFName] = useState('');
   const [fAudience, setFAudience] = useState('');
+  /** Live count of contacts that match the currently selected target audience. */
+  const [audienceCount, setAudienceCount] = useState<number | null>(null);
+  const [audienceCountLoading, setAudienceCountLoading] = useState(false);
   const [fTrigger, setFTrigger] = useState<'manual' | 'time_based' | 'behaviour'>('manual');
   const [fRecipientType, setFRecipientType] = useState<RecipientType>('all');
   const [fSendMode, setFSendMode] = useState<SendMode>('both');
@@ -2376,6 +2380,34 @@ export default function SequencesTab({ onPersistSequences, onToast }: SequencesT
   useEffect(() => {
     void load();
   }, [load]);
+
+  // Live preview of how many contacts the selected Target Audience will enroll.
+  // Derived straight from the Contacts table (contact_type), so it always
+  // matches what activation/enrollment actually does — and shows the required
+  // "No contacts found" message when the segment is empty.
+  useEffect(() => {
+    if (!modalOpen) return;
+    if (!fAudience) {
+      setAudienceCount(null);
+      setAudienceCountLoading(false);
+      return;
+    }
+    let cancelled = false;
+    setAudienceCountLoading(true);
+    void countContactsForAudience(fAudience)
+      .then((count) => {
+        if (!cancelled) setAudienceCount(count);
+      })
+      .catch(() => {
+        if (!cancelled) setAudienceCount(null);
+      })
+      .finally(() => {
+        if (!cancelled) setAudienceCountLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [fAudience, modalOpen]);
 
   // Latest wall-clock used to decide Scheduled (future next_run_at) vs Sending
   // (due now) from a state value instead of calling an impure function during
@@ -2744,14 +2776,25 @@ export default function SequencesTab({ onPersistSequences, onToast }: SequencesT
   const handleToggleStatus = async (seq: Sequence) => {
     if (actBusyId) return;
     const isActive = seq.status === 'active';
+    const isPaused = seq.status === 'paused';
     setActBusyId(seq.id);
     try {
       if (isActive) {
         await pauseSequence(seq.id);
         onToast(`Sequence "${seq.name}" paused`, 'success');
       } else {
-        await activateSequence(seq.id);
-        onToast(`Sequence "${seq.name}" activated`, 'success');
+        const activated = await activateSequence(seq.id);
+        const count = activated.enrolled_count;
+        if (count === 0) {
+          onToast('No contacts found for this target audience.', 'info');
+        } else {
+          onToast(
+            isPaused
+              ? `Sequence "${seq.name}" resumed — ${count} contact${count === 1 ? '' : 's'} enrolled`
+              : `Sequence "${seq.name}" activated — ${count} contact${count === 1 ? '' : 's'} enrolled`,
+            'success',
+          );
+        }
       }
       bumpReload();
       await load();
@@ -2791,12 +2834,14 @@ export default function SequencesTab({ onPersistSequences, onToast }: SequencesT
     try {
       const activated = await activateSequence(seq.id);
       const count = activated.enrolled_count;
-      onToast(
-        count != null
-          ? `Enrolled ${count} contact${count === 1 ? '' : 's'}`
-          : `Sequence "${seq.name}" active`,
-        'success',
-      );
+      if (count === 0) {
+        onToast('No contacts found for this target audience.', 'info');
+      } else {
+        onToast(
+          `Enrolled ${count} contact${count === 1 ? '' : 's'}`,
+          'success',
+        );
+      }
       bumpReload();
       await load();
     } catch (err) {
@@ -3384,6 +3429,24 @@ export default function SequencesTab({ onPersistSequences, onToast }: SequencesT
                       </option>
                     ))}
                   </select>
+                  <div style={{ fontSize: '11px', color: 'var(--text4)', marginTop: '4px' }}>
+                    {audienceCountLoading ? (
+                      'Checking matching contacts…'
+                    ) : fAudience ? (
+                      audienceCount === 0 ? (
+                        <span style={{ color: 'var(--red, #ef4444)' }}>
+                          No contacts found for this target audience.
+                        </span>
+                      ) : (
+                        <>
+                          <strong style={{ color: 'var(--text2)' }}>{audienceCount}</strong>{' '}
+                          contact{audienceCount === 1 ? '' : 's'} will be enrolled.
+                        </>
+                      )
+                    ) : (
+                      'Pick the contact type from the Contacts table to target.'
+                    )}
+                  </div>
                 </div>
               </div>
 

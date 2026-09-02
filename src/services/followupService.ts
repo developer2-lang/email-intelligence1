@@ -12,7 +12,9 @@
  * (email_logs opened=true) — never a segment, never the full contact list.
  */
 import { supabase } from '../supabase'
+import { buildScheduleRow, buildScheduleText } from './campaignService'
 import type {
+  CampaignScheduleInput,
   CreateFollowupConfigPayload,
   FollowupConfig,
   FollowupConfigApiResult,
@@ -27,6 +29,7 @@ import type {
 
 const CONFIG_TABLE = 'campaign_followups'
 const LOG_TABLE = 'campaign_followup_logs'
+const SCHEDULE_TABLE = 'campaign_schedules'
 const TRIGGER_TYPE = 'opened'
 
 /** Sentinel on campaigns.mailchimp_campaign_id flagging an "All" follow-up. */
@@ -325,6 +328,28 @@ async function fetchFollowupConfigs(): Promise<FollowupConfigRow[]> {
 
   const allOpenedUnion = await computeAllOpenedUnion()
 
+  // Recurring schedule info per FOLLOW-UP campaign (campaign_schedules keyed by
+  // the follow-up campaign id). Only rows that are actually scheduled
+  // (schedule_type present) are surfaced for display + gating.
+  const schedulesByCampaign = new Map<string, Record<string, any>>()
+  try {
+    if (allFollowupIds.size > 0) {
+      const { data: schedules, error: schedulesError } = await supabase
+        .from(SCHEDULE_TABLE)
+        .select('*')
+        .in('campaign_id', [...allFollowupIds])
+      if (!schedulesError) {
+        for (const s of schedules || []) {
+          if (s && s.campaign_id && s.schedule_type) {
+            schedulesByCampaign.set(String(s.campaign_id), s)
+          }
+        }
+      }
+    }
+  } catch {
+    // Best-effort decoration.
+  }
+
   const grouped = new Map<string, Record<string, any>[]>()
   for (const row of rows) {
     const fupId = String(row.followup_campaign_id)
@@ -332,7 +357,7 @@ async function fetchFollowupConfigs(): Promise<FollowupConfigRow[]> {
     grouped.get(fupId)!.push(row)
   }
 
-  const ctx = { nameById, createdById, openedByOriginal, sentByPair, sentByFollowup, originalByFollowup, followupMetrics, allOpenedUnion }
+  const ctx = { nameById, createdById, openedByOriginal, sentByPair, sentByFollowup, originalByFollowup, followupMetrics, allOpenedUnion, schedulesByCampaign }
 
   const result: FollowupConfigRow[] = []
   const handledIds = new Set<string>()
@@ -376,6 +401,7 @@ function buildIndividualFollowupRow(row: Record<string, any>, ctx: Record<string
   const sent = ctx.sentByPair.get(pairKey) || 0
   return {
     ...row,
+    ...scheduleDecorators(ctx, followupId),
     original_campaign_name: ctx.nameById.get(String(row.campaign_id)) || '—',
     followup_campaign_name: ctx.nameById.get(followupId) || '—',
     opened_count: opened,
@@ -384,6 +410,18 @@ function buildIndividualFollowupRow(row: Record<string, any>, ctx: Record<string
     remaining_eligible: Math.max(0, opened - sent),
     is_all: false,
   } as FollowupConfigRow
+}
+
+function scheduleDecorators(ctx: Record<string, any>, followupId: string): {
+  is_scheduled: boolean
+  schedule_text: string
+} {
+  const schedule = ctx.schedulesByCampaign?.get(String(followupId))
+  if (!schedule) return { is_scheduled: false, schedule_text: '' }
+  return {
+    is_scheduled: true,
+    schedule_text: buildScheduleText(schedule),
+  }
 }
 
 function buildAllFollowupRow(
@@ -397,6 +435,7 @@ function buildAllFollowupRow(
     id: followupId,
     campaign_id: 'all',
     followup_campaign_id: followupId,
+    ...scheduleDecorators(ctx, followupId),
     trigger_type: (sampleRow && sampleRow.trigger_type) || TRIGGER_TYPE,
     followup_mode: (sampleRow && sampleRow.followup_mode) || 'manual',
     is_active: true,
@@ -425,6 +464,7 @@ function buildOrphanFollowupRow(followupId: string, ctx: Record<string, any>): F
     id: followupId,
     campaign_id: originalId || 'all',
     followup_campaign_id: followupId,
+    ...scheduleDecorators(ctx, followupId),
     trigger_type: TRIGGER_TYPE,
     followup_mode: 'manual',
     is_active: false,
@@ -440,6 +480,47 @@ function buildOrphanFollowupRow(followupId: string, ctx: Record<string, any>): F
 }
 
 // ─── Create / update / delete config ───────────────────────────────────────
+
+/**
+ * Persist a follow-up schedule to `campaign_schedules` (keyed by the follow-up
+ * campaign id) and mark that follow-up campaign `status='scheduled'` so the
+ * existing `scheduled-campaign-runner` delivers it to openers only at the
+ * scheduled times. Reuses the campaign scheduling machinery — no new scheduler.
+ *
+ * When `schedule` is null/absent the follow-up keeps today's behaviour
+ * (automatic = on open, manual = queue); any previous schedule row and the
+ * `scheduled` status are cleared.
+ */
+async function persistFollowupSchedule(
+  followupCampaignId: string,
+  schedule?: CampaignScheduleInput | null
+): Promise<void> {
+  // Clear any previous schedule + revert status for unscheduled follow-ups.
+  const { error: deleteError } = await supabase
+    .from(SCHEDULE_TABLE)
+    .delete()
+    .eq('campaign_id', followupCampaignId)
+  if (deleteError && deleteError.code !== '42P01') {
+    throw new Error(`Failed to clear previous follow-up schedule: ${deleteError.message}`)
+  }
+
+  const scheduled =
+    !!schedule && ['one_time', 'weekly', 'monthly'].includes(schedule.schedule_type)
+
+  const { error: statusError } = await supabase
+    .from('campaigns')
+    .update({ status: scheduled ? 'scheduled' : 'draft', updated_at: new Date().toISOString() })
+    .eq('id', followupCampaignId)
+  if (statusError) throw new Error(`Failed to update follow-up campaign status: ${statusError.message}`)
+
+  if (!scheduled) return
+
+  const row = buildScheduleRow(schedule)
+  const { error } = await supabase
+    .from(SCHEDULE_TABLE)
+    .insert({ campaign_id: followupCampaignId, ...row })
+  if (error) throw new Error(`Failed to save follow-up schedule: ${error.message}`)
+}
 
 async function campaignExists(campaignId: string): Promise<boolean> {
   const { data, error } = await supabase
@@ -468,7 +549,7 @@ async function createFollowupCampaignRecord(payload: CreateFollowupConfigPayload
   if (!payload.html_content || !String(payload.html_content).trim()) missing.push('html_content')
   if (missing.length > 0) throw new Error(`Missing required fields: ${missing.join(', ')}`)
 
-  const record = {
+  const baseFields = {
     campaign_name: String(payload.campaign_name).trim(),
     subject_line: String(payload.subject_line).trim(),
     from_name: String(payload.from_name || '').trim() || DEFAULT_FROM_NAME,
@@ -484,12 +565,54 @@ async function createFollowupCampaignRecord(payload: CreateFollowupConfigPayload
     updated_at: new Date().toISOString(),
   }
 
+  // The follow-up batch size is HARDCODED to 30 (not configurable). The first
+  // batch delay is the user-configured value; subsequent batches always wait
+  // 1 hour. These batch fields are written when the columns exist. If the
+  // underlying public.campaigns table has not yet had the batching migration
+  // applied (missing send_in_batches / batch_size / first_batch_delay_hours /
+  // subsequent_batch_delay_hours columns), the insert falls back to the base
+  // fields so creating the follow-up never fails.
+  const batchFields: Record<string, unknown> = {
+    send_in_batches: payload.send_in_batches === true,
+    batch_size: 30,
+    first_batch_delay_hours:
+      payload.send_in_batches && Number.isFinite(payload.first_batch_delay_hours)
+        ? payload.first_batch_delay_hours
+        : 1,
+    subsequent_batch_delay_hours: 1,
+  }
+
   const { data, error } = await supabase
     .from('campaigns')
-    .insert(record)
+    .insert({ ...baseFields, ...batchFields })
     .select('*')
     .single()
-  if (error) throw new Error(`Failed to create follow-up campaign: ${error.message}`)
+
+  // Missing-column (schema cache) error → the batching migration has not been
+  // applied to this database yet. Retry WITHOUT the batch columns so follow-up
+  // creation still succeeds. The columns only matter at send time, where they
+  // must be present.
+  if (error) {
+    const message = String(error.message || '').toLowerCase()
+    const isMissingColumn =
+      error.code === '42703' ||
+      message.includes('could not find the') ||
+      message.includes('schema cache') ||
+      message.includes('column') && message.includes('of') && message.includes('in the schema')
+    if (isMissingColumn) {
+      const retry = await supabase
+        .from('campaigns')
+        .insert(baseFields)
+        .select('*')
+        .single()
+      if (retry.error) {
+        throw new Error(`Failed to create follow-up campaign: ${retry.error.message}`)
+      }
+      return String(retry.data.id)
+    }
+    throw new Error(`Failed to create follow-up campaign: ${error.message}`)
+  }
+
   return String(data.id)
 }
 
@@ -540,6 +663,8 @@ async function createFollowupConfig(
     followup_mode: mode,
     followup_campaign_id: followupCampaignId,
   })
+
+  await persistFollowupSchedule(followupCampaignId, payload.schedule)
 
   return {
     config,
@@ -603,6 +728,8 @@ async function createAllCampaignsFollowup(
       linkedCampaignCount += 1
     }
   }
+
+  await persistFollowupSchedule(followupCampaignId, payload.schedule)
 
   return {
     config: null,
@@ -853,13 +980,16 @@ async function resolveContactNames(): Promise<Map<string, Record<string, any>>> 
   return contactById
 }
 
-async function fetchOpenedContacts(campaignId: string): Promise<OpenedContact[]> {
+async function fetchOpenedContacts(
+  campaignId: string,
+  followupCampaignId?: string | null
+): Promise<OpenedContact[]> {
   if (!campaignId) throw new Error('campaign_id is required')
 
   // The synthesized "All" row anchors its send panel to the union of openers
   // across every eligible original campaign.
   if (String(campaignId) === 'all') {
-    return fetchOpenedContactsForAll()
+    return fetchOpenedContactsForAll(followupCampaignId)
   }
 
   const { data: logs, error } = await supabase
@@ -870,8 +1000,27 @@ async function fetchOpenedContacts(campaignId: string): Promise<OpenedContact[]>
     .order('opened_at', { ascending: false })
   if (error) throw new Error(`Failed to fetch opened contacts: ${error.message}`)
 
-  const rows = (logs as Record<string, any>[]) || []
+  let rows = (logs as Record<string, any>[]) || []
   if (rows.length === 0) return []
+
+  // Exclude contacts who have already received this follow-up. The manual
+  // panel says "Only contacts who opened and have NOT received this
+  // follow-up are shown", so already-sent contacts must not appear.
+  if (followupCampaignId) {
+    const fupId = String(followupCampaignId)
+    const { data: sentLogs, error: sentError } = await supabase
+      .from(LOG_TABLE)
+      .select('contact_id')
+      .eq('campaign_id', campaignId)
+      .eq('followup_campaign_id', fupId)
+      .in('status', ['sent', 'already_sent'])
+    if (sentError) throw new Error(`Failed to check already-sent contacts: ${sentError.message}`)
+    const sentIds = new Set((sentLogs || []).map((l: any) => String(l.contact_id)))
+    if (sentIds.size > 0) {
+      rows = rows.filter((row) => !sentIds.has(String(row.contact_id)))
+      if (rows.length === 0) return []
+    }
+  }
 
   const contactById = await resolveContactNames()
 
@@ -889,7 +1038,9 @@ async function fetchOpenedContacts(campaignId: string): Promise<OpenedContact[]>
   })
 }
 
-async function fetchOpenedContactsForAll(): Promise<OpenedContact[]> {
+async function fetchOpenedContactsForAll(
+  followupCampaignId?: string | null
+): Promise<OpenedContact[]> {
   const eligible = await listEligibleOriginalCampaigns()
   if (eligible.length === 0) return []
 
@@ -908,6 +1059,25 @@ async function fetchOpenedContactsForAll(): Promise<OpenedContact[]> {
     const existing = byKey.get(key)
     if (!existing || new Date(log.opened_at || 0) > new Date(existing.opened_at || 0)) {
       byKey.set(key, log)
+    }
+  }
+
+  // Exclude contacts who already received this follow-up from ANY eligible
+  // original campaign (a (campaign_id, contact_id, follow-up) sent row).
+  if (followupCampaignId) {
+    const fupId = String(followupCampaignId)
+    const { data: sentLogs, error: sentError } = await supabase
+      .from(LOG_TABLE)
+      .select('contact_id')
+      .in('campaign_id', ids)
+      .eq('followup_campaign_id', fupId)
+      .in('status', ['sent', 'already_sent'])
+    if (sentError) throw new Error(`Failed to check already-sent contacts: ${sentError.message}`)
+    const sentIds = new Set((sentLogs || []).map((l: any) => String(l.contact_id)))
+    if (sentIds.size > 0) {
+      for (const key of [...byKey.keys()]) {
+        if (sentIds.has(key)) byKey.delete(key)
+      }
     }
   }
 

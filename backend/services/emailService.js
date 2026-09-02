@@ -105,12 +105,43 @@ function rewriteHtmlForTracking(html, { campaignId, recipientId, baseUrl = track
   return rewritten;
 }
 
+/**
+ * Guarantee exactly one open-tracking pixel in the FINAL email HTML, bound to
+ * THIS recipient's email_log tracking_id.
+ *
+ * The pixel is injected into the final, already-wrapped document (which always
+ * contains exactly one <body>) so it survives every template structure —
+ * custom HTML, plain-text, image-heavy, full-document, or a bare fragment.
+ * Injecting it before the safe-html/wrap transform used to leave the pixel
+ * inside a NESTED <body> for templates that already contained a <body> tag but
+ * no <!DOCTYPE>/<html>/<head>, which mail clients strip — so those templates
+ * silently lost their open pixel.
+ *
+ * Any open pixel already present (added upstream by buildTrackedHtml, or
+ * leftover from a reused draft) is stripped first so we never emit a duplicate
+ * or a pixel bound to the wrong email_log / recipient. The click-tracking
+ * links are left completely untouched.
+ *
+ * @param {string} html - Final HTML document (already wrapped, single <body>).
+ * @param {object} [opts]
+ * @param {string} [opts.trackingId] - Unique UUID of this recipient's email_log.
+ * @param {string} [opts.baseUrl] - Public origin of the backend.
+ * @returns {string}
+ */
 function appendTrackingPixel(html, { trackingId, baseUrl = trackingConfig.baseUrl } = {}) {
   if (!html || typeof html !== 'string') return html;
-  if (!trackingId) return html;
+
+  // Strip any existing open-tracking pixel so there is never a duplicate or a
+  // pixel pointing at another log/recipient.
+  let clean = html.replace(
+    /<img[^>]*\bsrc\s*=\s*["']?[^"'\s>]*\/api\/tracking\/open\/[^"'\s>]*["']?[^>]*>/gi,
+    ''
+  );
+
+  if (!trackingId) return clean;
 
   const normalizedBaseUrl = String(baseUrl || '').replace(/\/+$/, '');
-  if (!normalizedBaseUrl) return html;
+  if (!normalizedBaseUrl) return clean;
 
   const pixelUrl = `${normalizedBaseUrl}/api/tracking/open/${trackingId}`;
   console.log('[EmailService] open pixel URL:', pixelUrl);
@@ -123,55 +154,94 @@ function appendTrackingPixel(html, { trackingId, baseUrl = trackingConfig.baseUr
     `<img src="${pixelUrl}" ` +
     `width="1" height="1" border="0" alt="" style="display:block;border:0;width:1px;height:1px;max-width:1px;max-height:1px;" />`;
 
-  if (/<\/body>/i.test(html)) {
-    return html.replace(/<\/body>/i, `${pixel}</body>`);
+  if (/<\/body>/i.test(clean)) {
+    return clean.replace(/<\/body>/i, `${pixel}\n</body>`);
   }
 
-  return `${html}${pixel}`;
+  return `${clean}\n${pixel}`;
 }
 
-async function sendEmail({ to, subject, html, text, campaignId, recipientId, trackingId, attachments }) {
+/**
+ * Build the final email HTML that is actually handed to SMTP.
+ *
+ * This is the SINGLE place where the open-tracking pixel is injected. The order
+ * is deliberate and load-bearing:
+ *
+ *   1. rewrite click links (only when the caller hasn't already done so)
+ *   2. toEmailSafeHtml()  — normalise camelCase CSS, scaffold, etc.
+ *   3. wrapHtmlDocument() — produce EXACTLY ONE <body> (completing a body-only
+ *                          fragment, wrapping a bare fragment, or passing a full
+ *                          document through untouched)
+ *   4. appendTrackingPixel() — inject the 1x1 pixel into that single <body>,
+ *                          bound to THIS recipient's email_log.tracking_id.
+ *
+ * Injecting the pixel AFTER the wrap step is what guarantees it survives every
+ * mail client: any earlier injection would land the pixel inside a <body> that
+ * toEmailSafeHtml/wrapHtmlDocument then nests or rebuilds, and mail clients
+ * strip the inner <body>'s content — so the pixel would silently never fire.
+ *
+ * @param {object} opts
+ * @param {string} opts.html
+ * @param {string} [opts.campaignId]
+ * @param {string} [opts.recipientId]
+ * @param {string} [opts.trackingId] - This recipient's email_log.tracking_id.
+ * @param {string} [opts.baseUrl] - Public origin (defaults to trackingConfig.baseUrl).
+ * @returns {string} Final HTML document that will be sent.
+ */
+function renderTrackedEmailHtml({ html, campaignId, recipientId, trackingId, baseUrl = trackingConfig.baseUrl } = {}) {
   const inputHtml = String(html || '');
-  const hasOpenPixel = /\/api\/tracking\/open\/[^"'\s>]+/i.test(inputHtml);
   const hasClickLinks = /\/api\/tracking\/click\//i.test(inputHtml);
-
-  console.log('[EmailService] hasOpenPixel:', hasOpenPixel);
-  console.log('[EmailService] hasClickLinks:', hasClickLinks);
 
   const rewrittenHtml = hasClickLinks
     ? inputHtml
     : rewriteHtmlForTracking(inputHtml, { campaignId, recipientId });
 
-  // Always embed the open pixel with THIS email_log's tracking_id. Any stale
-  // pixel left over from a reused draft/template is stripped first so the email
-  // can never point at another recipient's (or another campaign's) email_log.
-  const trackedHtml = appendTrackingPixel(
-    rewrittenHtml.replace(
-      /<img[^>]*\bsrc\s*=\s*["']?[^"'\s>]*\/api\/tracking\/open\/[^"'\s>]*["']?[^>]*>/gi,
-      ''
-    ),
-    { trackingId, baseUrl: trackingConfig.baseUrl }
-  );
+  // Normalize the body into a single, standards-compliant HTML document with
+  // exactly one <body>. The open-tracking pixel is injected AFTER this step (see
+  // appendTrackingPixel below) so it always lands inside that single <body>,
+  // regardless of how the source template was authored (custom HTML, plain-text,
+  // image-heavy, full-document, or fragment). Click-tracking links (already in
+  // the body) are preserved untouched.
+  const docHtml = wrapHtmlDocument(toEmailSafeHtml(rewrittenHtml));
 
-  console.log('[EmailService] FINAL HTML:', trackedHtml);
+  // Guarantee exactly one open-tracking pixel pointing at THIS email_log's
+  // tracking_id in the final HTML that is actually sent via SMTP. Any pixel
+  // already present (added upstream by buildTrackedHtml, or a stale draft) is
+  // stripped first so we never emit a duplicate or a pixel bound to the wrong
+  // log/recipient.
+  const finalHtml = appendTrackingPixel(docHtml, { trackingId, baseUrl });
 
-  // Wrap the body in a full standards-compliant document (valid <html><head>
-  // <body> + <!DOCTYPE>) so clients render it consistently. First the saved
-  // template HTML is normalized to a Gmail-safe, centered 600px layout. The
-  // tracking pixel is already inside the body.
-  const docHtml = wrapHtmlDocument(toEmailSafeHtml(trackedHtml));
+  return finalHtml;
+}
 
+async function sendEmail({ to, subject, html, text, campaignId, recipientId, trackingId, attachments }) {
+  const inputHtml = String(html || '');
+  const hasClickLinks = /\/api\/tracking\/click\//i.test(inputHtml);
+
+  console.log('[EmailService] hasClickLinks:', hasClickLinks);
+
+  // Centralised pixel injection. See renderTrackedEmailHtml for the ordering
+  // rationale (pixel must land AFTER the document wrap, inside the one <body>).
+  const finalHtml = renderTrackedEmailHtml({
+    html: inputHtml,
+    campaignId,
+    recipientId,
+    trackingId,
+    baseUrl: trackingConfig.baseUrl,
+  });
+
+  console.log('[EmailService] hasOpenPixel:', finalHtml.includes('/api/tracking/open/'));
   // Always include a plain-text part so the MIME structure is a proper
   // multipart/alternative (text/plain + text/html) — required by major
   // providers for good deliverability.
-  const textPart = text && String(text).trim() ? String(text) : stripHtml(trackedHtml);
+  const textPart = text && String(text).trim() ? String(text) : stripHtml(finalHtml);
 
   const info = await getTransporter().sendMail({
     from: emailConfig.from,
     to,
     replyTo: emailConfig.replyTo || undefined,
     subject,
-    html: docHtml,
+    html: finalHtml,
     text: textPart,
     messageId: buildMessageId(),
     list: emailConfig.listUnsubscribe ? { unsubscribe: emailConfig.listUnsubscribe } : undefined,
@@ -206,4 +276,4 @@ async function sendBulkEmail({ recipients, subject, html, text }) {
   return results;
 }
 
-export { sendEmail, sendBulkEmail, verifyConnection, getTransporter, rewriteHtmlForTracking };
+export { sendEmail, sendBulkEmail, verifyConnection, getTransporter, rewriteHtmlForTracking, renderTrackedEmailHtml };

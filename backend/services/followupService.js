@@ -27,10 +27,12 @@ import {
   hasHtmlTags,
   plainTextToHtml,
 } from '../utils/emailTemplate.js';
+import { parseTime, computeNextRun } from '../utils/scheduleTime.js';
 
 const CONFIG_TABLE = 'campaign_followups';
 const LOG_TABLE = 'campaign_followup_logs';
 const HISTORY_TABLE = 'followup_history';
+const SCHEDULE_TABLE = 'campaign_schedules';
 const TRIGGER_TYPE = 'opened';
 
 /**
@@ -47,6 +49,84 @@ function toError(error, fallback) {
   const wrapped = new Error((error && error.message) || fallback);
   wrapped.status = 500;
   return wrapped;
+}
+
+// ─── Follow-up schedule (parity with the campaign scheduling machinery) ────
+
+function normalizeTimeToStore(timeStr) {
+  if (!timeStr) return null;
+  const t = parseTime(timeStr);
+  if (!t) return String(timeStr).trim();
+  return [
+    String(t.hours).padStart(2, '0'),
+    String(t.minutes).padStart(2, '0'),
+    String(t.seconds).padStart(2, '0'),
+  ].join(':');
+}
+
+/**
+ * Build a campaign_schedules row from a follow-up schedule payload, including
+ * the computed next_run — mirrors buildScheduleRow in campaignService.js.
+ */
+function buildScheduleRow(input) {
+  const row = {
+    schedule_type: input.schedule_type,
+    start_date: input.start_date || null,
+    send_time: normalizeTimeToStore(input.send_time),
+    repeat_interval:
+      input.repeat_interval != null ? Math.max(1, Number(input.repeat_interval) || 1) : 1,
+    weekly_days:
+      Array.isArray(input.weekly_days) && input.weekly_days.length > 0
+        ? input.weekly_days.join(', ')
+        : null,
+    monthly_type: input.monthly_type || null,
+    day_of_month: input.day_of_month != null ? Number(input.day_of_month) : null,
+    week_number: input.week_number || null,
+    weekday: input.weekday || null,
+    timezone: input.timezone || 'Asia/Kolkata',
+  };
+  const next = computeNextRun(row);
+  return { ...row, next_run: next ? next.toISOString() : null };
+}
+
+/**
+ * True when a follow-up campaign has an active schedule (a campaign_schedules
+ * row) and is set to `status='scheduled'` — matching the cloud runner's model.
+ */
+export async function isScheduledFollowup(followupCampaignId) {
+  if (!followupCampaignId) return false;
+  const { data: schedule, error: scheduleError } = await supabase
+    .from(SCHEDULE_TABLE)
+    .select('id')
+    .eq('campaign_id', followupCampaignId)
+    .limit(1);
+  if (scheduleError) return false;
+  if (!schedule || schedule.length === 0) return false;
+  const { data: campaign, error: campaignError } = await supabase
+    .from('campaigns')
+    .select('status')
+    .eq('id', followupCampaignId)
+    .maybeSingle();
+  if (campaignError) return false;
+  return campaign && String(campaign.status).toLowerCase() === 'scheduled';
+}
+
+/**
+ * Persist a follow-up schedule to campaign_schedules (keyed by the follow-up
+ * campaign id) and mark that follow-up campaign `status='scheduled'` so the
+ * campaign scheduler delivers it to openers only at the scheduled times.
+ * When `schedule` is absent the follow-up keeps today's behaviour and any
+ * previous schedule row + `scheduled` status are cleared.
+ */
+async function persistFollowupSchedule(followupCampaignId, schedule) {
+  if (!schedule || !['one_time', 'weekly', 'monthly'].includes(schedule.schedule_type)) {
+    await supabase.from(SCHEDULE_TABLE).delete().eq('campaign_id', followupCampaignId);
+    await supabase.from('campaigns').update({ status: 'draft' }).eq('id', followupCampaignId);
+    return;
+  }
+  const row = buildScheduleRow(schedule);
+  await supabaseService.replaceCampaignSchedule(followupCampaignId, row);
+  await supabase.from('campaigns').update({ status: 'scheduled' }).eq('id', followupCampaignId);
 }
 
 // ─── Config (campaign_followups) ──────────────────────────────────────────
@@ -573,6 +653,8 @@ export async function createFollowupConfig(payload = {}) {
     followup_campaign_id: followupCampaignId,
   });
 
+  await persistFollowupSchedule(followupCampaignId, payload.schedule);
+
   return {
     config,
     original_campaign_id: originalCampaignId,
@@ -688,6 +770,8 @@ async function createAllCampaignsFollowup(payload) {
       linkedCampaignCount += 1;
     }
   }
+
+  await persistFollowupSchedule(followupCampaignId, payload.schedule);
 
   return {
     config: null,
@@ -1176,6 +1260,12 @@ export async function handleOpenFollowup(campaignId, contactId, email) {
   const followupCampaignId = String(config.followup_campaign_id);
   const openedAt = new Date().toISOString();
 
+  // Scheduled follow-ups are delivered by the campaign scheduler at their
+  // scheduled times — never on-open (automatic) or queue-on-open (manual).
+  if (await isScheduledFollowup(followupCampaignId)) {
+    return null;
+  }
+
   if (config.followup_mode === 'automatic') {
     await sendAutomaticFollowup(campaignId, contactId, email, followupCampaignId, openedAt);
     return null;
@@ -1403,6 +1493,14 @@ export async function sendFollowupsToSelected(campaignId, payload = {}) {
   }
   if (!isAll && followupCampaignId === String(campaignId)) {
     const err = new Error('A campaign cannot be its own follow-up campaign');
+    err.status = 400;
+    throw err;
+  }
+
+  // A scheduled follow-up is delivered by the campaign scheduler at its
+  // scheduled times — it cannot be sent on-demand via the manual panel.
+  if (await isScheduledFollowup(followupCampaignId)) {
+    const err = new Error('This follow-up is scheduled — it will be sent automatically at its scheduled time');
     err.status = 400;
     throw err;
   }

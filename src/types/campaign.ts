@@ -179,6 +179,10 @@ export interface FollowupConfigRow extends FollowupConfig {
   remaining_eligible: number
   /** True for the synthesized all-campaigns row (campaign_id === 'all'). */
   is_all: boolean
+  /** True when the follow-up campaign has an active schedule (status='scheduled'). */
+  is_scheduled?: boolean
+  /** Human-readable schedule summary for the follow-up campaign. */
+  schedule_text?: string
 }
 
 /**
@@ -239,6 +243,18 @@ export interface CreateFollowupConfigPayload {
   template_name?: string
   followup_mode: FollowupMode
   is_active: boolean
+  /**
+   * Optional recurring schedule. When set, the follow-up is delivered by the
+   * campaign scheduler to openers only at the scheduled times (one-time /
+   * weekly / monthly) — overriding BOTH automatic and manual modes. Omit to
+   * keep today's behaviour (automatic = on open, manual = queue).
+   */
+  schedule?: CampaignScheduleInput | null
+  /** Batch sending configuration (same fields as Campaigns). */
+  send_in_batches?: boolean
+  batch_size?: number
+  first_batch_delay_hours?: number
+  subsequent_batch_delay_hours?: number
 }
 
 export interface UpdateFollowupConfigPayload {
