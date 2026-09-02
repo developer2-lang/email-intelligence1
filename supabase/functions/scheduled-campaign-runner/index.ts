@@ -297,29 +297,49 @@ async function getCampaignSchedule(campaignId: string): Promise<any | null> {
 /**
  * Is a batched campaign due for its NEXT batch right now?
  *
- * Batched campaigns (send_in_batches=true, batch_size > 0) are queued by the
- * React UI: the follow-up campaign is set status='scheduled' and next_batch_at
- * is the instant the next batch should fire. A campaign is due when:
- *   - it is a FRESH queue (current_batch_number === 0 — no batch sent yet):
- *     the FIRST batch fires immediately regardless of next_batch_at, OR
- *   - next_batch_at is null or has already passed.
- * Queueing the first batch never has to wait: the UI pre-loads next_batch_at
- * with the "after first batch" time (so the Schedule column can display it
- * right away) while current_batch_number===0 keeps the first batch due now.
- * Once every eligible recipient is drained, next_batch_at is cleared back to
- * null AND status is set to 'sent', so a completed batch campaign is never
- * re-selected (status check below).
+ * Batched campaigns (send_in_batches=true, batch_size > 0) are paced by
+ * next_batch_at. How the FIRST batch (current_batch_number === 0) behaves
+ * depends on WHY the queue was created:
+ *
+ *   A. Scheduled follow-up (has an ACTIVE calendar `campaign_schedules` row):
+ *      the FIRST batch must respect the configured schedule date/time. It is
+ *      due only once that schedule has arrived (isCampaignDue), so a follow-up
+ *      scheduled for 2:05 PM never sends batch #1 before 2:05 PM.
+ *
+ *   B. Manual / immediate batch (NO calendar schedule): the first batch fires
+ *      right now (the "current_batch_number === 0 means due now" shortcut).
+ *      The UI pre-loads next_batch_at with the "after first batch" time only
+ *      so the Schedule column can display it immediately.
+ *
+ * Every subsequent batch (current_batch_number >= 1) is paced purely by
+ * next_batch_at — the campaign is due when next_batch_at is null or has
+ * already passed. Once every eligible recipient is drained, next_batch_at is
+ * cleared back to null AND status is set to 'sent', so a completed batch
+ * campaign is never re-selected (status check below).
  */
-function isBatchedCampaignDue(campaign: any, nowMs: number): boolean {
+function isBatchedCampaignDue(campaign: any, schedule: any, nowMs: number): boolean {
   if (campaign.send_in_batches !== true) return false;
   const batchSize = Number(campaign.batch_size);
   if (!(Number.isInteger(batchSize) && batchSize > 0)) return false;
-  // Round-trip through the same counter the runner increments after every
-  // batch; a campaign that has never fired a batch is due right now.
+
+  const now = nowMs == null ? Date.now() : nowMs;
+  // Round-trip through the same counter the runner increments after every batch.
   const batchNumber = Number(campaign.current_batch_number) || 0;
-  if (batchNumber === 0) return true;
+
+  if (batchNumber === 0) {
+    // A never-fired batch queue. If it has a genuine calendar schedule (a
+    // scheduled follow-up), the FIRST batch must wait for that schedule time —
+    // the "due now" shortcut applies ONLY to manual/immediate queues (no
+    // calendar schedule). An overdue schedule is due, so it fires on the next
+    // cron tick exactly as a non-batched scheduled campaign would.
+    if (schedule && (schedule.schedule_type === 'one_time' || schedule.schedule_type === 'weekly' || schedule.schedule_type === 'monthly')) {
+      return isCampaignDue(campaign, schedule, now);
+    }
+    return true;
+  }
+
   const next = campaign.next_batch_at ? new Date(campaign.next_batch_at).getTime() : null;
-  return next === null || (!Number.isNaN(next) && next <= nowMs);
+  return next === null || (!Number.isNaN(next) && next <= now);
 }
 
 /**
@@ -331,7 +351,10 @@ function isBatchedCampaignDue(campaign: any, nowMs: number): boolean {
  *
  * Batched campaigns that have NO calendar schedule are picked up here too via
  * isBatchedCampaignDue — the UI queues them with status='scheduled' and the
- * scheduler drains them one batch per tick.
+ * scheduler drains them one batch per tick. A batched campaign ALWAYS routes
+ * through isBatchedCampaignDue, never through isCampaignDue: a past one_time
+ * schedule would otherwise report "due" on every tick and ignore the batch
+ * delay in next_batch_at.
  */
 async function getDueCampaigns(): Promise<any[]> {
   const { data, error } = await supabase
@@ -346,13 +369,24 @@ async function getDueCampaigns(): Promise<any[]> {
     const schedules = (campaign.campaign_schedules || [])
       .filter((s: any) => s && s.is_active !== false);
     const schedule = schedules.length > 0 ? schedules[0] : null;
+
+    if (campaign.send_in_batches === true) {
+      // Batched campaigns are paced by isBatchedCampaignDue, which respects a
+      // scheduled follow-up's calendar time for the FIRST batch and next_batch_at
+      // for every later batch.
+      if (isBatchedCampaignDue(campaign, schedule, now)) {
+        log(`Campaign ${campaign.id} ("${campaign.campaign_name}") is due for its next batch`);
+        due.push(campaign);
+      } else {
+        log(`Campaign ${campaign.id} ("${campaign.campaign_name}") not due yet — skipped`);
+      }
+      continue;
+    }
+
     if (isCampaignDue(campaign, schedule, now)) {
       log(`Campaign ${campaign.id} ("${campaign.campaign_name}") is overdue and due`);
       due.push(campaign);
-    } else if (isBatchedCampaignDue(campaign, now)) {
-      log(`Campaign ${campaign.id} ("${campaign.campaign_name}") is due for its next batch`);
-      due.push(campaign);
-    } else if (campaign.schedule_date || campaign.scheduled_at || schedule || campaign.send_in_batches === true) {
+    } else if (campaign.schedule_date || campaign.scheduled_at || schedule) {
       log(`Campaign ${campaign.id} ("${campaign.campaign_name}") not due yet — skipped`);
     }
   }

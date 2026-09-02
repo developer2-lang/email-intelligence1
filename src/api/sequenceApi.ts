@@ -803,6 +803,8 @@ export function fetchSequence(id: string): Promise<Sequence> {
 
     const enrolledContactIds = [...new Set(enrollmentRows.map((e: any) => e.contact_id))];
     const nextByNode = await buildNextEmails(id, stepsList);
+    const batchStates = await loadSequenceBatchStates(id);
+    const sequenceBatchEnabled = !!sequence.batch_enabled;
 
     const steps_progress: any[] = [];
     for (const node of stepsList) {
@@ -853,6 +855,8 @@ export function fetchSequence(id: string): Promise<Sequence> {
       else if (eligible > 0 && waitHours > 0) status = 'in_progress';
 
       const next = nextByNode.get(node.id) || [];
+      const batch = batchStates.get(node.id) || null;
+      const batchEnabledForStep = sequenceBatchEnabled && !!batch && !!batch.batch_enabled;
 
       steps_progress.push({
         step: node,
@@ -871,6 +875,12 @@ export function fetchSequence(id: string): Promise<Sequence> {
         pending: Math.max(0, eligible - sent),
         status,
         next,
+        batch_enabled: batchEnabledForStep,
+        current_batch_number: batch ? Number(batch.current_batch_number) || 0 : 0,
+        batch_sent: batch ? Number(batch.batch_sent) || 0 : 0,
+        batch_size: batch && Number(batch.batch_size) > 0 ? Number(batch.batch_size) : undefined,
+        next_batch_at: batch && batch.next_batch_at ? batch.next_batch_at : null,
+        batch_completed_at: batch && batch.completed_at ? batch.completed_at : null,
       });
     }
 
@@ -949,6 +959,19 @@ export function updateSequence(id: string, payload: Partial<SequenceInput>): Pro
     if (incoming && incoming.send_mode !== undefined) {
       updates.send_mode = enumValue(incoming.send_mode, 'send_mode', SEND_MODES);
     }
+    const touchesBatch =
+      incoming &&
+      (incoming.batch_enabled !== undefined ||
+        incoming.batch_size !== undefined ||
+        incoming.first_batch_delay_hours !== undefined ||
+        incoming.subsequent_batch_delay_hours !== undefined);
+    if (touchesBatch) {
+      const batch = normalizeBatchConfig(incoming);
+      updates.batch_enabled = batch.batch_enabled;
+      updates.batch_size = batch.batch_size;
+      updates.first_batch_delay_hours = batch.first_batch_delay_hours;
+      updates.subsequent_batch_delay_hours = batch.subsequent_batch_delay_hours;
+    }
 
     const { data, error } = await supabase
       .from(SEQUENCES_TABLE)
@@ -957,6 +980,7 @@ export function updateSequence(id: string, payload: Partial<SequenceInput>): Pro
       .select('*')
       .single();
     if (error) throw toError(error, 'Failed to update sequence');
+    if (touchesBatch) await syncSequenceBatchState(id);
     if (data && data.id) await syncSequenceContentColumns(data.id);
     return data as Sequence;
   })();
@@ -1620,6 +1644,10 @@ export function activateSequence(
       .select('*')
       .single();
     if (error) throw toError(error, 'Failed to activate sequence');
+
+    // Arm the per-step batch queues (best-effort) so a configured first-batch
+    // delay is enforced the moment the runner picks the enrollments up.
+    if (sequence.batch_enabled) await syncSequenceBatchState(id);
 
     void runWorkerNow(id);
     await syncSequenceContentColumns(id);

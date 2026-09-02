@@ -1193,11 +1193,23 @@ const DELAY_OPTIONS = [
                       // up immediately by the every-minute scheduler, so we show that
                       // rather than a stale "Queued — starting soon", which should
                       // only appear when a genuinely future batch is pending.
+                      //
+                      // A SCHEDULED batched follow-up before its first batch fires
+                      // has no next_batch_at yet (null) but is NOT due — its first
+                      // batch is gated by the calendar schedule (e.g. 2:05 PM). We
+                      // must show that scheduled time, NOT "Processing — due now",
+                      // while the schedule is still in the future.
                       if (config.batch_enabled) {
                         if (config.remaining_eligible === 0) {
                           scheduleText = 'Completed'
                         } else if (config.next_batch_at && new Date(config.next_batch_at).getTime() > Date.now()) {
                           scheduleText = `Next batch: ${formatDateTime(config.next_batch_at)}`
+                        } else if (
+                          config.is_scheduled &&
+                          scheduleText &&
+                          scheduleText !== '—'
+                        ) {
+                          scheduleText = `Next batch: ${scheduleText.replace(/^Next batch:\s*/i, '')}`
                         } else {
                           scheduleText = 'Processing — due now'
                         }
