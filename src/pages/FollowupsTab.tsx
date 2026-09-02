@@ -835,69 +835,68 @@ export default function FollowupsTab({
         }
       }
 
+      // Batching on → QUEUE cloud-driven batches. The follow-up campaign is
+      // placed status='scheduled' with next_batch_at = now + the configured
+      // first-batch delay (the batch delay columns stored on the campaign row).
+      // Persisting the FUTURE next_batch_at up front means the Schedule column
+      // immediately shows the exact next batch time (e.g. "Next batch: 12:45 PM")
+      // instead of "now" or "Queued — starting soon" while the cron catches up.
+      // The every-minute `scheduled-campaign-runner` Edge Function sees a fresh
+      // batch campaign (current_batch_number=0) and sends the FIRST batch
+      // immediately, then advances next_batch_at after each batch and marks the
+      // follow-up "Completed" when every eligible opener is drained. This works
+      // with the laptop closed — no browser setTimeout loop, and never a batch
+      // larger than the configured batch_size. The already-sent recipients are
+      // naturally excluded (their email_logs are already 'sent' and never
+      // re-claimed).
+      if (sendInBatches) {
+        if (!followupCampaignId) {
+          throw new Error('Follow-up campaign is required for batched sending')
+        }
+        // Gap AFTER the first batch — the scheduler computes the same value
+        // (first_batch_delay_hours) once it delivers it, so mirror it here.
+        const firstDelayMs = Math.max(0, Number(firstBatchDelayHours) || 0) * 60 * 60 * 1000
+        const nextBatchAt = new Date(Date.now() + firstDelayMs).toISOString()
+        const { error: queueError } = await supabase
+          .from('campaigns')
+          .update({
+            status: 'scheduled',
+            next_batch_at: nextBatchAt,
+            current_batch_number: 0,
+            send_in_batches: true,
+            batch_size: configuredBatchSize,
+            first_batch_delay_hours: firstBatchDelayHours,
+            subsequent_batch_delay_hours: subsequentBatchDelayHours,
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', String(followupCampaignId))
+        if (queueError) {
+          throw new Error(`Failed to queue batched follow-up: ${queueError.message}`)
+        }
+        onToast(
+          `Batched follow-up queued — ${configuredBatchSize} per batch, starting immediately. ` +
+          `Next batch at ${formatDateTime(nextBatchAt)}.`,
+          'success',
+        )
+        setSelectedOpenedIds([])
+        await loadOpenedContacts(originCampaignId, followupCampaignId)
+        await refreshAll()
+        return
+      }
+
+      // Batching off: deliver the follow-up to every selected recipient in a
+      // single pass (no artificial throttling).
       let sent = 0
       let skipped = 0
       let failed = 0
-
-      if (!sendInBatches) {
-        // Batching off: deliver the follow-up to every selected recipient in a
-        // single pass (no artificial throttling).
-        const results = await sendSelectedFollowups(originCampaignId, {
-          contact_ids: [...selectedOpenedIds],
-          followup_campaign_id: followupCampaignId,
-        })
-        for (const r of results) {
-          if (r.status === 'sent') sent++
-          else if (r.status === 'skipped') skipped++
-          else if (r.status === 'failed') failed++
-        }
-      } else {
-        // Batching on: send the selected recipients in slices of EXACTLY the
-        // configured batch size (never a hard-coded 30). Before EVERY batch the
-        // eligible recipients are re-queried from the database, so contacts who
-        // were already sent — by this run or any other — drop out and are never
-        // duplicated. The configured delay is respected between every pair of
-        // consecutive batches.
-        const selectedSet = new Set(selectedOpenedIds.map(String))
-        const estimatedBatches = Math.max(1, Math.ceil(selectedOpenedIds.length / configuredBatchSize))
-        let batchNum = 0
-        while (true) {
-          const fresh = await fetchOpenedContacts(originCampaignId, followupCampaignId)
-          const eligibleIds = fresh.map((c) => String(c.contact_id)).filter((id) => selectedSet.has(id))
-          if (eligibleIds.length === 0) break
-
-          const slice = eligibleIds.slice(0, configuredBatchSize)
-          if (slice.length === 0) break
-
-          const results = await sendSelectedFollowups(originCampaignId, {
-            contact_ids: slice,
-            followup_campaign_id: followupCampaignId,
-          })
-          const batchSent = results.filter((r) => r.status === 'sent').length
-          const batchSkipped = results.filter((r) => r.status === 'skipped').length
-          const batchFailed = results.filter((r) => r.status === 'failed').length
-          sent += batchSent
-          skipped += batchSkipped
-          failed += batchFailed
-          batchNum++
-
-          // Refresh the remaining count from the database after every batch so
-          // the panel reflects the real sent state — never a visual guess.
-          await refreshAll()
-
-          const remainingSelected = eligibleIds.length - batchSent - batchSkipped
-          // Stop when nothing is left, or when a batch makes no progress at all
-          // (persistent failures stay pending in the DB and remain eligible for
-          // retry — they must never be marked sent).
-          if (remainingSelected === 0 || batchSent === 0) break
-
-          const delayHours = batchNum === 1 ? firstBatchDelayHours : subsequentBatchDelayHours
-          onToast(
-            `Batch ${batchNum}/${estimatedBatches} sent (${batchSent} sent). Waiting ${delayHours} hour(s) before the next batch…`,
-            'info',
-          )
-          await new Promise((resolve) => setTimeout(resolve, delayHours * 60 * 60 * 1000))
-        }
+      const results = await sendSelectedFollowups(originCampaignId, {
+        contact_ids: [...selectedOpenedIds],
+        followup_campaign_id: followupCampaignId,
+      })
+      for (const r of results) {
+        if (r.status === 'sent') sent++
+        else if (r.status === 'skipped') skipped++
+        else if (r.status === 'failed') failed++
       }
 
       const parts: string[] = []
@@ -1178,12 +1177,29 @@ export default function FollowupsTab({
                     visibleConfigs.map((config) => {
                       const isSelected = activeConfig && String(activeConfig.id) === String(config.id)
                       const followUpCampaign = campaignsById.get(String(config.followup_campaign_id || ''))
-                      const scheduleText =
+                      let scheduleText =
                         (config.schedule_text && config.schedule_text !== '--')
                           ? config.schedule_text
                           : (followUpCampaign?.scheduleText && followUpCampaign.scheduleText !== '--')
                             ? followUpCampaign.scheduleText
                             : '—'
+                      // Cloud-batched follow-up: the Schedule column shows the NEXT
+                      // BATCH send time from the DB (next_batch_at), or "Completed"
+                      // when every eligible opener has been drained. A batch whose
+                      // next_batch_at is null despite recipients remaining (or whose
+                      // next_batch_at is already in the past) is DUE — it is picked
+                      // up immediately by the every-minute scheduler, so we show that
+                      // rather than a stale "Queued — starting soon", which should
+                      // only appear when a genuinely future batch is pending.
+                      if (config.batch_enabled) {
+                        if (config.remaining_eligible === 0) {
+                          scheduleText = 'Completed'
+                        } else if (config.next_batch_at && new Date(config.next_batch_at).getTime() > Date.now()) {
+                          scheduleText = `Next batch: ${formatDateTime(config.next_batch_at)}`
+                        } else {
+                          scheduleText = 'Processing — due now'
+                        }
+                      }
                       const delivered = config.followup_delivered
                       return (
                         <tr key={String(config.id)} className={isSelected ? 'fu-selected' : undefined}>

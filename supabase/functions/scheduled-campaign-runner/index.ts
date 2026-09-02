@@ -295,11 +295,43 @@ async function getCampaignSchedule(campaignId: string): Promise<any | null> {
 
 // ─── Campaign discovery + atomic claim ─────────────────────────────────────
 /**
+ * Is a batched campaign due for its NEXT batch right now?
+ *
+ * Batched campaigns (send_in_batches=true, batch_size > 0) are queued by the
+ * React UI: the follow-up campaign is set status='scheduled' and next_batch_at
+ * is the instant the next batch should fire. A campaign is due when:
+ *   - it is a FRESH queue (current_batch_number === 0 — no batch sent yet):
+ *     the FIRST batch fires immediately regardless of next_batch_at, OR
+ *   - next_batch_at is null or has already passed.
+ * Queueing the first batch never has to wait: the UI pre-loads next_batch_at
+ * with the "after first batch" time (so the Schedule column can display it
+ * right away) while current_batch_number===0 keeps the first batch due now.
+ * Once every eligible recipient is drained, next_batch_at is cleared back to
+ * null AND status is set to 'sent', so a completed batch campaign is never
+ * re-selected (status check below).
+ */
+function isBatchedCampaignDue(campaign: any, nowMs: number): boolean {
+  if (campaign.send_in_batches !== true) return false;
+  const batchSize = Number(campaign.batch_size);
+  if (!(Number.isInteger(batchSize) && batchSize > 0)) return false;
+  // Round-trip through the same counter the runner increments after every
+  // batch; a campaign that has never fired a batch is due right now.
+  const batchNumber = Number(campaign.current_batch_number) || 0;
+  if (batchNumber === 0) return true;
+  const next = campaign.next_batch_at ? new Date(campaign.next_batch_at).getTime() : null;
+  return next === null || (!Number.isNaN(next) && next <= nowMs);
+}
+
+/**
  * Find campaigns that are scheduled AND due. Every status='scheduled' campaign
  * is examined together with its campaign_schedules row (see isCampaignDue):
  * legacy IST wall-clock, scheduled_at, one_time schedules and recurring
  * (weekly/monthly) next_run are all considered. Overdue campaigns are due, so
  * anything whose time passed while nobody was watching is picked up now.
+ *
+ * Batched campaigns that have NO calendar schedule are picked up here too via
+ * isBatchedCampaignDue — the UI queues them with status='scheduled' and the
+ * scheduler drains them one batch per tick.
  */
 async function getDueCampaigns(): Promise<any[]> {
   const { data, error } = await supabase
@@ -317,7 +349,10 @@ async function getDueCampaigns(): Promise<any[]> {
     if (isCampaignDue(campaign, schedule, now)) {
       log(`Campaign ${campaign.id} ("${campaign.campaign_name}") is overdue and due`);
       due.push(campaign);
-    } else if (campaign.schedule_date || campaign.scheduled_at || schedule) {
+    } else if (isBatchedCampaignDue(campaign, now)) {
+      log(`Campaign ${campaign.id} ("${campaign.campaign_name}") is due for its next batch`);
+      due.push(campaign);
+    } else if (campaign.schedule_date || campaign.scheduled_at || schedule || campaign.send_in_batches === true) {
       log(`Campaign ${campaign.id} ("${campaign.campaign_name}") not due yet — skipped`);
     }
   }
@@ -364,7 +399,14 @@ function isDeliverableRecipientEmail(email: string): boolean {
   return !NON_DELIVERABLE_EMAIL_RE.test(value);
 }
 
-async function resolveContactsForCampaign(campaignId: string, audienceSegment: string): Promise<any[]> {
+async function resolveContactsForCampaign(
+  campaignId: string,
+  audienceSegment: string
+): Promise<{
+  contacts: any[];
+  sourceCampaignId: string | null;
+  openedAtByContact: Map<string, string | null>;
+}> {
   // Follow-up rule: a campaign that is configured as a FOLLOW-UP (row in
   // campaign_followups with followup_campaign_id = this campaign) only ever
   // sends to the contacts who opened the ORIGINAL campaign.
@@ -378,15 +420,24 @@ async function resolveContactsForCampaign(campaignId: string, audienceSegment: s
   }
 
   let valid: any[];
-  const sourceCampaignId = configs && configs[0] && configs[0].campaign_id;
+  const sourceCampaignId = configs && configs[0] && configs[0].campaign_id ? String(configs[0].campaign_id) : null;
+  const openedAtByContact = new Map<string, string | null>();
 
   if (sourceCampaignId) {
     const { data: openedLogs, error: openedError } = await supabase
       .from('email_logs')
-      .select('contact_id')
+      .select('contact_id, opened_at')
       .eq('campaign_id', sourceCampaignId)
       .eq('opened', true);
     if (openedError) throw new Error(`Failed to fetch opened contacts: ${openedError.message}`);
+    // Prefer the MOST RECENT open per contact so follow-up bookkeeping records
+    // the same opened_at the opener actually engaged on.
+    for (const r of openedLogs || []) {
+      const cid = String(r.contact_id);
+      const ts = r.opened_at ? new Date(r.opened_at).getTime() : 0;
+      const prev = openedAtByContact.get(cid) ? new Date(openedAtByContact.get(cid)!).getTime() : 0;
+      if (!openedAtByContact.has(cid) || ts >= prev) openedAtByContact.set(cid, r.opened_at || null);
+    }
     const openedIds = Array.from(new Set((openedLogs || []).map((r: any) => r.contact_id)));
     if (openedIds.length === 0) {
       valid = [];
@@ -443,7 +494,7 @@ async function resolveContactsForCampaign(campaignId: string, audienceSegment: s
     }
   }
 
-  return valid;
+  return { contacts: valid, sourceCampaignId, openedAtByContact };
 }
 
 // ─── email_logs helpers ────────────────────────────────────────────────────
@@ -482,17 +533,41 @@ async function getLogsByCampaign(campaignId: string): Promise<any[]> {
 }
 
 /**
- * Atomically claim the pending email_logs for a campaign (pending → sending).
- * Rows returned are the ONLY ones this invocation is allowed to send.
+ * Atomically claim the pending email_logs for a campaign (pending → sending),
+ * optionally limited to `limit` rows so a batched campaign sends exactly its
+ * configured batch size per invocation. Rows returned are the ONLY ones this
+ * invocation is allowed to send.
+ *
+ * IMPORTANT: the limit is enforced with a two-step SELECT-then-UPDATE (id list
+ * pinned by `.eq('status','pending')`), never by relying on PostgREST to honor
+ * `.limit()` on an UPDATE — PATCH+limit is not reliably supported, and that
+ * would make a "batch_size=1" follow-up claim ALL pending rows instead of one.
+ * This is the same pattern used by the shared `_shared/batch.ts` helper.
  */
-async function claimPendingLogs(campaignId: string): Promise<any[]> {
+async function claimPendingLogs(campaignId: string, limit?: number): Promise<any[]> {
   const nowIso = new Date().toISOString();
+
+  // Step 1 — deterministically select the IDs to claim (SELECT supports limit).
+  let select = supabase
+    .from('email_logs')
+    .select('id')
+    .eq('campaign_id', campaignId)
+    .eq('status', 'pending')
+    .or(`next_retry_at.is.null,next_retry_at.lte.${nowIso}`);
+  if (limit && limit > 0) select = select.limit(limit);
+  const { data: pending, error: selErr } = await select;
+  if (selErr) throw new Error(`Failed to fetch pending logs: ${selErr.message}`);
+  if (!pending || pending.length === 0) return [];
+
+  const ids = (pending as any[]).map((p) => p.id);
+
+  // Step 2 — claim exactly those IDs (status='pending' re-check keeps it atomic:
+  // a row already claimed by a concurrent tick in the meantime is left alone).
   const { data, error } = await supabase
     .from('email_logs')
     .update({ status: 'sending', last_attempt_at: nowIso })
-    .eq('campaign_id', campaignId)
+    .in('id', ids)
     .eq('status', 'pending')
-    .or(`next_retry_at.is.null,next_retry_at.lte.${nowIso}`)
     .select('*');
   if (error) throw new Error(`Failed to claim pending logs: ${error.message}`);
   return data || [];
@@ -558,6 +633,40 @@ async function getLogsStats(campaignId: string) {
     open_rate: delivered > 0 ? Number(((opened / delivered) * 100).toFixed(1)) : 0,
     click_rate: delivered > 0 ? Number(((clicked / delivered) * 100).toFixed(1)) : 0,
   };
+}
+
+/**
+ * Record a delivered follow-up in campaign_followup_logs so the UI's
+ * eligibility bookkeeping (remaining_eligible / sent_count) stays correct when
+ * the scheduler — not the browser — delivers the follow-up. Idempotent: the
+ * UNIQUE (campaign_id, contact_id, followup_campaign_id) constraint makes a
+ * repeated delivery a no-op, exactly as in send-followup Edge Function.
+ */
+async function recordFollowupDelivery(
+  followupCampaignId: string,
+  sourceCampaignId: string,
+  contactId: string,
+  email: string,
+  openedAt: string | null
+): Promise<void> {
+  const sentAt = new Date().toISOString();
+  const { error } = await supabase
+    .from('campaign_followup_logs')
+    .upsert(
+      {
+        campaign_id: sourceCampaignId,
+        contact_id: contactId,
+        email,
+        followup_campaign_id: followupCampaignId,
+        opened_at: openedAt || null,
+        status: 'sent',
+        sent_at: sentAt,
+      },
+      { onConflict: 'campaign_id,contact_id,followup_campaign_id' }
+    );
+  if (error && error.code !== '42P01' && error.code !== '42703') {
+    logErr(`Could not record follow-up delivery for ${email}: ${error.message}`);
+  }
 }
 
 // ─── Analytics sync (ported from emailLogService.syncCampaignAnalytics) ────
@@ -1169,16 +1278,31 @@ async function processCampaign(campaignId: string): Promise<{ sent: number; fail
       .single();
     if (campError) throw new Error(`Campaign ${campaignId} not found: ${campError.message}`);
 
-    const contacts = await resolveContactsForCampaign(campaignId, campaign.audience_segment);
+    const resolved = await resolveContactsForCampaign(campaignId, campaign.audience_segment);
+    const contacts = resolved.contacts;
+    const sourceCampaignId = resolved.sourceCampaignId;
+    const openedAtByContact = resolved.openedAtByContact;
     log(`Campaign ${campaignId} resolved ${contacts.length} recipient(s)`);
 
-    // Zero-recipient safety: nothing to send. Mark the campaign "failed" (with
-    // a clear reason) so it never falsely reports "sent" and never re-fires on
-    // every cron tick. Follow-ups with no openers land here too.
+    // Zero-recipient safety: nothing to send. Mark the campaign finished (with
+    // a clear reason) and clear any batch scheduling state so a past
+    // next_batch_at can never keep a batched follow-up stuck as "Active" while
+    // silently doing nothing. A follow-up whose openers are not deliverable
+    // resolves to 0 here — finalizing it cleanly (not leaving it at status with
+    // a stale next_batch_at) lets the UI show "Completed" instead of an
+    // endless "Next batch" that never fires.
     if (contacts.length === 0) {
       log(`Campaign ${campaignId} ("${campaign.campaign_name}") has 0 deliverable recipients — NOT sending.`);
-      log(`Marking campaign ${campaignId} as "failed" (0 recipients).`);
-      await finalizeCampaign(campaignId, { status: 'failed', recipient_count: 0 });
+      log(`Marking campaign ${campaignId} as "sent" (0 deliverable recipients).`);
+      const isBatchedHere = campaign.send_in_batches === true;
+      await finalizeCampaign(campaignId, {
+        status: 'sent',
+        recipient_count: 0,
+        // A drained batch campaign is "complete": clear next_batch_at and reset
+        // the counter so the UI shows "Completed" and the scheduler never
+        // re-selects it (status 'sent' also excludes it from getDueCampaigns).
+        ...(isBatchedHere ? { next_batch_at: null, current_batch_number: 0 } : {}),
+      });
       return { sent: 0, failed: 0, total: 0 };
     }
 
@@ -1204,27 +1328,41 @@ async function processCampaign(campaignId: string): Promise<{ sent: number; fail
 
     const contactMap = new Map(contacts.map((c: any) => [c.id, c]));
 
+    // Batch pacing: a batched campaign (send_in_batches=true) sends EXACTLY its
+    // configured batch_size recipients per cron tick, then advances next_batch_at
+    // so the next batch fires after the configured delay. Non-batched campaigns
+    // keep draining up to the per-run budget exactly as before.
+    const isBatched = campaign.send_in_batches === true;
+    const batchSize = Number(campaign.batch_size);
+    const isValidBatch = isBatched && Number.isInteger(batchSize) && batchSize > 0;
+    // The per-tick budget is whichever is smaller: a single configured batch, or
+    // the hard per-run email ceiling.
+    const runCap = isValidBatch ? Math.min(batchSize, MAX_EMAILS_PER_RUN) : MAX_EMAILS_PER_RUN;
+    // The delay that separates THIS batch from the next one. A fresh queue
+    // (current_batch_number 0) uses first_batch_delay_hours for the wait after
+    // its very first batch; every later batch uses subsequent_batch_delay_hours.
+    const batchIndex = Number(campaign.current_batch_number) || 0;
+    const delayHours = batchIndex === 0 ? Number(campaign.first_batch_delay_hours) : Number(campaign.subsequent_batch_delay_hours);
+
     // Drain pending logs in batches, respecting the invocation time budget.
     const start = Date.now();
     let sent = 0;
     let failed = 0;
-    let budgetHit = false;
 
-    while (sent + failed < MAX_EMAILS_PER_RUN) {
+    while (sent + failed < runCap) {
       if (Date.now() - start > TIME_BUDGET_MS) {
-        budgetHit = true;
         log(`Time budget reached — pausing campaign ${campaignId}; next cron tick will continue.`);
         break;
       }
-      const batch = await claimPendingLogs(campaignId);
+      const batch = await claimPendingLogs(campaignId, runCap - (sent + failed));
       if (batch.length === 0) break;
 
       const total = contacts.length;
       for (let i = 0; i < batch.length; i++) {
         // Re-check the budget inside the loop too — a large claimed batch must
         // never push this invocation past the free-tier wall-clock limit.
-        if (Date.now() - start > TIME_BUDGET_MS) { budgetHit = true; break; }
-        if (sent + failed >= MAX_EMAILS_PER_RUN) { budgetHit = true; break; }
+        if (Date.now() - start > TIME_BUDGET_MS) break;
+        if (sent + failed >= runCap) break;
         const logRow = batch[i];
         try {
           if (EMAIL_DELAY_MS > 0 && i > 0) {
@@ -1232,6 +1370,19 @@ async function processCampaign(campaignId: string): Promise<{ sent: number; fail
           }
           await sendOneEmail(logRow, campaign, contactMap, sent + failed + 1, total, mimeAttachments);
           await updateEmailLog(logRow.id, { status: 'sent', sent_at: new Date().toISOString() });
+          // A follow-up delivery must also be recorded in campaign_followup_logs
+          // (keyed to the ORIGINAL campaign) so the UI's remaining_eligible count
+          // drops to 0 — and the Schedule column shows "Completed" — after the
+          // last batch. Non-follow-up campaigns are unaffected (no source id).
+          if (sourceCampaignId) {
+            await recordFollowupDelivery(
+              campaignId,
+              sourceCampaignId,
+              String(logRow.contact_id),
+              String(logRow.email || ''),
+              openedAtByContact.get(String(logRow.contact_id)) || null
+            );
+          }
           sent++;
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
@@ -1264,6 +1415,14 @@ async function processCampaign(campaignId: string): Promise<{ sent: number; fail
     // cron tick picks them up immediately instead of waiting for recovery.
     await releaseClaimedLogs(campaignId, claimTimeIso);
 
+    // Reclaim any 'sending' logs a crashed / timed-out run (this project or a
+    // previous one) left behind, so their recipients are treated as claimable
+    // again rather than silently counting as "drained". Without this, a log
+    // stuck in 'sending' makes getLogsStats report 0 pending, which finalizes
+    // a batched follow-up to 'sent' while a recipient was never actually sent
+    // — leaving the UI stuck on 1 "eligible" recipient forever.
+    await recoverStuckLogs(campaignId);
+
     // Finalize. A campaign is only "sent" when every recipient is drained
     // (all logs 'sent' or 'failed'). If recipients still remain pending — e.g.
     // the per-run budget was hit, or a recipient is waiting on a retry delay —
@@ -1276,6 +1435,26 @@ async function processCampaign(campaignId: string): Promise<{ sent: number; fail
       logErr(`Analytics sync failed (non-fatal): ${(analyticsError as Error).message}`);
     }
     if (stats.pending > 0) {
+      // Batched campaign with recipients still remaining: advance next_batch_at
+      // from the ACTUAL batch execution time by the configured delay. The first
+      // batch uses first_batch_delay_hours; every later batch uses
+      // subsequent_batch_delay_hours. The campaign stays "scheduled" so the
+      // next cron tick (once next_batch_at arrives) fires the next batch.
+      if (isValidBatch) {
+        const gapHours = delayHours;
+        const gapMs = Math.max(0, Number(gapHours) || 0) * 60 * 60 * 1000;
+        const nextAt = new Date(Date.now() + gapMs).toISOString();
+        await finalizeCampaign(campaignId, {
+          status: 'scheduled',
+          next_batch_at: nextAt,
+          current_batch_number: batchIndex + 1,
+        });
+        log(
+          `Campaign ${campaignId} is batched — sent this batch; ` +
+          `next batch at ${nextAt} (${Number(gapHours) || 0} hour(s) wait).`
+        );
+        return { sent, failed, total: stats.total };
+      }
       await finalizeCampaign(campaignId, {
         status: 'scheduled',
       });
@@ -1316,6 +1495,10 @@ async function processCampaign(campaignId: string): Promise<{ sent: number; fail
           status: 'sent',
           sent_at: new Date().toISOString(),
           recipient_count: stats.total,
+          // A drained batch campaign is "complete": clear next_batch_at so the
+          // UI shows "Completed" and the scheduler never re-selects it. The
+          // batch counter is reset so a FUTURE re-queue starts at batch 1 again.
+          ...(isBatched ? { next_batch_at: null, current_batch_number: 0 } : {}),
         });
         log(`Campaign ${campaignId} marked "sent" (${delivered} delivered / ${stats.total} total)`);
       } else {

@@ -183,6 +183,18 @@ export interface FollowupConfigRow extends FollowupConfig {
   is_scheduled?: boolean
   /** Human-readable schedule summary for the follow-up campaign. */
   schedule_text?: string
+  /** True when the follow-up campaign is configured to send in batches. */
+  batch_enabled?: boolean
+  /** Recipients sent per batch (from the follow-up campaign's campaigns row). */
+  batch_size?: number | null
+  first_batch_delay_hours?: number | null
+  subsequent_batch_delay_hours?: number | null
+  /**
+   * When the NEXT batch fires (UTC instant from the follow-up campaign's
+   * campaigns.next_batch_at). Null when no batch is pending — either never
+   * queued, or the batch run has completed.
+   */
+  next_batch_at?: string | null
 }
 
 /**

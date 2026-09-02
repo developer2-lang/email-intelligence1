@@ -128,7 +128,7 @@ async function saveFollowupConfig(
 async function listAllFollowupCampaigns(): Promise<Record<string, any>[]> {
   const { data, error } = await supabase
     .from('campaigns')
-    .select('id, campaign_name, created_at')
+    .select('id, campaign_name, created_at, status, send_in_batches, batch_size, first_batch_delay_hours, subsequent_batch_delay_hours, next_batch_at')
     .eq('mailchimp_campaign_id', ALL_FOLLOWUP_MARKER)
   if (error) {
     if (error.code === '42P01' || error.code === '42703') return []
@@ -140,7 +140,7 @@ async function listAllFollowupCampaigns(): Promise<Record<string, any>[]> {
 async function listFollowupTypeCampaigns(): Promise<Record<string, any>[]> {
   const { data, error } = await supabase
     .from('campaigns')
-    .select('id, campaign_name, created_at')
+    .select('id, campaign_name, created_at, status, send_in_batches, batch_size, first_batch_delay_hours, subsequent_batch_delay_hours, next_batch_at')
     .eq('campaign_type', 'Follow Up')
   if (error) {
     if (error.code === '42P01' || error.code === '42703') return []
@@ -224,13 +224,32 @@ async function fetchFollowupConfigs(): Promise<FollowupConfigRow[]> {
   // Decorate with campaign names (best-effort).
   const nameById = new Map<string, string>()
   const createdById = new Map<string, string>()
+  const batchById = new Map<
+    string,
+    {
+      send_in_batches: boolean
+      batch_size: number | null
+      first_batch_delay_hours: number | null
+      subsequent_batch_delay_hours: number | null
+      next_batch_at: string | null
+    }
+  >()
   try {
     const { data: campaigns } = await supabase
       .from('campaigns')
-      .select('id, campaign_name, created_at')
+      .select('id, campaign_name, created_at, send_in_batches, batch_size, first_batch_delay_hours, subsequent_batch_delay_hours, next_batch_at')
     for (const c of campaigns || []) {
       nameById.set(String(c.id), c.campaign_name || '')
       if (c.created_at) createdById.set(String(c.id), c.created_at)
+      if (typeof c.send_in_batches === 'boolean' && c.send_in_batches) {
+        batchById.set(String(c.id), {
+          send_in_batches: true,
+          batch_size: c.batch_size != null ? Number(c.batch_size) : null,
+          first_batch_delay_hours: c.first_batch_delay_hours != null ? Number(c.first_batch_delay_hours) : null,
+          subsequent_batch_delay_hours: c.subsequent_batch_delay_hours != null ? Number(c.subsequent_batch_delay_hours) : null,
+          next_batch_at: c.next_batch_at ? String(c.next_batch_at) : null,
+        })
+      }
     }
   } catch {
     // Campaign names are decorative — leave them as placeholders.
@@ -357,7 +376,7 @@ async function fetchFollowupConfigs(): Promise<FollowupConfigRow[]> {
     grouped.get(fupId)!.push(row)
   }
 
-  const ctx = { nameById, createdById, openedByOriginal, sentByPair, sentByFollowup, originalByFollowup, followupMetrics, allOpenedUnion, schedulesByCampaign }
+  const ctx = { nameById, createdById, openedByOriginal, sentByPair, sentByFollowup, originalByFollowup, followupMetrics, allOpenedUnion, schedulesByCampaign, batchById }
 
   const result: FollowupConfigRow[] = []
   const handledIds = new Set<string>()
@@ -402,6 +421,7 @@ function buildIndividualFollowupRow(row: Record<string, any>, ctx: Record<string
   return {
     ...row,
     ...scheduleDecorators(ctx, followupId),
+    ...batchDecorators(ctx, followupId),
     original_campaign_name: ctx.nameById.get(String(row.campaign_id)) || '—',
     followup_campaign_name: ctx.nameById.get(followupId) || '—',
     opened_count: opened,
@@ -424,6 +444,32 @@ function scheduleDecorators(ctx: Record<string, any>, followupId: string): {
   }
 }
 
+function batchDecorators(ctx: Record<string, any>, followupId: string): {
+  batch_enabled: boolean
+  batch_size: number | null
+  first_batch_delay_hours: number | null
+  subsequent_batch_delay_hours: number | null
+  next_batch_at: string | null
+} {
+  const batch = ctx.batchById?.get(String(followupId))
+  if (!batch) {
+    return {
+      batch_enabled: false,
+      batch_size: null,
+      first_batch_delay_hours: null,
+      subsequent_batch_delay_hours: null,
+      next_batch_at: null,
+    }
+  }
+  return {
+    batch_enabled: true,
+    batch_size: batch.batch_size,
+    first_batch_delay_hours: batch.first_batch_delay_hours,
+    subsequent_batch_delay_hours: batch.subsequent_batch_delay_hours,
+    next_batch_at: batch.next_batch_at,
+  }
+}
+
 function buildAllFollowupRow(
   followupId: string,
   sampleRow: Record<string, any> | null,
@@ -436,6 +482,7 @@ function buildAllFollowupRow(
     campaign_id: 'all',
     followup_campaign_id: followupId,
     ...scheduleDecorators(ctx, followupId),
+    ...batchDecorators(ctx, followupId),
     trigger_type: (sampleRow && sampleRow.trigger_type) || TRIGGER_TYPE,
     followup_mode: (sampleRow && sampleRow.followup_mode) || 'manual',
     is_active: true,
@@ -465,6 +512,7 @@ function buildOrphanFollowupRow(followupId: string, ctx: Record<string, any>): F
     campaign_id: originalId || 'all',
     followup_campaign_id: followupId,
     ...scheduleDecorators(ctx, followupId),
+    ...batchDecorators(ctx, followupId),
     trigger_type: TRIGGER_TYPE,
     followup_mode: 'manual',
     is_active: false,
@@ -672,6 +720,8 @@ async function persistFollowupBatchSettings(
     }
   }
 }
+
+async function createFollowupConfig(
   payload: CreateFollowupConfigPayload
 ): Promise<FollowupConfigApiResult> {
   const originalCampaignId = payload.original_campaign_id
