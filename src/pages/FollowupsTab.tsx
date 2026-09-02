@@ -251,8 +251,12 @@ export default function FollowupsTab({
   const attachmentInputRef = useRef<HTMLInputElement>(null)
 
   // ─── BATCH SENDING STATE (composer — mirrors Campaigns) ───
-  // NOTE: Follow-up batch size is HARDCODED to 30 (not configurable).
-  const FOLLOWUP_BATCH_SIZE = 30
+  // Follow-up batch size is user-configurable: a positive integer, capped at
+  // the number of eligible remaining recipients. It is persisted to the
+  // follow-up campaign's campaigns row and honored at send time by the UI
+  // slicing AND the send-followup Edge Function (server-side cap).
+  const FOLLOWUP_DEFAULT_BATCH_SIZE = 30
+  const [batchSize, setBatchSize] = useState<number>(FOLLOWUP_DEFAULT_BATCH_SIZE)
   const [sendInBatches, setSendInBatches] = useState(false)
   const [batchDelayHours, setBatchDelayHours] = useState(1)
 
@@ -463,6 +467,7 @@ export default function FollowupsTab({
     setAttachments([])
     setAttachmentError(null)
     setSendInBatches(false)
+    setBatchSize(FOLLOWUP_DEFAULT_BATCH_SIZE)
     setBatchDelayHours(1)
     setTab('compose')
   }
@@ -657,6 +662,21 @@ export default function FollowupsTab({
       }
     }
 
+    if (sendInBatches) {
+      const eligibleRemaining =
+        originalId === 'all'
+          ? allOpened.length
+          : Number(selectedOriginal?.opened ?? 0)
+      if (!Number.isInteger(batchSize) || batchSize <= 0) {
+        onToast('Batch size must be a whole number greater than 0', 'error')
+        return
+      }
+      if (eligibleRemaining > 0 && batchSize > eligibleRemaining) {
+        onToast(`Batch size cannot exceed the ${eligibleRemaining} eligible remaining contact(s)`, 'error')
+        return
+      }
+    }
+
     setCreating(true)
     try {
       const schedule: CampaignScheduleInput | null = enableSchedule
@@ -685,9 +705,9 @@ export default function FollowupsTab({
         is_active: isActive,
         schedule,
         send_in_batches: sendInBatches,
-        batch_size: FOLLOWUP_BATCH_SIZE,
+        batch_size: sendInBatches ? batchSize : undefined,
         first_batch_delay_hours: sendInBatches ? batchDelayHours : undefined,
-        subsequent_batch_delay_hours: 1,
+        subsequent_batch_delay_hours: sendInBatches ? batchDelayHours : undefined,
       })
 
       // Persist the follow-up's attachments against the follow-up campaign
@@ -743,6 +763,7 @@ export default function FollowupsTab({
       setDayOfMonth(15)
       setWeekdayRule('First Monday')
       setSendInBatches(false)
+      setBatchSize(FOLLOWUP_DEFAULT_BATCH_SIZE)
       setBatchDelayHours(1)
 
       await refreshAll()
@@ -772,50 +793,109 @@ export default function FollowupsTab({
     }
     setSendingSelected(true)
     try {
-      // Resolve the configured first-batch delay from the follow-up campaign
-      // row (falls back to 1 hour). Subsequent batches always wait 1 hour.
+      const originCampaignId = String(activeConfig.campaign_id)
+      const followupCampaignId = activeConfig.followup_campaign_id
+
+      // The follow-up campaign's campaigns row is the source of truth for the
+      // batch settings. The composer value is used only as a fallback while the
+      // batch columns are missing (pre-migration).
+      let sendInBatches = true
+      let configuredBatchSize =
+        Number.isInteger(batchSize) && batchSize > 0
+          ? batchSize
+          : FOLLOWUP_DEFAULT_BATCH_SIZE
       let firstBatchDelayHours = batchDelayHours
-      if (activeConfig.followup_campaign_id) {
+      let subsequentBatchDelayHours = batchDelayHours
+      if (followupCampaignId) {
         try {
           const { data: fuCampaign } = await supabase
             .from('campaigns')
-            .select('first_batch_delay_hours')
-            .eq('id', String(activeConfig.followup_campaign_id))
+            .select('send_in_batches, batch_size, first_batch_delay_hours, subsequent_batch_delay_hours')
+            .eq('id', String(followupCampaignId))
             .maybeSingle()
-          if (fuCampaign && Number.isFinite(fuCampaign.first_batch_delay_hours)) {
-            firstBatchDelayHours = Number(fuCampaign.first_batch_delay_hours)
+          if (fuCampaign) {
+            if (typeof fuCampaign.send_in_batches === 'boolean') {
+              sendInBatches = fuCampaign.send_in_batches
+            }
+            const storedBatchSize = Number(fuCampaign.batch_size)
+            if (Number.isInteger(storedBatchSize) && storedBatchSize > 0) {
+              configuredBatchSize = storedBatchSize
+            }
+            const storedFirst = Number(fuCampaign.first_batch_delay_hours)
+            if (Number.isFinite(storedFirst) && storedFirst >= 0) {
+              firstBatchDelayHours = storedFirst
+            }
+            const storedSubsequent = Number(fuCampaign.subsequent_batch_delay_hours)
+            if (Number.isFinite(storedSubsequent) && storedSubsequent >= 0) {
+              subsequentBatchDelayHours = storedSubsequent
+            }
           }
         } catch {
           // batch column may be missing before the migration — keep composer value
         }
       }
 
-      // Send the chosen contacts in fixed slices of exactly 30. Batch 1 sends
-      // immediately, then the configured first-batch delay before batch 2, and
-      // 1 hour between every subsequent batch.
-      const contactIds = [...selectedOpenedIds]
-      const totalBatches = Math.ceil(contactIds.length / FOLLOWUP_BATCH_SIZE)
       let sent = 0
       let skipped = 0
       let failed = 0
-      for (let b = 1; b <= totalBatches; b++) {
-        const slice = contactIds.slice((b - 1) * FOLLOWUP_BATCH_SIZE, b * FOLLOWUP_BATCH_SIZE)
-        const results = await sendSelectedFollowups(activeConfig.campaign_id, {
-          contact_ids: slice,
-          followup_campaign_id: activeConfig.followup_campaign_id,
-        })
-        const batchSent = results.filter((r) => r.status === 'sent').length
-        const batchSkipped = results.filter((r) => r.status === 'skipped').length
-        const batchFailed = results.filter((r) => r.status === 'failed').length
-        sent += batchSent
-        skipped += batchSkipped
-        failed += batchFailed
 
-        // Delay before the next batch: the configured first-batch delay for
-        // the transition to batch 2, then 1 hour between subsequent batches.
-        if (b < totalBatches) {
-          const delayHours = b === 1 ? firstBatchDelayHours : 1
-          onToast(`Batch ${b}/${totalBatches} sent (${batchSent} sent). Waiting ${delayHours} hour(s) before the next batch…`, 'info')
+      if (!sendInBatches) {
+        // Batching off: deliver the follow-up to every selected recipient in a
+        // single pass (no artificial throttling).
+        const results = await sendSelectedFollowups(originCampaignId, {
+          contact_ids: [...selectedOpenedIds],
+          followup_campaign_id: followupCampaignId,
+        })
+        for (const r of results) {
+          if (r.status === 'sent') sent++
+          else if (r.status === 'skipped') skipped++
+          else if (r.status === 'failed') failed++
+        }
+      } else {
+        // Batching on: send the selected recipients in slices of EXACTLY the
+        // configured batch size (never a hard-coded 30). Before EVERY batch the
+        // eligible recipients are re-queried from the database, so contacts who
+        // were already sent — by this run or any other — drop out and are never
+        // duplicated. The configured delay is respected between every pair of
+        // consecutive batches.
+        const selectedSet = new Set(selectedOpenedIds.map(String))
+        const estimatedBatches = Math.max(1, Math.ceil(selectedOpenedIds.length / configuredBatchSize))
+        let batchNum = 0
+        while (true) {
+          const fresh = await fetchOpenedContacts(originCampaignId, followupCampaignId)
+          const eligibleIds = fresh.map((c) => String(c.contact_id)).filter((id) => selectedSet.has(id))
+          if (eligibleIds.length === 0) break
+
+          const slice = eligibleIds.slice(0, configuredBatchSize)
+          if (slice.length === 0) break
+
+          const results = await sendSelectedFollowups(originCampaignId, {
+            contact_ids: slice,
+            followup_campaign_id: followupCampaignId,
+          })
+          const batchSent = results.filter((r) => r.status === 'sent').length
+          const batchSkipped = results.filter((r) => r.status === 'skipped').length
+          const batchFailed = results.filter((r) => r.status === 'failed').length
+          sent += batchSent
+          skipped += batchSkipped
+          failed += batchFailed
+          batchNum++
+
+          // Refresh the remaining count from the database after every batch so
+          // the panel reflects the real sent state — never a visual guess.
+          await refreshAll()
+
+          const remainingSelected = eligibleIds.length - batchSent - batchSkipped
+          // Stop when nothing is left, or when a batch makes no progress at all
+          // (persistent failures stay pending in the DB and remain eligible for
+          // retry — they must never be marked sent).
+          if (remainingSelected === 0 || batchSent === 0) break
+
+          const delayHours = batchNum === 1 ? firstBatchDelayHours : subsequentBatchDelayHours
+          onToast(
+            `Batch ${batchNum}/${estimatedBatches} sent (${batchSent} sent). Waiting ${delayHours} hour(s) before the next batch…`,
+            'info',
+          )
           await new Promise((resolve) => setTimeout(resolve, delayHours * 60 * 60 * 1000))
         }
       }
@@ -826,7 +906,7 @@ export default function FollowupsTab({
       if (failed > 0) parts.push(`${failed} failed`)
       onToast(`Follow-up processed: ${parts.join(', ') || 'no recipients'}`, 'success')
       setSelectedOpenedIds([])
-      await loadOpenedContacts(activeConfig.campaign_id, activeConfig.followup_campaign_id)
+      await loadOpenedContacts(originCampaignId, followupCampaignId)
       await refreshAll()
     } catch (err) {
       onToast(err instanceof Error ? err.message : 'Failed to send follow-up', 'error')
@@ -1843,122 +1923,138 @@ export default function FollowupsTab({
                   Send in batches
                 </label>
 
-                {sendInBatches && (
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', padding: '16px', background: '#F8FAFC', border: '1px solid #E2E8F0', borderRadius: '10px' }}>
-                    <div style={{ display: 'flex', gap: '24px' }}>
-                      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                        <label style={{ fontSize: '12px', fontWeight: 600, color: '#64748B', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Batch Size</label>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                          <input
-                            type="number"
-                            value={FOLLOWUP_BATCH_SIZE}
-                            readOnly
-                            disabled
-                            min={1}
-                            max={1000}
+                {sendInBatches && (() => {
+                  const audienceEligible =
+                    originalId === 'all'
+                      ? allOpened.length
+                      : Number(selectedOriginal?.opened ?? 0)
+                  const batchSizeInvalid =
+                    !Number.isInteger(batchSize) ||
+                    batchSize <= 0 ||
+                    (audienceEligible > 0 && batchSize > audienceEligible)
+                  const estimatedBatches =
+                    audienceEligible > 0 && batchSize > 0
+                      ? Math.ceil(audienceEligible / batchSize)
+                      : 0
+                  const delayLabel = DELAY_OPTIONS.find(o => o.value === batchDelayHours)?.label || '1 Hour'
+                  const audienceLabel =
+                    originalId === 'all'
+                      ? 'All eligible campaigns'
+                      : originalId && selectedOriginal
+                        ? String(selectedOriginal.name)
+                        : originalId
+                          ? 'Selected campaign'
+                          : 'No campaign selected'
+
+                  return (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', padding: '16px', background: '#F8FAFC', border: '1px solid #E2E8F0', borderRadius: '10px' }}>
+                      <div style={{ display: 'flex', gap: '24px' }}>
+                        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                          <label style={{ fontSize: '12px', fontWeight: 600, color: '#64748B', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Batch Size</label>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                            <input
+                              type="number"
+                              value={batchSize}
+                              onChange={(e) => setBatchSize(Math.max(0, parseInt(e.target.value, 10) || 0))}
+                              min={1}
+                              max={Math.max(1, audienceEligible)}
+                              step={1}
+                              style={{
+                                width: '100px',
+                                height: '40px',
+                                padding: '0 12px',
+                                border: '1px solid #E2E8F0',
+                                borderRadius: '8px',
+                                fontSize: '13px',
+                                outline: 'none',
+                                background: '#FFFFFF',
+                                color: '#334155',
+                                textAlign: 'center',
+                              }}
+                            />
+                            <span style={{ fontSize: '13px', color: '#64748B' }}>contacts</span>
+                          </div>
+                          {batchSizeInvalid && (
+                            <div style={{ fontSize: '12px', color: '#DC2626', fontWeight: 500 }}>
+                              {!Number.isInteger(batchSize) || batchSize <= 0
+                                ? 'Batch size must be a whole number greater than 0.'
+                                : `Batch size cannot exceed the ${audienceEligible} eligible remaining contact(s).`}
+                            </div>
+                          )}
+                          <div style={{ fontSize: '11px', color: '#8A94A6' }}>
+                            {audienceEligible > 0
+                              ? `Whole number between 1 and ${audienceEligible} eligible remaining contact(s).`
+                              : 'Whole number of contacts sent per batch.'}
+                          </div>
+                        </div>
+                        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                          <label style={{ fontSize: '12px', fontWeight: 600, color: '#64748B', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Send next batch after</label>
+                          <select
+                            value={batchDelayHours}
+                            onChange={(e) => setBatchDelayHours(parseFloat(e.target.value))}
                             style={{
-                              width: '100px',
+                              width: '100%',
                               height: '40px',
                               padding: '0 12px',
                               border: '1px solid #E2E8F0',
                               borderRadius: '8px',
                               fontSize: '13px',
                               outline: 'none',
-                              background: '#F1F5F9',
+                              background: '#FFFFFF',
                               color: '#334155',
-                              textAlign: 'center',
-                              cursor: 'not-allowed',
+                              cursor: 'pointer',
                             }}
-                          />
-                          <span style={{ fontSize: '13px', color: '#64748B' }}>contacts</span>
-                        </div>
-                        <div style={{ fontSize: '11px', color: '#8A94A6' }}>
-                          Follow-up batch size is fixed at 30.
+                          >
+                            {DELAY_OPTIONS.map(opt => (
+                              <option key={opt.value} value={opt.value}>{opt.label}</option>
+                            ))}
+                          </select>
+                          <div style={{ fontSize: '11px', color: '#8A94A6' }}>
+                            Waiting period between every pair of consecutive batches.
+                          </div>
                         </div>
                       </div>
-                      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                        <label style={{ fontSize: '12px', fontWeight: 600, color: '#64748B', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Send next batch after</label>
-                        <select
-                          value={batchDelayHours}
-                          onChange={(e) => setBatchDelayHours(parseFloat(e.target.value))}
-                          style={{
-                            width: '100%',
-                            height: '40px',
-                            padding: '0 12px',
+
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                        <div style={{ fontSize: '13px', color: '#1D4ED8', fontWeight: 500 }}>
+                          {batchSize > 0 ? `${batchSize} contacts will be sent every ${delayLabel}.` : 'Enter a batch size to see the sending plan.'}
+                        </div>
+                        <div style={{ fontSize: '12px', color: '#475569' }}>
+                          Audience: {audienceLabel} ({audienceEligible})
+                        </div>
+                        <div style={{ fontSize: '12px', color: '#475569', fontWeight: 500 }}>
+                          Remaining eligible contacts: {audienceEligible}
+                        </div>
+                        <div style={{ fontSize: '12px', color: '#475569', fontWeight: 500 }}>
+                          Estimated batches: {estimatedBatches}
+                        </div>
+
+                        {estimatedBatches > 0 && (
+                          <div style={{
+                            maxHeight: '200px',
+                            overflowY: 'auto',
+                            fontSize: '12px',
+                            color: '#334155',
+                            background: '#FFFFFF',
                             border: '1px solid #E2E8F0',
                             borderRadius: '8px',
-                            fontSize: '13px',
-                            outline: 'none',
-                            background: '#FFFFFF',
-                            color: '#334155',
-                            cursor: 'pointer',
-                          }}
-                        >
-                          {DELAY_OPTIONS.map(opt => (
-                            <option key={opt.value} value={opt.value}>{opt.label}</option>
-                          ))}
-                        </select>
-                        <div style={{ fontSize: '11px', color: '#8A94A6' }}>
-                          Delay between the first and second batch. Subsequent batches wait 1 hour each.
-                        </div>
+                            padding: '12px'
+                          }}>
+                            {Array.from({ length: estimatedBatches }, (_, i) => {
+                              const start = i * batchSize + 1
+                              const end = Math.min((i + 1) * batchSize, audienceEligible)
+                              return (
+                                <div key={i} style={{ padding: '4px 0', borderBottom: i < estimatedBatches - 1 ? '1px solid #F1F5F9' : 'none' }}>
+                                  Batch {i + 1}: S.No. {start}–{end}
+                                </div>
+                              )
+                            })}
+                          </div>
+                        )}
                       </div>
                     </div>
-
-                    {(() => {
-                      const totalRecipients =
-                        originalId === 'all'
-                          ? allOpened.length
-                          : Number(selectedOriginal?.opened ?? 0)
-                      const estimatedBatches = totalRecipients > 0 ? Math.ceil(totalRecipients / FOLLOWUP_BATCH_SIZE) : 0
-                      const delayLabel = DELAY_OPTIONS.find(o => o.value === batchDelayHours)?.label || '1 Hour'
-                      const audienceLabel =
-                        originalId === 'all'
-                          ? 'All eligible campaigns'
-                          : originalId && selectedOriginal
-                            ? String(selectedOriginal.name)
-                            : originalId
-                              ? 'Selected campaign'
-                              : 'No campaign selected'
-
-                      return (
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                          <div style={{ fontSize: '13px', color: '#1D4ED8', fontWeight: 500 }}>
-                            {FOLLOWUP_BATCH_SIZE} contacts will be sent every {delayLabel}.
-                          </div>
-                          <div style={{ fontSize: '12px', color: '#475569' }}>
-                            Audience: {audienceLabel} ({totalRecipients})
-                          </div>
-                          <div style={{ fontSize: '12px', color: '#475569', fontWeight: 500 }}>
-                            Estimated batches: {estimatedBatches}
-                          </div>
-
-                          {estimatedBatches > 0 && (
-                            <div style={{
-                              maxHeight: '200px',
-                              overflowY: 'auto',
-                              fontSize: '12px',
-                              color: '#334155',
-                              background: '#FFFFFF',
-                              border: '1px solid #E2E8F0',
-                              borderRadius: '8px',
-                              padding: '12px'
-                            }}>
-                              {Array.from({ length: estimatedBatches }, (_, i) => {
-                                const start = i * FOLLOWUP_BATCH_SIZE + 1
-                                const end = Math.min((i + 1) * FOLLOWUP_BATCH_SIZE, totalRecipients)
-                                return (
-                                  <div key={i} style={{ padding: '4px 0', borderBottom: i < estimatedBatches - 1 ? '1px solid #F1F5F9' : 'none' }}>
-                                    Batch {i + 1}: S.No. {start}–{end}
-                                  </div>
-                                )
-                              })}
-                            </div>
-                          )}
-                        </div>
-                      )
-                    })()}
-                  </div>
-                )}
+                  )
+                })()}
               </div>
             </div>
 

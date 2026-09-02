@@ -565,21 +565,33 @@ async function createFollowupCampaignRecord(payload: CreateFollowupConfigPayload
     updated_at: new Date().toISOString(),
   }
 
-  // The follow-up batch size is HARDCODED to 30 (not configurable). The first
-  // batch delay is the user-configured value; subsequent batches always wait
-  // 1 hour. These batch fields are written when the columns exist. If the
-  // underlying public.campaigns table has not yet had the batching migration
-  // applied (missing send_in_batches / batch_size / first_batch_delay_hours /
+  // Batch settings are user-configurable. The batch size is a positive integer
+  // picked in the composer (validated to > 0), and the delay applies between
+  // EVERY pair of consecutive batches (first and subsequent alike). These batch
+  // fields are written when the columns exist. If the underlying
+  // public.campaigns table has not yet had the batching migration applied
+  // (missing send_in_batches / batch_size / first_batch_delay_hours /
   // subsequent_batch_delay_hours columns), the insert falls back to the base
   // fields so creating the follow-up never fails.
+  const configuredBatchSize = Number(payload.batch_size)
+  const validatedBatchSize =
+    Number.isInteger(configuredBatchSize) && configuredBatchSize > 0
+      ? configuredBatchSize
+      : 30
+  const firstDelayHours = Number.isFinite(payload.first_batch_delay_hours)
+    ? payload.first_batch_delay_hours
+    : 1
   const batchFields: Record<string, unknown> = {
     send_in_batches: payload.send_in_batches === true,
-    batch_size: 30,
+    batch_size: validatedBatchSize,
     first_batch_delay_hours:
       payload.send_in_batches && Number.isFinite(payload.first_batch_delay_hours)
         ? payload.first_batch_delay_hours
         : 1,
-    subsequent_batch_delay_hours: 1,
+    subsequent_batch_delay_hours:
+      payload.send_in_batches && Number.isFinite(payload.subsequent_batch_delay_hours)
+        ? payload.subsequent_batch_delay_hours
+        : firstDelayHours,
   }
 
   const { data, error } = await supabase
@@ -616,7 +628,50 @@ async function createFollowupCampaignRecord(payload: CreateFollowupConfigPayload
   return String(data.id)
 }
 
-async function createFollowupConfig(
+/**
+ * Keep the follow-up campaign's campaigns-row batch settings in sync with the
+ * composer. This runs for BOTH fresh creations and the reuse path (editing an
+ * existing follow-up campaign), so the database always stores the user's
+ * current Batch Size / delay and remains the source of truth at send time.
+ * Missing-column errors are ignored so pre-migration databases still work.
+ */
+async function persistFollowupBatchSettings(
+  followupCampaignId: string,
+  payload: CreateFollowupConfigPayload,
+): Promise<void> {
+  if (payload.send_in_batches === undefined) return
+  const configuredBatchSize = Number(payload.batch_size)
+  const validatedBatchSize =
+    Number.isInteger(configuredBatchSize) && configuredBatchSize > 0
+      ? configuredBatchSize
+      : 30
+  const firstDelay = Number.isFinite(payload.first_batch_delay_hours)
+    ? payload.first_batch_delay_hours
+    : 1
+  const subsequentDelay = Number.isFinite(payload.subsequent_batch_delay_hours)
+    ? payload.subsequent_batch_delay_hours
+    : firstDelay
+
+  const { error } = await supabase
+    .from('campaigns')
+    .update({
+      send_in_batches: payload.send_in_batches === true,
+      batch_size: validatedBatchSize,
+      first_batch_delay_hours:
+        payload.send_in_batches === true && Number.isFinite(payload.first_batch_delay_hours)
+          ? payload.first_batch_delay_hours
+          : 1,
+      subsequent_batch_delay_hours:
+        payload.send_in_batches === true ? subsequentDelay : 1,
+    })
+    .eq('id', followupCampaignId)
+  if (error) {
+    const message = String(error.message || '').toLowerCase()
+    if (!(error.code === '42703' || message.includes('could not find the'))) {
+      throw new Error(`Failed to save follow-up batch settings: ${error.message}`)
+    }
+  }
+}
   payload: CreateFollowupConfigPayload
 ): Promise<FollowupConfigApiResult> {
   const originalCampaignId = payload.original_campaign_id
@@ -665,6 +720,8 @@ async function createFollowupConfig(
   })
 
   await persistFollowupSchedule(followupCampaignId, payload.schedule)
+
+  await persistFollowupBatchSettings(followupCampaignId, payload)
 
   return {
     config,
@@ -730,6 +787,8 @@ async function createAllCampaignsFollowup(
   }
 
   await persistFollowupSchedule(followupCampaignId, payload.schedule)
+
+  await persistFollowupBatchSettings(followupCampaignId, payload)
 
   return {
     config: null,

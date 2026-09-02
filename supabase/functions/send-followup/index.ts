@@ -1023,7 +1023,30 @@ async function handleSendSelected(payload: any): Promise<any[]> {
     throw new Error('This follow-up is scheduled — it will be sent automatically at its scheduled time');
   }
 
-  const openedByContact = await getOpenedByContact(campaignId, isAll, contactIds);
+  // Server-side batch cap: when the follow-up campaign is configured to send
+  // in batches, NEVER process more than its stored batch size per invocation —
+  // even if the caller passes a larger list. The campaigns row is the source
+  // of truth, so a stale client can never burst more than the configured size.
+  let batchCap: number | null = null;
+  try {
+    const { data: batchCfg, error: batchErr } = await supabase
+      .from('campaigns')
+      .select('send_in_batches, batch_size')
+      .eq('id', followupCampaignId)
+      .maybeSingle();
+    if (!batchErr && batchCfg && batchCfg.send_in_batches === true) {
+      const n = Number(batchCfg.batch_size);
+      if (Number.isInteger(n) && n > 0) batchCap = n;
+    }
+  } catch {
+    // batch columns may predate the migration — no cap applied
+  }
+  const idsToSend = batchCap && batchCap > 0 ? contactIds.slice(0, batchCap) : contactIds;
+  if (idsToSend.length === 0) {
+    throw new Error('Select at least one opened contact');
+  }
+
+  const openedByContact = await getOpenedByContact(campaignId, isAll, idsToSend);
 
   let contacts: any[] = [];
   try {
@@ -1042,7 +1065,7 @@ async function handleSendSelected(payload: any): Promise<any[]> {
   const results: Array<{ contact_id: string; name: string; email: string; status: string; reason?: string }> = [];
   let sentCount = 0;
 
-  for (const contactId of contactIds) {
+  for (const contactId of idsToSend) {
     const openedLog = openedByContact.get(String(contactId));
     const contact = contactById.get(String(contactId)) || {};
     const email = (openedLog && openedLog.email) || contact.email || '';
