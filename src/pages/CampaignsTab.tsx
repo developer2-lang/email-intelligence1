@@ -36,6 +36,7 @@ import LinearProgress from '@mui/material/LinearProgress';
 import CircularProgress from '@mui/material/CircularProgress';
 import Tooltip from '@mui/material/Tooltip';
 import { supabase } from '../supabase';
+import ActivityModal from '../components/ActivityModal';
 
 interface CampaignsTabProps {
   campaigns: any[];
@@ -498,6 +499,10 @@ const DELAY_OPTIONS = [
   const [pendingFollowupsLoading, setPendingFollowupsLoading] = useState(true);
   const [pendingFollowupsError, setPendingFollowupsError] = useState<string | null>(null);
   const [sendingFollowupId, setSendingFollowupId] = useState<string | null>(null);
+
+  // ─── VIEW ACTIVITY STATE ───
+  const [selectedCampaignId, setSelectedCampaignId] = useState<string | null>(null);
+  const [selectedCampaignName, setSelectedCampaignName] = useState<string>('');
 
   // ─── ATTACHMENTS STATE (composer) ───
   const [attachments, setAttachments] = useState<CampaignAttachment[]>([]);
@@ -1284,6 +1289,7 @@ setCompBody('');
                       </td>
                       <td>
                         <div style={{ display: 'flex', gap: '3px' }}>
+                          <button className="btn-icon" title="View recipient activity" onClick={() => { setSelectedCampaignId(c.id); setSelectedCampaignName(c.name); }}>👁</button>
                           <button className="btn-icon" title="Edit campaign" onClick={() => openEditCampaign(c)}>✎</button>
                           <button className="btn-icon" title="Delete" onClick={() => handleDeleteCampaign(c.id)} style={{ color: 'var(--red)' }}>✕</button>
                         </div>
@@ -2354,6 +2360,16 @@ setCompBody('');
             </div>
           </div>
         </div>
+      )}
+
+      {/* ─── RECIPIENT ACTIVITY MODAL ─── */}
+      {selectedCampaignId && (
+        <ActivityModal
+          isOpen={true}
+          campaignId={selectedCampaignId}
+          campaignName={selectedCampaignName}
+          onClose={() => { setSelectedCampaignId(null); setSelectedCampaignName(''); }}
+        />
       )}
     </div>
   );
