@@ -41,6 +41,7 @@ import type {
   PendingFollowup,
   ScheduleType,
 } from '../types/campaign'
+import ActivityModal from '../components/ActivityModal'
 
 interface FollowupsTabProps {
   campaigns: any[]
@@ -285,6 +286,9 @@ const DELAY_OPTIONS = [
 
   const bodyRef = useRef<HTMLTextAreaElement>(null)
 
+  const [selectedActivityId, setSelectedActivityId] = useState<string | null>(null)
+  const [selectedActivityName, setSelectedActivityName] = useState('')
+
   const campaignsById = useMemo(() => {
     const map = new Map<string, any>()
     for (const c of campaigns || []) {
@@ -315,10 +319,9 @@ const DELAY_OPTIONS = [
       (campaigns || []).filter((c) => {
         const id = String(c.id || '')
         if (!id) return false
-        if (alreadyFollowupCampaignIds.has(id)) return false
         return true
       }),
-    [campaigns, alreadyFollowupCampaignIds],
+    [campaigns],
   )
 
   const reuseOptions = useMemo(
@@ -1363,6 +1366,16 @@ const DELAY_OPTIONS = [
                                     <path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z" />
                                     <path d="m15 5 4 4" />
                                   </svg>
+                                </button>
+                                <button
+                                  className="ct-ibtn ct-ibtn-edit"
+                                  title="View recipient activity"
+                                  onClick={() => {
+                                    setSelectedActivityId(String(config.followup_campaign_id))
+                                    setSelectedActivityName(config.followup_campaign_name || '')
+                                  }}
+                                >
+                                  👁
                                 </button>
                                 <button
                                   className="ct-ibtn ct-ibtn-danger"
@@ -2588,6 +2601,16 @@ const DELAY_OPTIONS = [
             </table>
           </div>
         </div>
+      )}
+
+      {/* ─── RECIPIENT ACTIVITY MODAL ─── */}
+      {selectedActivityId && (
+        <ActivityModal
+          isOpen={true}
+          campaignId={selectedActivityId}
+          campaignName={selectedActivityName}
+          onClose={() => { setSelectedActivityId(null); setSelectedActivityName(''); }}
+        />
       )}
     </div>
   )
