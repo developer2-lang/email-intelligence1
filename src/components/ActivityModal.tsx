@@ -28,8 +28,8 @@ export default function ActivityModal({
   const [searchQuery, setSearchQuery] = useState('')
   const [currentPage, setCurrentPage] = useState(1)
 
-  // Placeholder — will be populated with real data in a future task
-  const recipients: never[] = useMemo(() => [], [])
+  // Placeholder — will be populated with real data in a future task using campaignId
+  const recipients: never[] = useMemo(() => [], [campaignId])
 
   const filteredRecipients = useMemo(() => {
     let list = recipients
