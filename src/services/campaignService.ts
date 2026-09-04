@@ -1092,7 +1092,7 @@ function buildCampaignRecord(payload: CampaignLaunchPayload, status: string): Re
   if (!payload.html_content || !String(payload.html_content).trim()) missing.push('html_content')
   if (missing.length > 0) throw new Error(`Missing required fields: ${missing.join(', ')}`)
 
-  return {
+  const record: Record<string, any> = {
     id: payload.id ? String(payload.id) : null,
     campaign_name: String(payload.campaign_name).trim(),
     subject_line: String(subjectLine).trim(),
@@ -1106,6 +1106,27 @@ function buildCampaignRecord(payload: CampaignLaunchPayload, status: string): Re
     schedule_time: payload.schedule_time ? String(payload.schedule_time).trim() : null,
     status,
   }
+
+  // Persist batch-sending configuration so the scheduler's isBatchedCampaignDue
+  // can pace subsequent batches correctly. Without this, a scheduled or draft
+  // campaign with batching enabled would lose send_in_batches and send to all
+  // recipients at once when the scheduler picks it up.
+  if (payload.send_in_batches) {
+    record.send_in_batches = true
+    record.batch_size = Number(payload.batch_size) > 0 ? Number(payload.batch_size) : 30
+    record.first_batch_delay_hours = Number.isFinite(Number(payload.first_batch_delay_hours))
+      ? Number(payload.first_batch_delay_hours)
+      : 2
+    record.subsequent_batch_delay_hours = Number.isFinite(Number(payload.subsequent_batch_delay_hours))
+      ? Number(payload.subsequent_batch_delay_hours)
+      : 1
+  } else {
+    record.send_in_batches = false
+    record.current_batch_number = 0
+    record.next_batch_at = null
+  }
+
+  return record
 }
 
 async function saveCampaignCloud(record: Record<string, any>): Promise<any> {

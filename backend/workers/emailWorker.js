@@ -465,11 +465,98 @@ async function processCampaign(campaignId) {
 
     const contactMap = new Map(contacts.map((c) => [c.id, c]));
 
+    // ─── Batch-aware processing ───────────────────────────────────────────
+    let batchRecordForThisRun = null;
+    let batchContacts = contacts;
+    let campaignBatchSize = BATCH_SIZE;
+    let campaignBatchDelayMs = BATCH_DELAY_MS;
+
+    if (campaign.send_in_batches) {
+      campaignBatchSize = campaign.batch_size || 30;
+      campaignBatchDelayMs = (campaign.subsequent_batch_delay_hours || 1) * 3600_000;
+
+      const { data: existingBatches } = await supabaseService.supabase
+        .from('campaign_batches')
+        .select('*')
+        .eq('campaign_id', campaignId)
+        .order('batch_number', { ascending: true });
+
+      if (!existingBatches || existingBatches.length === 0) {
+        const batchSize = campaignBatchSize;
+        const firstDelay = campaign.first_batch_delay_hours || 2;
+        const subsequentDelay = campaign.subsequent_batch_delay_hours || 1;
+        const totalBatches = Math.ceil(contacts.length / batchSize);
+        const nowTs = Date.now();
+
+        await supabaseService.supabase.from('campaign_batches').delete().eq('campaign_id', campaignId);
+
+        const batchRecords = [];
+        for (let bn = 1; bn <= totalBatches; bn++) {
+          const si = (bn - 1) * batchSize;
+          const ei = Math.min(si + batchSize, contacts.length);
+          let scheduledAt;
+          if (bn === 1) {
+            scheduledAt = new Date(nowTs);
+          } else if (bn === 2) {
+            scheduledAt = new Date(nowTs + firstDelay * 3600_000);
+          } else {
+            scheduledAt = new Date(nowTs + firstDelay * 3600_000 + (bn - 2) * subsequentDelay * 3600_000);
+          }
+          batchRecords.push({
+            campaign_id: campaignId,
+            batch_number: bn,
+            batch_size: ei - si,
+            start_index: si,
+            end_index: ei - 1,
+            recipient_count: ei - si,
+            status: bn === 1 ? 'processing' : 'pending',
+            scheduled_at: scheduledAt.toISOString(),
+            next_batch_at: bn < totalBatches
+              ? new Date(scheduledAt.getTime() + (bn === 1 ? firstDelay : subsequentDelay) * 3600_000).toISOString()
+              : null,
+            sent_count: 0,
+            failed_count: 0,
+          });
+        }
+        await supabaseService.supabase.from('campaign_batches').insert(batchRecords);
+        console.log(`[Worker] Created ${totalBatches} batch record(s) for campaign ${campaignId}`);
+
+        const { data: refetched } = await supabaseService.supabase
+          .from('campaign_batches')
+          .select('*')
+          .eq('campaign_id', campaignId)
+          .order('batch_number', { ascending: true });
+        const batches = refetched || batchRecords;
+        const nowIso = new Date().toISOString();
+        batchRecordForThisRun = batches.find((b) => b.status === 'pending' && b.scheduled_at <= nowIso)
+          || batches.find((b) => b.status === 'pending');
+      } else {
+        const nowIso = new Date().toISOString();
+        batchRecordForThisRun = existingBatches.find((b) => b.status === 'pending' && b.scheduled_at <= nowIso)
+          || existingBatches.find((b) => b.status === 'pending');
+      }
+
+      if (!batchRecordForThisRun) {
+        console.log(`[Worker] Campaign ${campaignId} is batched but no batch is due — skipping this tick.`);
+        await finalizeCampaignStatus(campaignId, { status: 'scheduled', recipient_count: contacts.length });
+        return { sent: 0, failed: 0, total: 0 };
+      }
+
+      batchContacts = contacts.slice(batchRecordForThisRun.start_index, batchRecordForThisRun.end_index + 1);
+      console.log(`[Worker] Batch ${batchRecordForThisRun.batch_number}: ${batchContacts.length} recipient(s)`);
+
+      await supabaseService.supabase
+        .from('campaign_batches')
+        .update({ status: 'processing', started_at: new Date().toISOString(), updated_at: new Date().toISOString() })
+        .eq('campaign_id', campaignId)
+        .eq('batch_number', batchRecordForThisRun.batch_number);
+    }
+
     // Step 4: Create email_logs for contacts not yet queued.
     console.log(`[Worker] STEP 4: Creating email_logs entries...`);
     const existingLogs = await emailLogService.getLogsByCampaign(campaignId);
     const alreadyQueued = new Set(existingLogs.map((l) => l.contact_id));
-    const newContacts = contacts.filter((c) => !alreadyQueued.has(c.id));
+    const newContacts = batchContacts.filter((c) => !alreadyQueued.has(c.id));
     console.log(`[Worker] STEP 4: ${existingLogs.length} existing logs, ${newContacts.length} new contacts to queue`);
 
     if (newContacts.length > 0) {
@@ -494,7 +581,7 @@ async function processCampaign(campaignId) {
     let totalFailed = 0;
 
     while (true) {
-      const pending = await emailLogService.getPendingEmailLogs(campaignId, BATCH_SIZE);
+      const pending = await emailLogService.getPendingEmailLogs(campaignId, campaignBatchSize);
       if (pending.length === 0) {
         console.log(`[Worker] STEP 5: No more pending emails`);
         break;
@@ -512,7 +599,7 @@ async function processCampaign(campaignId) {
         }
         const emailNumber = totalSent + totalFailed + 1;
         try {
-          const result = await sendOneEmail(log, campaign, contactMap, emailNumber, contacts.length);
+          const result = await sendOneEmail(log, campaign, contactMap, emailNumber, batchContacts.length);
           await emailLogService.updateEmailLog(log.id, {
             status: 'sent',
             sent_at: new Date().toISOString(),
@@ -560,10 +647,63 @@ async function processCampaign(campaignId) {
       }
 
       // Wait between batches (skip delay on the final batch).
-      if (pending.length === BATCH_SIZE) {
-        console.log(`[Worker] STEP 5: Waiting ${BATCH_DELAY_MS}ms before next batch...`);
-        await new Promise((resolve) => setTimeout(resolve, BATCH_DELAY_MS));
+      if (pending.length === campaignBatchSize) {
+        console.log(`[Worker] STEP 5: Waiting ${campaignBatchDelayMs}ms before next batch...`);
+        await new Promise((resolve) => setTimeout(resolve, campaignBatchDelayMs));
       }
+    }
+
+    // ─── Batch finalization ──────────────────────────────────────────────
+    if (campaign.send_in_batches && batchRecordForThisRun) {
+      const batchContactIds = new Set(batchContacts.map((c) => c.id));
+      const { data: batchLogs } = await supabaseService.supabase
+        .from('email_logs')
+        .select('status')
+        .eq('campaign_id', campaignId)
+        .in('contact_id', Array.from(batchContactIds));
+      const batchDelivered = (batchLogs || []).filter((l) => l.status === 'sent').length;
+      const batchFailed    = (batchLogs || []).filter((l) => l.status === 'failed').length;
+      const batchPending   = (batchLogs || []).filter((l) => l.status === 'pending' || l.status === 'sending').length;
+
+      await supabaseService.supabase
+        .from('campaign_batches')
+        .update({
+          status: batchPending > 0 ? 'processing' : 'completed',
+          sent_count: batchDelivered,
+          failed_count: batchFailed,
+          completed_at: batchPending === 0 ? new Date().toISOString() : null,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('campaign_id', campaignId)
+        .eq('batch_number', batchRecordForThisRun.batch_number);
+
+      console.log(`[Worker] Batch ${batchRecordForThisRun.batch_number} finalized: sent=${batchDelivered} failed=${batchFailed} pending=${batchPending}`);
+
+      try { await emailLogService.syncCampaignAnalytics(campaignId); } catch { /* non-fatal */ }
+
+      const { data: allBatches } = await supabaseService.supabase
+        .from('campaign_batches')
+        .select('batch_number, status, sent_count')
+        .eq('campaign_id', campaignId)
+        .order('batch_number', { ascending: true });
+
+      const remainingPending = (allBatches || []).filter((b) => b.status === 'pending' || b.status === 'processing');
+
+      if (remainingPending.length > 0) {
+        await finalizeCampaignStatus(campaignId, { status: 'scheduled', recipient_count: contacts.length });
+        console.log(`[Worker] Campaign ${campaignId} still has batch(es) pending — returned to "scheduled".`);
+      } else {
+        const totalDelivered = (allBatches || []).reduce((s, b) => s + (b.sent_count || 0), 0);
+        if (totalDelivered > 0) {
+          await finalizeCampaignStatus(campaignId, { status: 'sent', sent_at: new Date().toISOString(), recipient_count: contacts.length });
+          console.log(`[Worker] Campaign ${campaignId} all batches complete — marked "sent" (${totalDelivered} delivered).`);
+        } else {
+          await finalizeCampaignStatus(campaignId, { status: 'failed', recipient_count: contacts.length });
+          console.error(`[Worker] Campaign ${campaignId} all batches complete — 0 delivered, marked "failed".`);
+        }
+      }
+
+      return { sent: totalSent, failed: totalFailed, total: contacts.length };
     }
 
     // Step 6: Finalize campaign.

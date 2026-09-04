@@ -214,6 +214,11 @@ interface CampaignPayload {
   }>;
   /** Explicitly selected contact IDs from drag-and-drop (takes precedence over audience_segment) */
   selected_contact_ids?: string[];
+  /** Batch sending configuration (Send Now with "Send in batches" ON). */
+  send_in_batches?: boolean;
+  batch_size?: number;
+  first_batch_delay_hours?: number;
+  subsequent_batch_delay_hours?: number;
 }
 
 function buildCampaignRecord(data: CampaignPayload, status: string) {
@@ -227,7 +232,7 @@ function buildCampaignRecord(data: CampaignPayload, status: string) {
   if (!data.html_content || !String(data.html_content).trim()) missing.push('html_content');
   if (missing.length > 0) throw new Error(`Missing required fields: ${missing.join(', ')}`);
 
-  return {
+  const record: Record<string, unknown> = {
     id: data.id ? String(data.id) : null,
     campaign_name: String(data.campaign_name).trim(),
     subject_line: String(subjectLine).trim(),
@@ -242,11 +247,35 @@ function buildCampaignRecord(data: CampaignPayload, status: string) {
     schedule_time: data.schedule_time ? String(data.schedule_time).trim() : null,
     status,
   };
+
+  // Persist batch-sending configuration (send_in_batches / batch_size /
+  // first_batch_delay_hours / subsequent_batch_delay_hours) so the scheduler's
+  // isBatchedCampaignDue can pace subsequent batches correctly. The runner reads
+  // these columns straight off the campaign row — if they are not saved here a
+  // batched Send Now would drop all recipients in the first invocation.
+  if (data.send_in_batches) {
+    record.send_in_batches = true;
+    record.batch_size = Number(data.batch_size) > 0 ? Number(data.batch_size) : 30;
+    record.first_batch_delay_hours = Number.isFinite(Number(data.first_batch_delay_hours))
+      ? Number(data.first_batch_delay_hours)
+      : 2;
+    record.subsequent_batch_delay_hours = Number.isFinite(Number(data.subsequent_batch_delay_hours))
+      ? Number(data.subsequent_batch_delay_hours)
+      : 1;
+  } else {
+    // A non-batched Send Now must always clear any previous batch state, so a
+    // campaign that was batched then re-sent without batches never re-fires.
+    record.send_in_batches = false;
+    record.current_batch_number = 0;
+    record.next_batch_at = null;
+  }
+
+  return record;
 }
 
 async function saveCampaignRecord(record: Record<string, unknown>): Promise<any> {
   const { id, ...fields } = record;
-  const base = { ...fields, updated_at: new Date().toISOString() };
+  const base: Record<string, unknown> = { ...fields, updated_at: new Date().toISOString() };
 
   // Omit template_id until the migration adding the column has been applied.
   if (!(await campaignsHaveTemplateId())) {
@@ -456,14 +485,31 @@ async function getLogsByCampaign(campaignId: string): Promise<any[]> {
 }
 
 /** Atomically claim the pending email_logs for a campaign (pending → sending). */
-async function claimPendingLogs(campaignId: string): Promise<any[]> {
+async function claimPendingLogs(campaignId: string, limit?: number): Promise<any[]> {
   const nowIso = new Date().toISOString();
+
+  // Step 1 — deterministically select the IDs to claim (SELECT supports limit,
+  // needed for batch-paced sends that claim exactly batchSize recipients).
+  let select = supabase
+    .from('email_logs')
+    .select('id')
+    .eq('campaign_id', campaignId)
+    .eq('status', 'pending')
+    .or(`next_retry_at.is.null,next_retry_at.lte.${nowIso}`);
+  if (limit && limit > 0) select = select.limit(limit);
+  const { data: pending, error: selErr } = await select;
+  if (selErr) throw new Error(`Failed to fetch pending logs: ${selErr.message}`);
+  if (!pending || pending.length === 0) return [];
+
+  const ids = (pending as any[]).map((p) => p.id);
+
+  // Step 2 — claim exactly those IDs (status='pending' re-check keeps it atomic:
+  // a row already claimed by a concurrent invocation is left alone).
   const { data, error } = await supabase
     .from('email_logs')
     .update({ status: 'sending', last_attempt_at: nowIso })
-    .eq('campaign_id', campaignId)
+    .in('id', ids)
     .eq('status', 'pending')
-    .or(`next_retry_at.is.null,next_retry_at.lte.${nowIso}`)
     .select('*');
   if (error) throw new Error(`Failed to claim pending logs: ${error.message}`);
   return data || [];
@@ -1118,6 +1164,107 @@ async function sendOneEmail(
   }
 }
 
+// ─── Send first batch of a batched campaign, then hand off ────────────────
+/**
+ * Deliver ONLY the first `batchSize` recipients of a batched Send Now, then
+ * transition the campaign to "scheduled" with current_batch_number=1 and
+ * next_batch_at = now + first_batch_delay_hours. The scheduled-campaign-runner
+ * claims it via isBatchedCampaignDue at next_batch_at and sends exactly
+ * batch_size recipients per tick until every recipient is drained — so a
+ * "Batch Size = 1, delay = 5 min" campaign sends ONE recipient now, waits 5
+ * minutes, then sends the next, and so on. All recipients were already queued
+ * as email_logs above (the runner never re-creates them), so none is lost and
+ * none is double-sent.
+ */
+async function sendFirstBatchAndHandOff(
+  campaignId: string,
+  campaign: any,
+  contacts: any[],
+  contactMap: Map<string, any>,
+  mimeAttachments: MimeAttachment[],
+  batchSize: number
+): Promise<{ sent: number; failed: number; total: number; handedOff: boolean; status: string }> {
+  const claimTimeIso = new Date().toISOString();
+  const firstDelayHours = Number(campaign.first_batch_delay_hours);
+  const firstDelayMs = Number.isFinite(firstDelayHours) ? Math.max(0, firstDelayHours) * 60 * 60 * 1000 : 2 * 60 * 60 * 1000;
+  const totalBatches = Math.ceil(contacts.length / batchSize);
+
+  log(
+    `Campaign ${campaignId} is batched — sending ONLY batch 1 of ${totalBatches} ` +
+    `(${batchSize} recipient(s)); hand-off to scheduled-campaign-runner for the rest.`
+  );
+
+  const start = Date.now();
+  let sent = 0;
+  let failed = 0;
+
+  // Claim + deliver exactly batchSize recipients this invocation.
+  const pending = await claimPendingLogs(campaignId, batchSize);
+  const total = contacts.length;
+  for (let i = 0; i < pending.length; i++) {
+    if (Date.now() - start > TIME_BUDGET_MS) break;
+    const logRow = pending[i];
+    try {
+      if (EMAIL_DELAY_MS > 0 && i > 0) {
+        await new Promise((r) => setTimeout(r, EMAIL_DELAY_MS));
+      }
+      await sendOneEmail(logRow, campaign, contactMap, sent + failed + 1, total, mimeAttachments);
+      await updateEmailLog(logRow.id, { status: 'sent', sent_at: new Date().toISOString() });
+      sent++;
+      log(`Campaign ${campaignId} batch 1 sent → ${logRow.email}`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      const retryCount = (logRow.retry_count || 0) + 1;
+      if (retryCount > MAX_RETRIES) {
+        await updateEmailLog(logRow.id, {
+          status: 'failed',
+          error_message: `[SEND_FAILED] ${message}`,
+          retry_count: retryCount,
+          last_attempt_at: new Date().toISOString(),
+        });
+        failed++;
+        logErr(`FAILED ${logRow.email} (permanent): ${message}`);
+      } else {
+        const delaySec = RETRY_DELAYS[retryCount - 1];
+        await updateEmailLog(logRow.id, {
+          status: 'pending',
+          retry_count: retryCount,
+          last_attempt_at: new Date().toISOString(),
+          next_retry_at: new Date(Date.now() + delaySec * 1000).toISOString(),
+          error_message: `[SEND_FAILED] ${message}`,
+        });
+        logErr(`Retry ${retryCount} scheduled for ${logRow.email} in ${delaySec}s: ${message}`);
+      }
+    }
+  }
+
+  // Release anything we claimed but did not finish (budget) so it stays eligible.
+  await releaseClaimedLogs(campaignId, claimTimeIso);
+
+  // Hand off: keep the campaign "scheduled", record batch 1 as done (counter=1),
+  // and set next_batch_at so the runner fires batch 2 after first_batch_delay.
+  const nextAt = new Date(Date.now() + firstDelayMs).toISOString();
+  await finalizeCampaign(campaignId, {
+    status: 'scheduled',
+    current_batch_number: 1,
+    next_batch_at: nextAt,
+    recipient_count: contacts.length,
+  });
+
+  log(
+    `Campaign ${campaignId} batch 1 complete (sent=${sent} failed=${failed}); ` +
+    `next batch at ${nextAt} (${Number(firstDelayHours) || 0} hour(s) wait).`
+  );
+
+  try {
+    await syncCampaignAnalytics(campaignId);
+  } catch (analyticsError) {
+    logErr(`Analytics sync failed (non-fatal): ${(analyticsError as Error).message}`);
+  }
+
+  return { sent, failed, total: contacts.length, handedOff: true, status: 'scheduled' };
+}
+
 // ─── Campaign processing (mirrors the scheduler's processCampaign) ─────────
 async function processCampaign(
   campaignId: string,
@@ -1167,6 +1314,32 @@ async function processCampaign(
   if (newContacts.length > 0) await createEmailLogs(campaignId, newContacts);
 
   const contactMap = new Map(contacts.map((c: any) => [c.id, c]));
+
+  // ─── Batch-paced Send Now ────────────────────────────────────────────────
+  // If the campaign is configured to send in batches and resolves to MORE than
+  // one batch, only the FIRST batch is delivered here; the campaign is then
+  // handed off to the scheduled-campaign-runner with current_batch_number=1 and
+  // next_batch_at = now + first_batch_delay_hours. The runner's
+  // isBatchedCampaignDue picks it up at next_batch_at and sends exactly
+  // batch_size recipients per tick until every recipient is drained. This is
+  // what makes a "Batch Size = 1, delay = 5 min" campaign send exactly ONE
+  // recipient now and wait before the next.
+  const sendInBatches = campaign.send_in_batches === true;
+  const configuredBatchSize = Number(campaign.batch_size);
+  const isBatchSend =
+    sendInBatches && Number.isInteger(configuredBatchSize) && configuredBatchSize > 0 &&
+    Math.ceil(contacts.length / configuredBatchSize) > 1;
+
+  if (isBatchSend) {
+    return await sendFirstBatchAndHandOff(
+      campaignId,
+      campaign,
+      contacts,
+      contactMap,
+      mimeAttachments,
+      configuredBatchSize
+    );
+  }
 
   // Drain pending logs within the invocation time budget.
   const start = Date.now();
