@@ -16,6 +16,7 @@ import { buildScheduleRow, buildScheduleText } from './campaignService'
 import type {
   CampaignScheduleInput,
   CreateFollowupConfigPayload,
+  FollowupAudience,
   FollowupConfig,
   FollowupConfigApiResult,
   FollowupConfigPayload,
@@ -72,7 +73,8 @@ async function getFollowupConfig(campaignId: string): Promise<FollowupConfig | n
 
 async function saveFollowupConfig(
   campaignId: string,
-  config: FollowupConfigPayload
+  config: FollowupConfigPayload,
+  audience: FollowupAudience = 'opened'
 ): Promise<FollowupConfig | null> {
   if (!campaignId) throw new Error('campaign_id is required')
 
@@ -98,6 +100,7 @@ async function saveFollowupConfig(
   }
 
   const mode = config.followup_mode === 'automatic' ? 'automatic' : 'manual'
+  const triggerType = audience === 'not_opened' ? 'not_opened' : 'opened'
 
   // Replace any existing row for this campaign (mirrors the backend).
   const { error: deleteError } = await supabase
@@ -113,7 +116,7 @@ async function saveFollowupConfig(
     .insert({
       campaign_id: campaignId,
       followup_campaign_id: followupCampaignId,
-      trigger_type: TRIGGER_TYPE,
+      trigger_type: triggerType,
       followup_mode: mode,
       is_active: true,
     })
@@ -170,19 +173,20 @@ async function listEligibleOriginalCampaigns(): Promise<Record<string, any>[]> {
   return (campaigns || []).filter((c) => c && c.id && !followupIds.has(String(c.id)))
 }
 
-async function computeAllOpenedUnion(): Promise<number> {
+async function computeAllAudienceUnion(audience: 'opened' | 'not_opened'): Promise<number> {
   try {
     const eligible = await listEligibleOriginalCampaigns()
     if (eligible.length === 0) return 0
     const ids = eligible.map((c) => String(c.id))
     const { data: logs, error } = await supabase
       .from('email_logs')
-      .select('contact_id, email')
+      .select('contact_id, email, opened')
       .in('campaign_id', ids)
-      .eq('opened', true)
     if (error) return 0
+    const isOpened = audience === 'opened'
     const seen = new Set<string>()
     for (const log of logs || []) {
+      if ((log.opened === true) !== isOpened) continue
       const key = String(log.contact_id) || normalizeEmail(log.email)
       if (key) seen.add(key)
     }
@@ -190,6 +194,14 @@ async function computeAllOpenedUnion(): Promise<number> {
   } catch {
     return 0
   }
+}
+
+async function computeAllOpenedUnion(): Promise<number> {
+  return computeAllAudienceUnion('opened')
+}
+
+async function computeAllNotOpenedUnion(): Promise<number> {
+  return computeAllAudienceUnion('not_opened')
 }
 
 function engagementFields(
@@ -304,20 +316,23 @@ async function fetchFollowupConfigs(): Promise<FollowupConfigRow[]> {
     ]),
   ]
   const openedByOriginal = new Map<string, number>()
+  const notOpenedByOriginal = new Map<string, number>()
   try {
     if (originalIds.length > 0) {
       const { data: openedLogs, error: openedError } = await supabase
         .from('email_logs')
-        .select('campaign_id, contact_id, email')
+        .select('campaign_id, contact_id, email, opened')
         .in('campaign_id', originalIds)
-        .eq('opened', true)
       if (!openedError) {
-        const sets = new Map(originalIds.map((id) => [String(id), new Set<string>()]))
+        const openedSets = new Map(originalIds.map((id) => [String(id), new Set<string>()]))
+        const notOpenedSets = new Map(originalIds.map((id) => [String(id), new Set<string>()]))
         for (const log of openedLogs || []) {
-          const set = sets.get(String(log.campaign_id))
-          if (set) set.add(String(log.contact_id) || normalizeEmail(log.email))
+          const key = String(log.contact_id) || normalizeEmail(log.email)
+          const set = (log.opened === true ? openedSets : notOpenedSets).get(String(log.campaign_id))
+          if (set && key) set.add(key)
         }
-        for (const [id, set] of sets) openedByOriginal.set(id, set.size)
+        for (const [id, set] of openedSets) openedByOriginal.set(id, set.size)
+        for (const [id, set] of notOpenedSets) notOpenedByOriginal.set(id, set.size)
       }
     }
   } catch {
@@ -346,6 +361,7 @@ async function fetchFollowupConfigs(): Promise<FollowupConfigRow[]> {
   }
 
   const allOpenedUnion = await computeAllOpenedUnion()
+  const allNotOpenedUnion = await computeAllNotOpenedUnion()
 
   // Recurring schedule info per FOLLOW-UP campaign (campaign_schedules keyed by
   // the follow-up campaign id). Only rows that are actually scheduled
@@ -376,7 +392,7 @@ async function fetchFollowupConfigs(): Promise<FollowupConfigRow[]> {
     grouped.get(fupId)!.push(row)
   }
 
-  const ctx = { nameById, createdById, openedByOriginal, sentByPair, sentByFollowup, originalByFollowup, followupMetrics, allOpenedUnion, schedulesByCampaign, batchById }
+  const ctx = { nameById, createdById, openedByOriginal, notOpenedByOriginal, sentByPair, sentByFollowup, originalByFollowup, followupMetrics, allOpenedUnion, allNotOpenedUnion, schedulesByCampaign, batchById }
 
   const result: FollowupConfigRow[] = []
   const handledIds = new Set<string>()
@@ -417,6 +433,8 @@ function buildIndividualFollowupRow(row: Record<string, any>, ctx: Record<string
   const followupId = String(row.followup_campaign_id)
   const pairKey = `${String(row.campaign_id)}|${followupId}`
   const opened = ctx.openedByOriginal.get(String(row.campaign_id)) || 0
+  const notOpened = ctx.notOpenedByOriginal.get(String(row.campaign_id)) || 0
+  const audience = row.trigger_type === 'not_opened' ? 'not_opened' : 'opened'
   const sent = ctx.sentByPair.get(pairKey) || 0
   return {
     ...row,
@@ -425,9 +443,11 @@ function buildIndividualFollowupRow(row: Record<string, any>, ctx: Record<string
     original_campaign_name: ctx.nameById.get(String(row.campaign_id)) || '—',
     followup_campaign_name: ctx.nameById.get(followupId) || '—',
     opened_count: opened,
+    not_opened_count: notOpened,
+    audience,
     sent_count: sent,
     ...engagementFields(followupId, ctx.followupMetrics),
-    remaining_eligible: Math.max(0, opened - sent),
+    remaining_eligible: Math.max(0, (audience === 'not_opened' ? notOpened : opened) - sent),
     is_all: false,
   } as FollowupConfigRow
 }
@@ -475,7 +495,8 @@ function buildAllFollowupRow(
   sampleRow: Record<string, any> | null,
   ctx: Record<string, any>
 ): FollowupConfigRow {
-  const opened = ctx.allOpenedUnion
+  const audience = sampleRow && sampleRow.trigger_type === 'not_opened' ? 'not_opened' : 'opened'
+  const eligibleCount = audience === 'not_opened' ? ctx.allNotOpenedUnion : ctx.allOpenedUnion
   const sent = (ctx.sentByFollowup.get(String(followupId)) || new Set<string>()).size
   return {
     id: followupId,
@@ -489,10 +510,12 @@ function buildAllFollowupRow(
     created_at: ctx.createdById.get(String(followupId)) || (sampleRow && sampleRow.created_at) || null,
     original_campaign_name: 'All',
     followup_campaign_name: ctx.nameById.get(String(followupId)) || '—',
-    opened_count: opened,
+    opened_count: ctx.allOpenedUnion,
+    not_opened_count: ctx.allNotOpenedUnion,
+    audience,
     sent_count: sent,
     ...engagementFields(String(followupId), ctx.followupMetrics),
-    remaining_eligible: Math.max(0, opened - sent),
+    remaining_eligible: Math.max(0, eligibleCount - sent),
     is_all: true,
   } as FollowupConfigRow
 }
@@ -506,6 +529,7 @@ function buildAllFollowupRow(
 function buildOrphanFollowupRow(followupId: string, ctx: Record<string, any>): FollowupConfigRow {
   const originalId = ctx.originalByFollowup.get(String(followupId)) || null
   const opened = originalId ? (ctx.openedByOriginal.get(originalId) || 0) : 0
+  const notOpened = originalId ? (ctx.notOpenedByOriginal.get(originalId) || 0) : 0
   const sent = (ctx.sentByFollowup.get(String(followupId)) || new Set<string>()).size
   return {
     id: followupId,
@@ -520,6 +544,8 @@ function buildOrphanFollowupRow(followupId: string, ctx: Record<string, any>): F
     original_campaign_name: originalId ? (ctx.nameById.get(originalId) || '—') : '—',
     followup_campaign_name: ctx.nameById.get(String(followupId)) || '—',
     opened_count: opened,
+    not_opened_count: notOpened,
+    audience: 'opened',
     sent_count: sent,
     ...engagementFields(String(followupId), ctx.followupMetrics),
     remaining_eligible: Math.max(0, opened - sent),
@@ -763,11 +789,15 @@ async function createFollowupConfig(
     created = true
   }
 
-  const config = await saveFollowupConfig(originalCampaignId, {
-    is_active: isActive,
-    followup_mode: mode,
-    followup_campaign_id: followupCampaignId,
-  })
+  const config = await saveFollowupConfig(
+    originalCampaignId,
+    {
+      is_active: isActive,
+      followup_mode: mode,
+      followup_campaign_id: followupCampaignId,
+    },
+    payload.audience === 'not_opened' ? 'not_opened' : 'opened'
+  )
 
   await persistFollowupSchedule(followupCampaignId, payload.schedule)
 
@@ -827,11 +857,15 @@ async function createAllCampaignsFollowup(
       if (String(campaign.id) === String(followupCampaignId)) continue
       const existing = await getFollowupConfig(String(campaign.id))
       if (existing) continue
-      await saveFollowupConfig(String(campaign.id), {
-        is_active: true,
-        followup_mode: mode,
-        followup_campaign_id: followupCampaignId,
-      })
+      await saveFollowupConfig(
+        String(campaign.id),
+        {
+          is_active: true,
+          followup_mode: mode,
+          followup_campaign_id: followupCampaignId,
+        },
+        payload.audience === 'not_opened' ? 'not_opened' : 'opened'
+      )
       linkedCampaignCount += 1
     }
   }
@@ -1091,30 +1125,33 @@ async function resolveContactNames(): Promise<Map<string, Record<string, any>>> 
 
 async function fetchOpenedContacts(
   campaignId: string,
-  followupCampaignId?: string | null
+  followupCampaignId?: string | null,
+  audience: FollowupAudience = 'opened'
 ): Promise<OpenedContact[]> {
   if (!campaignId) throw new Error('campaign_id is required')
 
   // The synthesized "All" row anchors its send panel to the union of openers
-  // across every eligible original campaign.
+  // or non-openers across every eligible original campaign.
   if (String(campaignId) === 'all') {
-    return fetchOpenedContactsForAll(followupCampaignId)
+    return fetchOpenedContactsForAll(followupCampaignId, audience)
   }
 
-  const { data: logs, error } = await supabase
+  const openedFilter = audience === 'not_opened'
+  let query = supabase
     .from('email_logs')
     .select('contact_id, email, opened_at, campaign_id')
     .eq('campaign_id', campaignId)
-    .eq('opened', true)
     .order('opened_at', { ascending: false })
-  if (error) throw new Error(`Failed to fetch opened contacts: ${error.message}`)
+  query = openedFilter ? query.neq('opened', true) : query.eq('opened', true)
+  const { data: logs, error } = await query
+  if (error) throw new Error(`Failed to fetch ${audience} contacts: ${error.message}`)
 
   let rows = (logs as Record<string, any>[]) || []
   if (rows.length === 0) return []
 
   // Exclude contacts who have already received this follow-up. The manual
-  // panel says "Only contacts who opened and have NOT received this
-  // follow-up are shown", so already-sent contacts must not appear.
+  // panel only shows eligible contacts who have NOT received this follow-up,
+  // so already-sent contacts must not appear.
   if (followupCampaignId) {
     const fupId = String(followupCampaignId)
     const { data: sentLogs, error: sentError } = await supabase
@@ -1148,18 +1185,21 @@ async function fetchOpenedContacts(
 }
 
 async function fetchOpenedContactsForAll(
-  followupCampaignId?: string | null
+  followupCampaignId?: string | null,
+  audience: FollowupAudience = 'opened'
 ): Promise<OpenedContact[]> {
   const eligible = await listEligibleOriginalCampaigns()
   if (eligible.length === 0) return []
 
   const ids = eligible.map((c) => String(c.id))
-  const { data: logs, error } = await supabase
+  const openedFilter = audience === 'not_opened'
+  let query = supabase
     .from('email_logs')
     .select('contact_id, email, opened_at, campaign_id')
     .in('campaign_id', ids)
-    .eq('opened', true)
-  if (error) throw new Error(`Failed to fetch opened contacts: ${error.message}`)
+  query = openedFilter ? query.neq('opened', true) : query.eq('opened', true)
+  const { data: logs, error } = await query
+  if (error) throw new Error(`Failed to fetch ${audience} contacts: ${error.message}`)
 
   const byKey = new Map<string, Record<string, any>>()
   for (const log of logs || []) {
@@ -1254,6 +1294,35 @@ async function fetchPendingFollowups(): Promise<PendingFollowup[]> {
   })
 }
 
+// ─── Audience counts (Composer: real opened / not-opened recipient counts) ──
+
+export interface AudienceCounts {
+  opened: number
+  not_opened: number
+}
+
+/**
+ * Real distinct-recipient counts for an ORIGINAL campaign from its email_logs:
+ * `opened` = contacts who opened it, `not_opened` = contacts who did NOT open
+ * it. Mirrors the opened/not-opened recipient selection used everywhere else.
+ */
+async function fetchAudienceCounts(campaignId: string): Promise<AudienceCounts> {
+  if (!campaignId || String(campaignId) === 'all') return { opened: 0, not_opened: 0 }
+  const { data: logs, error } = await supabase
+    .from('email_logs')
+    .select('contact_id, email, opened')
+    .eq('campaign_id', campaignId)
+  if (error) return { opened: 0, not_opened: 0 }
+  const opened = new Set<string>()
+  const notOpened = new Set<string>()
+  for (const log of logs || []) {
+    const key = String(log.contact_id) || normalizeEmail(log.email)
+    if (!key) continue
+    ;(log.opened === true ? opened : notOpened).add(key)
+  }
+  return { opened: opened.size, not_opened: notOpened.size }
+}
+
 // ─── Sending (via the send-followup Edge Function) ─────────────────────────
 
 async function sendSelectedFollowups(
@@ -1299,6 +1368,7 @@ export {
   deleteFollowupConfig,
   fetchOpenedContacts,
   fetchOpenedContactsForAll,
+  fetchAudienceCounts,
   sendSelectedFollowups,
   fetchPendingFollowups,
   sendPendingFollowup,

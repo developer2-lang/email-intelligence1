@@ -104,6 +104,11 @@ export interface EmailTemplate {
 export type ScheduleType = 'one_time' | 'weekly' | 'monthly'
 export type MonthlyScheduleType = 'day_of_month' | 'weekday'
 export type FollowupMode = 'manual' | 'automatic'
+/**
+ * Who the follow-up targets from the ORIGINAL campaign: recipients who OPENED
+ * it, or recipients who have NOT opened it.
+ */
+export type FollowupAudience = 'opened' | 'not_opened'
 
 /**
  * A file attached to a campaign. The BINARY lives in Supabase Storage
@@ -163,6 +168,10 @@ export interface FollowupConfigRow extends FollowupConfig {
   followup_campaign_name: string
   /** Eligible recipients = original campaign's openers (union for 'all'). */
   opened_count: number
+  /** Eligible recipients = original campaign's non-openers (union for 'all'). */
+  not_opened_count: number
+  /** Audience targeted from the original campaign: 'opened' | 'not_opened'. */
+  audience: FollowupAudience
   /** Follow-ups already sent for this (original, follow-up) pair / union. */
   sent_count: number
   /** Follow-up campaign's own delivered emails (status=sent in its email_logs). */
@@ -255,6 +264,11 @@ export interface CreateFollowupConfigPayload {
   template_name?: string
   followup_mode: FollowupMode
   is_active: boolean
+  /**
+   * Audience from the ORIGINAL campaign to target: 'opened' (recipients who
+   * opened it — default) or 'not_opened' (recipients who have NOT opened it).
+   */
+  audience?: FollowupAudience
   /**
    * Optional recurring schedule. When set, the follow-up is delivered by the
    * campaign scheduler to openers only at the scheduled times (one-time /

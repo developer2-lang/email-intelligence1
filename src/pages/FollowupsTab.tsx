@@ -26,6 +26,7 @@ import {
   deleteFollowupConfig,
   fetchOpenedContacts,
   fetchOpenedContactsForAll,
+  fetchAudienceCounts,
   sendSelectedFollowups,
   fetchPendingFollowups,
   sendPendingFollowup,
@@ -35,6 +36,7 @@ import type {
   CampaignAttachment,
   CampaignScheduleInput,
   EmailTemplate,
+  FollowupAudience,
   FollowupConfigRow,
   FollowupMode,
   OpenedContact,
@@ -218,6 +220,8 @@ export default function FollowupsTab({
   const [templateLoadError, setTemplateLoadError] = useState<string | null>(null)
 
   const [originalId, setOriginalId] = useState('')
+  const [followupAudience, setFollowupAudience] = useState<FollowupAudience>('opened')
+  const [audienceCounts, setAudienceCounts] = useState<{ opened: number; not_opened: number } | null>(null)
   const [followupMode, setFollowupMode] = useState<FollowupMode>('manual')
   const [reuseExisting, setReuseExisting] = useState(false)
   const [existingFollowupId, setExistingFollowupId] = useState('')
@@ -340,6 +344,23 @@ const DELAY_OPTIONS = [
     [campaigns, originalId],
   )
 
+  // Real opened / not-opened recipient counts for the selected original
+  // campaign (used by the Follow-up audience selector + batching estimate).
+  useEffect(() => {
+    let cancelled = false
+    if (!originalId || originalId === 'all') {
+      if (originalId === 'all') void loadAllOpened(followupAudience)
+      setAudienceCounts(null)
+      return
+    }
+    void fetchAudienceCounts(originalId).then((counts) => {
+      if (!cancelled) setAudienceCounts(counts)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [originalId, followupAudience, loadAllOpened])
+
   const loadCampaigns = useCallback(async () => {
     const { data, error } = await fetchCampaigns()
     if (error) {
@@ -392,15 +413,15 @@ const DELAY_OPTIONS = [
     setTemplatesLoading(false)
   }, [])
 
-  const loadOpenedContacts = useCallback(async (campaignId: string, followupCampaignId?: string | null) => {
+  const loadOpenedContacts = useCallback(async (campaignId: string, followupCampaignId?: string | null, audience?: FollowupAudience) => {
     setOpenedLoading(true)
     setOpenedError(null)
     try {
-      const data = await fetchOpenedContacts(campaignId, followupCampaignId)
+      const data = await fetchOpenedContacts(campaignId, followupCampaignId, audience)
       setOpenedContacts(data || [])
       setSelectedOpenedIds([])
     } catch (err) {
-      const msg = err instanceof Error ? err.message : 'Failed to load opened contacts'
+      const msg = err instanceof Error ? err.message : 'Failed to load eligible contacts'
       setOpenedError(msg)
       setOpenedContacts([])
     } finally {
@@ -408,14 +429,14 @@ const DELAY_OPTIONS = [
     }
   }, [])
 
-  const loadAllOpened = useCallback(async () => {
+  const loadAllOpened = useCallback(async (audience: FollowupAudience = 'opened') => {
     setAllOpenedLoading(true)
     setAllOpenedError(null)
     try {
-      const data = await fetchOpenedContactsForAll()
+      const data = await fetchOpenedContactsForAll(undefined, audience)
       setAllOpened(data || [])
     } catch (err) {
-      const msg = err instanceof Error ? err.message : 'Failed to load all-campaign openers'
+      const msg = err instanceof Error ? err.message : 'Failed to load all-campaign recipients'
       setAllOpenedError(msg)
       setAllOpened([])
     } finally {
@@ -451,11 +472,13 @@ const DELAY_OPTIONS = [
   const handleSelectConfig = (config: FollowupConfigRow) => {
     setActiveConfig(config)
     setSelectedOpenedIds([])
-    void loadOpenedContacts(config.campaign_id, config.followup_campaign_id)
+    void loadOpenedContacts(config.campaign_id, config.followup_campaign_id, config.audience)
   }
 
   const openComposer = () => {
     setOriginalId('')
+    setFollowupAudience('opened')
+    setAudienceCounts(null)
     setFollowupMode('manual')
     setReuseExisting(false)
     setExistingFollowupId('')
@@ -479,6 +502,8 @@ const DELAY_OPTIONS = [
 
   const openEditConfig = (config: FollowupConfigRow) => {
     setOriginalId(String(config.campaign_id))
+    setFollowupAudience(config.audience === 'not_opened' ? 'not_opened' : 'opened')
+    setAudienceCounts(null)
     setFollowupMode(config.followup_mode === 'automatic' ? 'automatic' : 'manual')
     setSelectedTemplate(null)
     setTemplateLoadingId(null)
@@ -671,7 +696,9 @@ const DELAY_OPTIONS = [
       const eligibleRemaining =
         originalId === 'all'
           ? allOpened.length
-          : Number(selectedOriginal?.opened ?? 0)
+          : followupAudience === 'not_opened'
+            ? (audienceCounts?.not_opened ?? Number(selectedOriginal?.opened ?? 0))
+            : (audienceCounts?.opened ?? Number(selectedOriginal?.opened ?? 0))
       if (!Number.isInteger(batchSize) || batchSize <= 0) {
         onToast('Batch size must be a whole number greater than 0', 'error')
         return
@@ -708,6 +735,7 @@ const DELAY_OPTIONS = [
         template_name: selectedTemplate?.name || undefined,
         followup_mode: followupMode,
         is_active: isActive,
+        audience: followupAudience,
         schedule,
         send_in_batches: sendInBatches,
         batch_size: sendInBatches ? batchSize : undefined,
@@ -736,10 +764,10 @@ const DELAY_OPTIONS = [
       onToast(
         result.original_campaign_id === 'all'
           ? result.created
-            ? 'Follow-up created for all eligible campaigns. Recipients are the unique openers across those campaigns only.'
+            ? `Follow-up created for all eligible campaigns. Recipients are the unique ${followupAudience === 'not_opened' ? 'non-openers' : 'openers'} across those campaigns only.`
             : 'Follow-up configured for all eligible campaigns.'
           : result.created
-            ? 'Follow-up created. Recipients will be the original campaign\u2019s openers only.'
+            ? `Follow-up created. Recipients will be the original campaign\u2019s ${followupAudience === 'not_opened' ? 'non-openers only.' : 'openers only.'}`
             : 'Follow-up configured.',
         'success',
       )
@@ -751,6 +779,8 @@ const DELAY_OPTIONS = [
       setBodyMode('preview')
       setExistingFollowupId('')
       setOriginalId('')
+      setFollowupAudience('opened')
+      setAudienceCounts(null)
       setFollowupMode('manual')
       setIsActive(true)
       setSelectedTemplate(null)
@@ -790,10 +820,11 @@ const DELAY_OPTIONS = [
   const handleSendSelected = async () => {
     if (!activeConfig) return
     if (selectedOpenedIds.length === 0) {
-      onToast('Select at least one opened contact', 'error')
+      onToast('Select at least one eligible contact', 'error')
       return
     }
-    if (!window.confirm(`Send the follow-up to ${selectedOpenedIds.length} selected opened contact(s)?`)) {
+    const audienceLabel = activeConfig.audience === 'not_opened' ? 'non-opened' : 'opened'
+    if (!window.confirm(`Send the follow-up to ${selectedOpenedIds.length} selected ${audienceLabel} contact(s)?`)) {
       return
     }
     setSendingSelected(true)
