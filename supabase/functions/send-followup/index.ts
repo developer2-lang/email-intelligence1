@@ -580,6 +580,17 @@ async function isScheduledFollowup(followupCampaignId: string): Promise<boolean>
   return campaign && String(campaign.status).toLowerCase() === 'scheduled';
 }
 
+async function isNotOpenedAudience(followupCampaignId: string): Promise<boolean> {
+  if (!followupCampaignId) return false;
+  const { data: config, error } = await supabase
+    .from('campaign_followups')
+    .select('trigger_type')
+    .eq('followup_campaign_id', followupCampaignId)
+    .limit(1);
+  if (error) return false;
+  return !!config && (config[0] as any)?.trigger_type === 'not_opened';
+}
+
 // ─── Attachments (mirrors send-campaign) ───────────────────────────────────
 interface MimeAttachment {
   file_name: string;
@@ -795,6 +806,7 @@ async function recordFollowupHistory(fields: {
   status: string;
   openedAt: string | null;
   sentAt: string | null;
+  triggerType?: string;
 }): Promise<void> {
   const { error } = await supabase
     .from('followup_history')
@@ -802,7 +814,7 @@ async function recordFollowupHistory(fields: {
       campaign_id: fields.campaignId,
       followup_campaign_id: fields.followupCampaignId,
       contact_id: fields.contactId,
-      trigger_type: TRIGGER_TYPE,
+      trigger_type: fields.triggerType || TRIGGER_TYPE,
       followup_mode: fields.followupMode,
       status: fields.status,
       opened_at: fields.openedAt || null,
@@ -875,7 +887,8 @@ async function finalizeFollowupCampaign(followupCampaignId: string): Promise<voi
 async function getOpenedByContact(
   campaignId: string,
   isAll: boolean,
-  contactIds: string[]
+  contactIds: string[],
+  notOpenedAudience: boolean
 ): Promise<Map<string, { email: string; opened_at: string | null; campaign_id: string | null }>> {
   const byContact = new Map<string, { email: string; opened_at: string | null; campaign_id: string | null }>();
   if (contactIds.length === 0) return byContact;
@@ -883,15 +896,20 @@ async function getOpenedByContact(
   let query = supabase
     .from('email_logs')
     .select('contact_id, email, opened_at, campaign_id')
-    .eq('opened', true)
     .in('contact_id', contactIds);
+
+  if (notOpenedAudience) {
+    query = query.neq('opened', true);
+  } else {
+    query = query.eq('opened', true);
+  }
 
   if (!isAll) {
     query = query.eq('campaign_id', campaignId);
   }
 
   const { data: openedLogs, error } = await query;
-  if (error) throw new Error(`Failed to verify opened contacts: ${error.message}`);
+  if (error) throw new Error(`Failed to verify audiences: ${error.message}`);
 
   for (const log of openedLogs || []) {
     const key = String(log.contact_id);
@@ -1017,6 +1035,11 @@ async function handleSendSelected(payload: any): Promise<any[]> {
     throw new Error('A campaign cannot be its own follow-up campaign');
   }
 
+  // The recipient audience (opened vs NOT opened) is the STORED config's
+  // trigger_type — a stale client can never send a "not opened" follow-up to
+  // openers or vice versa; the server re-derives it every time.
+  const notOpenedAudience = await isNotOpenedAudience(followupCampaignId);
+
   // A scheduled follow-up is delivered by the campaign scheduler at its
   // scheduled times — it cannot be sent on-demand via the manual panel.
   if (await isScheduledFollowup(followupCampaignId)) {
@@ -1046,7 +1069,7 @@ async function handleSendSelected(payload: any): Promise<any[]> {
     throw new Error('Select at least one opened contact');
   }
 
-  const openedByContact = await getOpenedByContact(campaignId, isAll, idsToSend);
+  const openedByContact = await getOpenedByContact(campaignId, isAll, idsToSend, notOpenedAudience);
 
   let contacts: any[] = [];
   try {
@@ -1072,7 +1095,13 @@ async function handleSendSelected(payload: any): Promise<any[]> {
     const name = contact.full_name || contact.name || '';
 
     if (!openedLog || (isAll && !openedLog.campaign_id)) {
-      results.push({ contact_id: contactId, name, email, status: 'skipped', reason: 'not_opened' });
+      results.push({
+        contact_id: contactId,
+        name,
+        email,
+        status: 'skipped',
+        reason: notOpenedAudience ? 'opened' : 'not_opened',
+      });
       continue;
     }
 
@@ -1115,6 +1144,7 @@ async function handleSendSelected(payload: any): Promise<any[]> {
         status: 'sent',
         openedAt: openedLog.opened_at || null,
         sentAt,
+        triggerType: notOpenedAudience ? 'not_opened' : undefined,
       });
       sentCount++;
       results.push({ contact_id: contactId, name, email: createdLog.email || email, status: 'sent' });

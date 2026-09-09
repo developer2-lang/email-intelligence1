@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import CircularProgress from '@mui/material/CircularProgress'
 import {
   AV_COLORS,
@@ -346,20 +346,6 @@ const DELAY_OPTIONS = [
 
   // Real opened / not-opened recipient counts for the selected original
   // campaign (used by the Follow-up audience selector + batching estimate).
-  useEffect(() => {
-    let cancelled = false
-    if (!originalId || originalId === 'all') {
-      if (originalId === 'all') void loadAllOpened(followupAudience)
-      setAudienceCounts(null)
-      return
-    }
-    void fetchAudienceCounts(originalId).then((counts) => {
-      if (!cancelled) setAudienceCounts(counts)
-    })
-    return () => {
-      cancelled = true
-    }
-  }, [originalId, followupAudience, loadAllOpened])
 
   const loadCampaigns = useCallback(async () => {
     const { data, error } = await fetchCampaigns()
@@ -443,6 +429,25 @@ const DELAY_OPTIONS = [
       setAllOpenedLoading(false)
     }
   }, [])
+
+  useEffect(() => {
+    let cancelled = false
+    if (originalId === 'all') {
+      void loadAllOpened(followupAudience)
+      setAudienceCounts(null)
+      return
+    }
+    if (!originalId) {
+      setAudienceCounts(null)
+      return
+    }
+    void fetchAudienceCounts(originalId).then((counts) => {
+      if (!cancelled) setAudienceCounts(counts)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [originalId, followupAudience, loadAllOpened])
 
   const refreshAll = useCallback(async () => {
     await Promise.all([loadConfigs(), loadPending(), loadAllOpened()])
@@ -915,7 +920,7 @@ const DELAY_OPTIONS = [
           'success',
         )
         setSelectedOpenedIds([])
-        await loadOpenedContacts(originCampaignId, followupCampaignId)
+        await loadOpenedContacts(originCampaignId, followupCampaignId, activeConfig.audience)
         await refreshAll()
         return
       }
@@ -941,7 +946,7 @@ const DELAY_OPTIONS = [
       if (failed > 0) parts.push(`${failed} failed`)
       onToast(`Follow-up processed: ${parts.join(', ') || 'no recipients'}`, 'success')
       setSelectedOpenedIds([])
-      await loadOpenedContacts(originCampaignId, followupCampaignId)
+      await loadOpenedContacts(originCampaignId, followupCampaignId, activeConfig.audience)
       await refreshAll()
     } catch (err) {
       onToast(err instanceof Error ? err.message : 'Failed to send follow-up', 'error')
@@ -1129,10 +1134,12 @@ const DELAY_OPTIONS = [
               </svg>
             </span>
             <div className="fu-banner-text">
-              Follow-up recipients are always the contacts who opened the original campaign (
-              <span style={{ fontFamily: 'var(--mono)' }}>email_logs WHERE opened = true</span>).
-              A follow-up is never sent to a segment or the full audience — if nobody opened, the
-              follow-up is not sent at all. Each recipient receives the follow-up once.
+              Follow-up recipients come from the ORIGINAL campaign only — the contacts who opened
+              it (<span style={{ fontFamily: 'var(--mono)' }}>email_logs WHERE opened = true</span>)
+              or, for "Not opened recipients" follow-ups, the contacts who received it but did not
+              open (<span style={{ fontFamily: 'var(--mono)' }}>opened != true</span>). A follow-up
+              is never sent to a segment or the full audience. Each recipient receives the
+              follow-up once.
             </div>
           </div>
 
@@ -1166,7 +1173,7 @@ const DELAY_OPTIONS = [
                     <th>Follow-up Name</th>
                     <th>Original Campaign</th>
                     <th>Type</th>
-                    <th>Openers</th>
+                    <th>Audience</th>
                     <th>Sent</th>
                     <th>Schedule</th>
                     <th>Delivered</th>
@@ -1273,8 +1280,8 @@ const DELAY_OPTIONS = [
                             <CampaignTypeChip type={followUpCampaign?.campaignType || 'Follow Up'} />
                           </td>
                           <td>
-                            <div className="fu-num">{config.opened_count}</div>
-                            <div className="fu-num-label">openers</div>
+                            <div className="fu-num">{config.audience === 'not_opened' ? config.not_opened_count : config.opened_count}</div>
+                            <div className="fu-num-label">{config.audience === 'not_opened' ? 'non-openers' : 'openers'}</div>
                           </td>
                           <td>
                             <div className="fu-num">{config.sent_count}</div>
@@ -1498,11 +1505,12 @@ const DELAY_OPTIONS = [
                       </>
                     ) : (
                       <>
-                        Only contacts who opened the original campaign are shown. Already-sent contacts are
-                        skipped.
+                        Only contacts from the original campaign who are{' '}
+                        {activeConfig.audience === 'not_opened' ? 'yet to open it' : 'openers'} are
+                        shown. Already-sent contacts are skipped.
                         {activeConfig.remaining_eligible === 0
-                          ? ' Every eligible opener has already received the follow-up.'
-                          : ` ${activeConfig.remaining_eligible} eligible opener(s) still remain.`}
+                          ? ` Every eligible ${activeConfig.audience === 'not_opened' ? 'non-opener' : 'opener'} has already received the follow-up.`
+                          : ` ${activeConfig.remaining_eligible} eligible ${activeConfig.audience === 'not_opened' ? 'non-opener(s)' : 'opener(s)'} still remain.`}
                       </>
                     )}
                   </div>
@@ -1511,7 +1519,7 @@ const DELAY_OPTIONS = [
                   type="button"
                   className="btn btn-secondary btn-sm"
                   disabled={openedLoading}
-                  onClick={() => void loadOpenedContacts(activeConfig.campaign_id, activeConfig.followup_campaign_id)}
+                  onClick={() => void loadOpenedContacts(activeConfig.campaign_id, activeConfig.followup_campaign_id, activeConfig.audience)}
                 >
                   {openedLoading ? 'Loading…' : '⟳ Refresh'}
                 </button>
@@ -1520,10 +1528,14 @@ const DELAY_OPTIONS = [
               {openedError ? (
                 <div style={{ fontSize: '12.5px', color: '#DC2626' }}>{openedError}</div>
               ) : openedLoading ? (
-                <div style={{ fontSize: '12.5px', color: '#8A94A6' }}>Loading opened contacts…</div>
+                <div style={{ fontSize: '12.5px', color: '#8A94A6' }}>
+                  Loading {activeConfig.audience === 'not_opened' ? 'non-opened' : 'opened'} contacts…
+                </div>
               ) : openedContacts.length === 0 ? (
                 <div style={{ fontSize: '12.5px', color: '#8A94A6' }}>
-                  No contacts have opened "{activeConfig.original_campaign_name}" yet. When nobody opens, the follow-up is not sent.
+                  {activeConfig.audience === 'not_opened'
+                    ? `No non-opened contacts in "${activeConfig.original_campaign_name}".`
+                    : `No contacts have opened "${activeConfig.original_campaign_name}" yet.`}
                 </div>
               ) : (
                 <>
@@ -1562,7 +1574,9 @@ const DELAY_OPTIONS = [
                             {c.designation ? ` • ${c.designation}` : ''}
                           </span>
                           <span style={{ fontSize: '11px', color: '#94A3B8', fontFamily: 'var(--mono)' }}>
-                            Opened: {formatDateTime(c.opened_at)}
+                            {activeConfig.audience === 'not_opened'
+                              ? 'Not opened'
+                              : `Opened: ${formatDateTime(c.opened_at)}`}
                           </span>
                         </div>
                       </label>
@@ -1613,14 +1627,44 @@ const DELAY_OPTIONS = [
               <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
                 <div className="form-group" style={{ margin: 0 }}>
                   <label style={fieldLabel}>Original Campaign *</label>
-                  <select value={originalId} onChange={(e) => setOriginalId(e.target.value)} style={selectStyle}>
+                  <select
+                    value={
+                      originalId === '' || originalId === 'all'
+                        ? originalId
+                        : `${originalId}:${followupAudience}`
+                    }
+                    onChange={(e) => {
+                      const val = e.target.value
+                      if (val === '' || val === 'all') {
+                        setOriginalId(val)
+                        setFollowupAudience('opened')
+                      } else {
+                        const [id, audience] = val.split(':')
+                        setOriginalId(id)
+                        setFollowupAudience(audience as FollowupAudience)
+                      }
+                    }}
+                    style={selectStyle}
+                  >
                     <option value="">Select the campaign whose openers receive the follow-up…</option>
                     <option value="all">All</option>
-                    {originalOptions.map((c) => (
-                      <option key={String(c.id)} value={String(c.id)}>
-                        {String(c.name || 'Unnamed')} · {String(c.campaignType || c.type || '')} · {String(c.opened ?? 0)} opened
-                      </option>
-                    ))}
+                    {originalOptions.map((c) => {
+                      const cid = String(c.id)
+                      const name = String(c.name || 'Unnamed')
+                      const type = String(c.campaignType || c.type || '')
+                      const opened = String(c.opened ?? 0)
+                      const notOpened = String((Number(c.deliveredCount ?? c.delivered_count ?? c.sent ?? 0) - Number(c.opened ?? 0)) || 0)
+                      return (
+                        <Fragment key={cid}>
+                          <option value={`${cid}:opened`}>
+                            {name} · {type} · {opened} opened
+                          </option>
+                          <option value={`${cid}:not_opened`}>
+                            {name} · {type} · {notOpened} not opened
+                          </option>
+                        </Fragment>
+                      )
+                    })}
                   </select>
                 </div>
 
@@ -1644,7 +1688,9 @@ const DELAY_OPTIONS = [
                     ))}
                   </div>
                   <div style={{ fontSize: '11px', color: '#8A94A6', marginTop: '4px' }}>
-                    Manual queues a follow-up for review before sending; Automatic sends immediately to each opener.
+                    Manual queues a follow-up for review before sending; Automatic sends immediately to each opener
+                    (on-open sending only applies to "Opened recipients" — use Manual or Schedule for
+                    "Not opened recipients").
                   </div>
                 </div>
 
@@ -1734,7 +1780,27 @@ const DELAY_OPTIONS = [
                 </div>
 
                 <div>
-                  <div style={{ ...fieldLabel, marginBottom: '8px' }}>Audience / Recipients</div>
+                  <div style={{ ...fieldLabel, marginBottom: '8px' }}>Follow-up Audience</div>
+                  <div style={{ display: 'flex', gap: '24px', marginBottom: '12px' }}>
+                    {([
+                      { key: 'opened', label: 'Opened recipients', hint: 'Recipients who opened the original campaign' },
+                      { key: 'not_opened', label: 'Not opened recipients', hint: 'Recipients who received but did NOT open the original campaign' },
+                    ] as { key: FollowupAudience; label: string; hint: string }[]).map(({ key, label, hint }) => (
+                      <label key={key} style={{ display: 'flex', flexDirection: 'column', gap: '2px', cursor: 'pointer' }}>
+                        <span style={radioLabelStyle}>
+                          <input
+                            type="radio"
+                            name="followupAudience"
+                            checked={followupAudience === key}
+                            onChange={() => setFollowupAudience(key)}
+                            style={radioStyle}
+                          />
+                          {label}
+                        </span>
+                        <span style={{ fontSize: '11px', color: '#8A94A6', paddingLeft: '24px' }}>{hint}</span>
+                      </label>
+                    ))}
+                  </div>
                   <div
                     style={{
                       fontSize: '12px',
@@ -1748,29 +1814,55 @@ const DELAY_OPTIONS = [
                   >
                     {originalId === 'all' ? (
                       allOpenedLoading ? (
-                        <>Loading all-campaign openers…</>
+                        <>Loading all-campaign recipients…</>
                       ) : allOpenedError ? (
                         <span style={{ color: 'var(--red)' }}>{allOpenedError}</span>
                       ) : (
                         <>
                           Follow-up recipients are{' '}
-                          <strong>{allOpened.length}</strong> unique opened
-                          recipient(s) across <strong>all eligible campaigns</strong> —
-                          contacts who did not open any eligible campaign are never included,
-                          and a contact who opened several campaigns is counted once.
+                          <strong>{allOpened.length}</strong> unique{' '}
+                          {followupAudience === 'not_opened' ? 'non-opened' : 'opened'}
+                          recipient(s) across <strong>all eligible campaigns</strong> — a contact
+                          who qualifies in several campaigns is counted once.
                         </>
                       )
                     ) : selectedOriginal ? (
                       <>
-                        Follow-up recipients are{' '}
-                        <strong>{String(selectedOriginal.opened ?? 0)}</strong> opened recipient(s)
-                        of "<strong>{String(selectedOriginal.name)}</strong>" — contacts who did not
-                        open it are never included.
+                        {audienceCounts ? (
+                          <>
+                            Recipients of "<strong>{String(selectedOriginal.name)}</strong>":{' '}
+                            <strong>{audienceCounts.opened}</strong> opened ·{' '}
+                            <strong>{audienceCounts.not_opened}</strong> not opened.
+                            With{' '}
+                            <strong>
+                              {followupAudience === 'not_opened'
+                                ? `Not opened recipients`
+                                : 'Opened recipients'}
+                            </strong>{' '}
+                            selected, the follow-up goes to{' '}
+                            <strong>
+                              {followupAudience === 'not_opened'
+                                ? audienceCounts.not_opened
+                                : audienceCounts.opened}
+                            </strong>{' '}
+                            matching recipient(s).
+                          </>
+                        ) : (
+                          <>
+                            Follow-up recipients are{' '}
+                            <strong>{String(selectedOriginal.opened ?? 0)}</strong> opened
+                            recipient(s) of "<strong>{String(selectedOriginal.name)}</strong>".
+                          </>
+                        )}
                       </>
                     ) : (
                       <>
                         Select an original campaign above to see who will receive the follow-up.
-                        Recipients are determined only from contacts who opened that campaign.
+                        Recipients are determined only from contacts who{' '}
+                        {followupAudience === 'not_opened'
+                          ? 'did not open'
+                          : 'opened'}{' '}
+                        that campaign.
                       </>
                     )}
                   </div>
@@ -1792,7 +1884,8 @@ const DELAY_OPTIONS = [
                 </label>
                 <div style={{ fontSize: '11px', color: '#8A94A6' }}>
                   When a recipient opens the original campaign's email, the follow-up is sent
-                  (Automatic) or queued for review (Manual) to that opener only.
+                  (Automatic) or queued for review (Manual) to that recipient only. For "Not opened
+                  recipients", delivery happens through the Manual panel or the Schedule.
                 </div>
               </div>
             </div>
@@ -2001,7 +2094,9 @@ const DELAY_OPTIONS = [
                   const audienceEligible =
                     originalId === 'all'
                       ? allOpened.length
-                      : Number(selectedOriginal?.opened ?? 0)
+                      : followupAudience === 'not_opened'
+                        ? (audienceCounts?.not_opened ?? Number(selectedOriginal?.opened ?? 0))
+                        : (audienceCounts?.opened ?? Number(selectedOriginal?.opened ?? 0))
                   const batchSizeInvalid =
                     !Number.isInteger(batchSize) ||
                     batchSize <= 0 ||

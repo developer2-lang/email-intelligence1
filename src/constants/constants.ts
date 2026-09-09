@@ -6,7 +6,7 @@ export const NAV_META: { [key: string]: { title: string; sub: string } } = {
   dashboard:  { title: 'Dashboard',             sub: 'Overview · IUOVA Email Intelligence' },
   contacts:   { title: 'Contacts',              sub: 'Manage and enrich your contact database' },
   campaigns:  { title: 'Campaigns',             sub: 'Build, schedule and send email campaigns' },
-  followups:  { title: 'Follow-ups',            sub: 'Follow-ups go only to recipients who opened' },
+  followups:  { title: 'Follow-ups',            sub: 'Follow-up to opened or not-opened recipients' },
   sequences:  { title: 'Sequences',             sub: 'Email drip automation' },
   'sequence-builder': { title: 'Sequence Builder', sub: 'Design and assemble email drip workflows' },
   analytics:  { title: 'Analytics',             sub: 'Campaign performance & engagement' },

@@ -443,10 +443,11 @@ async function resolveContactsForCampaign(
 }> {
   // Follow-up rule: a campaign that is configured as a FOLLOW-UP (row in
   // campaign_followups with followup_campaign_id = this campaign) only ever
-  // sends to the contacts who opened the ORIGINAL campaign.
+  // sends to the contacts who fit the stored audience (opened or NOT opened)
+  // of the ORIGINAL campaign.
   const { data: configs, error: cfgError } = await supabase
     .from('campaign_followups')
-    .select('campaign_id')
+    .select('campaign_id, trigger_type')
     .eq('followup_campaign_id', campaignId)
     .limit(1);
   if (cfgError && cfgError.code !== '42P01') {
@@ -455,24 +456,26 @@ async function resolveContactsForCampaign(
 
   let valid: any[];
   const sourceCampaignId = configs && configs[0] && configs[0].campaign_id ? String(configs[0].campaign_id) : null;
+  const notOpenedAudience = !!configs && !!(configs[0] as any) && (configs[0] as any).trigger_type === 'not_opened';
   const openedAtByContact = new Map<string, string | null>();
 
   if (sourceCampaignId) {
-    const { data: openedLogs, error: openedError } = await supabase
+    const openedQuery = supabase
       .from('email_logs')
       .select('contact_id, opened_at')
-      .eq('campaign_id', sourceCampaignId)
-      .eq('opened', true);
+      .eq('campaign_id', sourceCampaignId);
+    const audienceLogs = notOpenedAudience ? await openedQuery.neq('opened', true) : await openedQuery.eq('opened', true);
+    const openedError = audienceLogs.error;
     if (openedError) throw new Error(`Failed to fetch opened contacts: ${openedError.message}`);
     // Prefer the MOST RECENT open per contact so follow-up bookkeeping records
-    // the same opened_at the opener actually engaged on.
-    for (const r of openedLogs || []) {
+    // the same opened_at the opener actually engaged on. Non-openers carry null.
+    for (const r of audienceLogs.data || []) {
       const cid = String(r.contact_id);
       const ts = r.opened_at ? new Date(r.opened_at).getTime() : 0;
       const prev = openedAtByContact.get(cid) ? new Date(openedAtByContact.get(cid)!).getTime() : 0;
       if (!openedAtByContact.has(cid) || ts >= prev) openedAtByContact.set(cid, r.opened_at || null);
     }
-    const openedIds = Array.from(new Set((openedLogs || []).map((r: any) => r.contact_id)));
+    const openedIds = Array.from(new Set((audienceLogs.data || []).map((r: any) => r.contact_id)));
     if (openedIds.length === 0) {
       valid = [];
     } else {
@@ -484,7 +487,7 @@ async function resolveContactsForCampaign(
       valid = (rows || []).filter((c: any) => isDeliverableRecipientEmail(c.email));
     }
     if (valid.length === 0) {
-      log(`Campaign ${campaignId} is a follow-up of ${sourceCampaignId} — no opened recipients found; 0 recipients.`);
+      log(`Campaign ${campaignId} is a follow-up of ${sourceCampaignId} — no ${notOpenedAudience ? 'non-opened' : 'opened'} recipients found; 0 recipients.`);
     }
   } else {
     const segment = String(audienceSegment || '').trim();

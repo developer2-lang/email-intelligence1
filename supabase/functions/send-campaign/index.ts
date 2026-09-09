@@ -355,10 +355,11 @@ async function resolveContactsForCampaign(
 ): Promise<any[]> {
   // Follow-up rule: a campaign configured as a FOLLOW-UP (row in
   // campaign_followups with followup_campaign_id = this campaign) only ever
-  // sends to the contacts who opened the ORIGINAL campaign.
+  // sends to the contacts who fit the stored audience (opened or NOT opened)
+  // of the ORIGINAL campaign.
   const { data: configs, error: cfgError } = await supabase
     .from('campaign_followups')
-    .select('campaign_id')
+    .select('campaign_id, trigger_type')
     .eq('followup_campaign_id', campaignId)
     .limit(1);
   if (cfgError && cfgError.code !== '42P01') {
@@ -367,15 +368,17 @@ async function resolveContactsForCampaign(
 
   let valid: any[];
   const sourceCampaignId = configs && configs[0] && configs[0].campaign_id;
+  const notOpenedAudience = !!configs && !!(configs[0] as any) && (configs[0] as any).trigger_type === 'not_opened';
 
   if (sourceCampaignId) {
-    const { data: openedLogs, error: openedError } = await supabase
+    const openedQuery = supabase
       .from('email_logs')
       .select('contact_id')
-      .eq('campaign_id', sourceCampaignId)
-      .eq('opened', true);
+      .eq('campaign_id', sourceCampaignId);
+    const audienceLogs = notOpenedAudience ? await openedQuery.neq('opened', true) : await openedQuery.eq('opened', true);
+    const openedError = audienceLogs.error;
     if (openedError) throw new Error(`Failed to fetch opened contacts: ${openedError.message}`);
-    const openedIds = Array.from(new Set((openedLogs || []).map((r: any) => r.contact_id)));
+    const openedIds = Array.from(new Set((audienceLogs.data || []).map((r: any) => r.contact_id)));
     if (openedIds.length === 0) {
       valid = [];
     } else {
@@ -387,7 +390,7 @@ async function resolveContactsForCampaign(
       valid = (rows || []).filter((c: any) => isDeliverableRecipientEmail(c.email));
     }
     if (valid.length === 0) {
-      log(`Campaign ${campaignId} is a follow-up of ${sourceCampaignId} — no opened recipients found; 0 recipients.`);
+      log(`Campaign ${campaignId} is a follow-up of ${sourceCampaignId} — no ${notOpenedAudience ? 'non-opened' : 'opened'} recipients found; 0 recipients.`);
     }
   } else if (selectedContactIds && selectedContactIds.length > 0) {
     // Use explicitly selected contact IDs (from drag-and-drop)
