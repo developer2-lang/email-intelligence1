@@ -63,6 +63,8 @@ export interface SocialPlatformDef {
   defaultUrl: string;
   /** Returns the inner SVG markup (path elements) using the given fill color. */
   svgInner: (fill: string) => string;
+  /** Optional CSS background value (e.g. gradient) used instead of brandColor when the icon uses its default background. */
+  cssBackground?: string;
 }
 
 function pathFromSvg(raw: string): string {
@@ -89,8 +91,11 @@ const GLOBE_PATH =
 const EMAIL_PATH =
   'M20 4H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm0 4l-8 5-8-5V6l8 5 8-5v2z';
 
+const INSTAGRAM_GRADIENT =
+  'linear-gradient(45deg, #f09433 0%, #e6683c 25%, #dc2743 50%, #cc2366 75%, #bc1888 100%)';
+
 export const SOCIAL_PLATFORMS: SocialPlatformDef[] = [
-  { id: 'instagram', label: 'Instagram', brandColor: '#E4405F', defaultUrl: 'https://www.instagram.com/', svgInner: siPath(siInstagram) },
+  { id: 'instagram', label: 'Instagram', brandColor: '#E4405F', defaultUrl: 'https://www.instagram.com/', svgInner: siPath(siInstagram), cssBackground: INSTAGRAM_GRADIENT },
   { id: 'facebook', label: 'Facebook', brandColor: '#1877F2', defaultUrl: 'https://www.facebook.com/', svgInner: siPath(siFacebook) },
   { id: 'linkedin', label: 'LinkedIn', brandColor: '#0A66C2', defaultUrl: 'https://www.linkedin.com/company/', svgInner: (f) => svgPath(f, LINKEDIN_PATH) },
   { id: 'youtube', label: 'YouTube', brandColor: '#FF0000', defaultUrl: 'https://www.youtube.com/', svgInner: siPath(siYoutube) },
@@ -107,7 +112,7 @@ export const SOCIAL_PLATFORMS: SocialPlatformDef[] = [
   { id: 'threads', label: 'Threads', brandColor: '#000000', defaultUrl: 'https://www.threads.net/', svgInner: siPath(siThreads) },
   { id: 'google', label: 'Google', brandColor: '#4285F4', defaultUrl: 'https://www.google.com/', svgInner: siPath(siGoogle) },
   { id: 'website', label: 'Website', brandColor: '#2563EB', defaultUrl: 'https://', svgInner: (f) => svgPath(f, GLOBE_PATH) },
-  { id: 'email', label: 'Email', brandColor: '#2563EB', defaultUrl: 'mailto:', svgInner: (f) => svgPath(f, EMAIL_PATH) },
+  { id: 'email', label: 'Email', brandColor: '#D44638', defaultUrl: 'mailto:', svgInner: (f) => svgPath(f, EMAIL_PATH) },
 ];
 
 export function platformById(id: string): SocialPlatformDef {
@@ -244,6 +249,8 @@ function buildSocialIconHtml(
   const hasBg = shape !== 'none';
   const bg = hasBg ? item.bg || platform.brandColor : 'transparent';
   const fill = hasBg ? item.color || '#FFFFFF' : item.color || platform.brandColor;
+  const useGradient = hasBg && !!platform.cssBackground && (!item.bg || item.bg === platform.brandColor);
+  const bgProp = useGradient ? `background:${platform.cssBackground}` : `background-color:${bg}`;
   const svgRatio = hasBg ? 0.6 : 1;
   const svgSize = Math.max(Math.round(box * svgRatio), 8);
   const pad = hasBg ? Math.round((box - svgSize) / 2) : 0;
@@ -265,7 +272,7 @@ function buildSocialIconHtml(
   const margin = index === 0 ? '' : `; margin-left:${spacing}px`;
   return (
     `<div style="display:inline-block; text-align:center; vertical-align:top;${margin}">` +
-    `<a href="${escapeAttr(href)}" target="_blank" style="display:inline-block; width:${box}px; height:${box}px; text-decoration:none; background-color:${bg}; border-radius:${radius}; color:${fill}; text-align:center; vertical-align:middle;">${img}</a>` +
+    `<a href="${escapeAttr(href)}" target="_blank" style="display:inline-block; width:${box}px; height:${box}px; text-decoration:none; ${bgProp}; border-radius:${radius}; color:${fill}; text-align:center; vertical-align:middle;">${img}</a>` +
     `${label}` +
     `</div>`
   );
