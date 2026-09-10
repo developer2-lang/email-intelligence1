@@ -258,18 +258,12 @@ const EMAIL_EDITOR_BLOCKS = [
     label: 'Image',
     category: 'CONTENT',
     media: '<span class="te-blk">▣</span>',
-    content: {
-      type: 'image',
-      src: IMAGE_PLACEHOLDER,
-      alt: 'Add an image',
-      style: {
-        display: 'block',
-        maxWidth: '100%',
-        height: 'auto',
-        margin: '0 auto 16px',
-        border: '0',
-      },
-    },
+    content:
+      '<div data-te-role="image-wrapper" style="width: 100%; text-align: center; margin: 0 0 16px;">' +
+      '<img src="' +
+      IMAGE_PLACEHOLDER +
+      '" alt="Add an image" style="display: inline-block; max-width: 100%; height: auto; border: 0;" />' +
+      '</div>',
   },
   {
     id: 'te-button',
@@ -433,6 +427,30 @@ const CHANGE_EVENTS = [
   'redo',
 ];
 
+/**
+ * Inject or remove the mobile responsive CSS into the GrapesJS editor frame.
+ * When mobile mode is active, the CSS overrides inline fixed-width styles
+ * so email content reflows to fit a 375px viewport.
+ */
+const MOBILE_CSS_ID = 'te-mobile-responsive';
+function injectMobileCss(editor: Editor, mobile: boolean) {
+  try {
+    const frameDoc = editor.Canvas.getDocument();
+    if (!frameDoc) return;
+    const existing = frameDoc.getElementById(MOBILE_CSS_ID);
+    if (mobile) {
+      if (!existing) {
+        const style = frameDoc.createElement('style');
+        style.id = MOBILE_CSS_ID;
+        style.textContent = MOBILE_RESPONSIVE_CSS;
+        frameDoc.head.appendChild(style);
+      }
+    } else {
+      if (existing) existing.remove();
+    }
+  } catch { /* frame may not be ready yet */ }
+}
+
 function getDocumentHtml(editor: Editor): string {
   const wrapper = editor.getWrapper();
   if (!wrapper) return '';
@@ -449,7 +467,7 @@ function getDocumentHtml(editor: Editor): string {
   // clean — EXCEPT the explicit Container marker (`data-te-role="container"`),
   // which must survive so the container hierarchy is reconstructed on reload
   // and preserved verbatim on preview/send.
-  html = html.replace(/\s+data-te-role=(?:"(?!container")[^"]*"|'(?!container')[^']*')/gi, '');
+  html = html.replace(/\s+data-te-role=(?:"(?!container|image-wrapper")[^"]*"|'(?!container|image-wrapper')[^']*')/gi, '');
   return html;
 }
 
@@ -1370,6 +1388,19 @@ function setImageDim(component: Component, prop: 'width' | 'height', value: stri
   delete style.maxWidth;
   delete style.maxHeight;
 
+  // When an explicit width is set, use display:block + margin:auto for proper
+  // email-client centre alignment.  When the width is cleared (Auto), revert to
+  // inline-block so the image keeps its intrinsic size and doesn't stretch.
+  if (hasVal && prop === 'width') {
+    style.display = 'block';
+    style['margin-left'] = 'auto';
+    style['margin-right'] = 'auto';
+  } else if (!hasVal && prop === 'width') {
+    style.display = 'inline-block';
+    delete style['margin-left'];
+    delete style['margin-right'];
+  }
+
   component.setStyle(style);
 
   if (hasVal) {
@@ -1401,32 +1432,28 @@ function getImageAlignment(component: Component): string {
 
 /** Apply an alignment to an image. */
 function setImageAlignment(component: Component, value: string): void {
-  const style = { ...(component.getStyle() || {}) };
   const align = (IMAGE_ALIGNMENTS as readonly string[]).includes(value) ? value : 'left';
 
-  style.display = 'block';
-  style['text-align'] = align;
+  // Set alignment on the IMAGE element itself (display: inline-block).
+  const imgStyle = { ...(component.getStyle() || {}) };
+  imgStyle.display = 'inline-block';
+  const marginTop = imgStyle['margin-top'];
+  const marginBottom = imgStyle['margin-bottom'];
+  delete imgStyle.margin;
+  delete imgStyle['margin-left'];
+  delete imgStyle['margin-right'];
+  if (marginTop) imgStyle['margin-top'] = marginTop;
+  if (marginBottom) imgStyle['margin-bottom'] = marginBottom;
+  component.setStyle(imgStyle);
 
-  const marginTop = style['margin-top'];
-  const marginBottom = style['margin-bottom'];
-  delete style.margin;
-  delete style['margin-left'];
-  delete style['margin-right'];
-  if (marginTop) style['margin-top'] = marginTop;
-  if (marginBottom) style['margin-bottom'] = marginBottom;
-
-  if (align === 'center') {
-    style['margin-left'] = 'auto';
-    style['margin-right'] = 'auto';
-  } else if (align === 'right') {
-    style['margin-left'] = 'auto';
-    style['margin-right'] = '0';
-  } else {
-    style['margin-left'] = '0';
-    style['margin-right'] = '0';
+  // Also set text-align on the image-wrapper parent so the wrapper centres
+  // or left/right-aligns the inline-block <img>.
+  const wrapper = (component as any).parent?.();
+  if (wrapper && wrapper.getAttributes?.()?.['data-te-role'] === 'image-wrapper') {
+    const ws = { ...(wrapper.getStyle() || {}) };
+    ws['text-align'] = align;
+    wrapper.setStyle(ws);
   }
-
-  component.setStyle(style);
 }
 
 /* ─── Paragraph block helpers ────────────────────────────────────────────── */
@@ -3095,6 +3122,31 @@ const iconBtn: React.CSSProperties = {
   flexShrink: 0,
 };
 
+export const MOBILE_RESPONSIVE_CSS = `
+/* ── Mobile responsive overrides for email preview ─────────────────────── */
+@charset "UTF-8";
+@media only screen and (max-width: 600px) {
+  html, body {
+    width: 100% !important;
+    max-width: 100% !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    overflow-x: hidden !important;
+  }
+  /* Every table (including fixed-width content cards) is capped to the viewport */
+  table { max-width: 100% !important; }
+  td, th { max-width: 100% !important; word-wrap: break-word !important; overflow-wrap: break-word !important; }
+  /* Images scale down to the viewport while keeping their aspect ratio */
+  img { max-width: 100% !important; height: auto !important; }
+  /* Text blocks wrap instead of overflowing */
+  p, div, span, h1, h2, h3, h4, h5, h6, a { max-width: 100% !important; word-wrap: break-word !important; overflow-wrap: break-word !important; }
+  /* Multi-column email blocks stack vertically on narrow screens so each
+     column becomes a full-width section instead of squeezing side-by-side. */
+  td[width$="%"], th[width$="%"] { display: block !important; width: 100% !important; }
+  * { box-sizing: border-box !important; }
+}
+`;
+
 const EDITOR_CSS = `
 .te-editor { display: flex; flex-direction: column; border: 1px solid #E2E8F0; border-radius: 14px; overflow: hidden; background: #FFFFFF; box-shadow: 0 1px 3px rgba(15,23,42,0.06); }
 .te-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; padding: 10px 14px; border-bottom: 1px solid #E2E8F0; background: #F8FAFC; }
@@ -3103,7 +3155,8 @@ const EDITOR_CSS = `
 .te-body { display: flex; min-height: 560px; height: calc(100vh - 360px); }
 .te-blocks { width: 400px; flex-shrink: 0; border-right: 1px solid #E2E8F0; display: flex; flex-direction: column; background: #FFFFFF; }
 .te-pane-head { padding: 11px 14px; font-size: 10.5px; font-weight: 700; letter-spacing: 0.1em; color: #64748B; border-bottom: 1px solid #E2E8F0; text-transform: uppercase; }
-.te-blocks-head { padding: 16px 18px 12px; font-size: 11px; font-weight: 800; letter-spacing: 0.16em; color: #0F172A; text-transform: uppercase; }
+.te-blocks-head { padding: 16px 18px 12px; font-size: 11px; font-weight: 800; letter-spacing: 0.16em; color: #0F172A; text-transform: uppercase; cursor: pointer; display: flex; align-items: center; gap: 8px; user-select: none; }
+.te-blocks-head .te-blocks-arrow { font-size: 8px; line-height: 1; color: #64748B; }
 .te-blocks-scroll { flex: 1; overflow-y: auto; margin: 0 12px 12px; padding: 14px; background: #3A3A3A; border-radius: 14px; box-sizing: border-box; scrollbar-width: thin; scrollbar-color: rgba(255,255,255,0.3) transparent; }
 .te-blocks-scroll::-webkit-scrollbar { width: 8px; }
 .te-blocks-scroll::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.25); border-radius: 8px; }
@@ -3147,6 +3200,23 @@ const EDITOR_CSS = `
 .te-editor .gjs-cv-canvas { position: relative; width: 100%; height: auto; top: 0; left: 0; min-width: 0; overflow: visible; }
 .te-editor .gjs-cv-canvas__frames { position: static; width: 100%; height: auto; overflow: visible; }
 .te-editor .gjs-frame-wrapper { position: relative; height: auto; margin: 26px auto 40px; box-shadow: 0 4px 18px rgba(15,23,42,0.12); border-radius: 4px; }
+/* Phone-like frame for the mobile canvas: rounded bezel + subtle screen
+   inset so the 375px preview reads as a real device, not a shrunk desktop. */
+.te-editor.te-device-mobile .gjs-frame-wrapper {
+  border-radius: 24px;
+  box-shadow:
+    0 0 0 8px #1E293B,
+    0 0 0 9px #334155,
+    0 24px 50px rgba(15, 23, 42, 0.35);
+  margin: 30px auto 48px;
+}
+.te-editor.te-device-mobile .gjs-frame {
+  border-radius: 16px;
+  overflow: hidden;
+}
+.te-editor.te-device-mobile .gjs-cv-canvas__frames {
+  padding: 0;
+}
 .te-editor .gjs-selected { outline: 2px solid #2563EB !important; outline-offset: -2px; }
 .te-editor .gjs-highlighter { outline: 1px dashed #60A5FA; }
 .te-editor .gjs-toolbar { border-radius: 6px; }
@@ -3164,6 +3234,7 @@ const TemplateVisualEditor = forwardRef<TemplateVisualEditorHandle, TemplateVisu
     const editorRef = useRef<Editor | null>(null);
     const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const destroyedRef = useRef(false);
+    const deviceRef = useRef('desktop');
     const onChangeRef = useRef(onChange);
     const onErrorRef = useRef(onError);
 
@@ -3172,6 +3243,7 @@ const TemplateVisualEditor = forwardRef<TemplateVisualEditorHandle, TemplateVisu
     const [tick, setTick] = useState(0);
     const [device, setDevice] = useState('desktop');
     const [isEmpty, setIsEmpty] = useState(true);
+    const [contentCollapsed, setContentCollapsed] = useState(false);
 
     useEffect(() => {
       onChangeRef.current = onChange;
@@ -3398,6 +3470,22 @@ const TemplateVisualEditor = forwardRef<TemplateVisualEditorHandle, TemplateVisu
       registerTableBlockType('te-container', 'container');
       registerTableBlockType('te-section', 'section');
 
+      // Image wrapper: the full-width <div> that centres the actual <img>.
+      // The wrapper itself must never be the selection/resize target — only
+      // the inner <img> should be interactive.
+      editor.DomComponents.addType('te-image-wrapper', {
+        isComponent: (el: any) =>
+          !!el && !!el.getAttribute && el.getAttribute('data-te-role') === 'image-wrapper',
+        model: {
+          defaults: {
+            selectable: false,
+            hoverable: false,
+            droppable: false,
+            resizable: false,
+          },
+        },
+      });
+
       // Apply the universal blue resize border + handles to EVERY other supported
       // component type (Text, Heading, Divider, Spacer, Video, Logo, Columns,
       // Footer, Table, Table Row, Table Cell, etc.). The image/link(p)/wrapper/
@@ -3425,11 +3513,21 @@ const TemplateVisualEditor = forwardRef<TemplateVisualEditorHandle, TemplateVisu
       canvas.addEventListener('scroll', onCanvasScroll);
 
       // Custom commands for moving / duplicating / deleting the selected block.
+      // When the selected component is an <img> inside an image-wrapper div,
+      // operate on the wrapper so the entire block moves as one unit.
+      const getImageWrapperTarget = (comp: Component): Component => {
+        const p = comp.parent?.();
+        if (p && p.getAttributes?.()?.['data-te-role'] === 'image-wrapper') return p;
+        return comp;
+      };
+
       editor.Commands.add('te-move-up', {
         run(ed: Editor) {
           const comp = ed.getSelected();
           if (!comp || !comp.parent()) return;
-          if (comp.index() > 0) comp.move(comp.parent() as Component, { at: comp.index() - 1 });
+          const target = getImageWrapperTarget(comp);
+          if (!target.parent() || target.index() <= 0) return;
+          target.move(target.parent() as Component, { at: target.index() - 1 });
           ed.select(comp);
         },
       });
@@ -3438,7 +3536,9 @@ const TemplateVisualEditor = forwardRef<TemplateVisualEditorHandle, TemplateVisu
         run(ed: Editor) {
           const comp = ed.getSelected();
           if (!comp || !comp.parent()) return;
-          comp.move(comp.parent() as Component, { at: comp.index() + 1 });
+          const target = getImageWrapperTarget(comp);
+          if (!target.parent()) return;
+          target.move(target.parent() as Component, { at: target.index() + 1 });
           ed.select(comp);
         },
       });
@@ -3447,9 +3547,11 @@ const TemplateVisualEditor = forwardRef<TemplateVisualEditorHandle, TemplateVisu
         run(ed: Editor) {
           const comp = ed.getSelected();
           if (!comp || !comp.parent()) return;
-          const clone = comp.clone();
-          comp.parent()?.append(clone, { at: comp.index() + 1 });
-          ed.select(clone);
+          const target = getImageWrapperTarget(comp);
+          const clone = target.clone();
+          target.parent()?.append(clone, { at: target.index() + 1 });
+          const img = clone.components?.().models?.find((c: any) => c.is?.('image'));
+          ed.select(img || clone);
         },
       });
 
@@ -3458,9 +3560,38 @@ const TemplateVisualEditor = forwardRef<TemplateVisualEditorHandle, TemplateVisu
           const comp = ed.getSelected();
           if (!comp) return;
           if (window.confirm('Delete this element from the email?')) {
-            ed.runCommand('core:component-delete');
+            const target = getImageWrapperTarget(comp);
+            target.remove();
           }
         },
+      });
+
+      // Wrapper-aware drag-move: when the user grabs the ≡ handle on an image
+      // that lives inside an image-wrapper, select the wrapper first so
+      // GrapesJS's built-in tlb-move drags the entire wrapper block.
+      editor.Commands.add('te-wrapper-move', {
+        run(ed: Editor) {
+          const comp = ed.getSelected();
+          if (!comp) return;
+          const target = getImageWrapperTarget(comp);
+          if (target !== comp) {
+            ed.select(target);
+            setTimeout(() => ed.runCommand('tlb-move'), 0);
+          } else {
+            ed.runCommand('tlb-move');
+          }
+        },
+      });
+
+      // Clean up orphaned image-wrappers (empty <div>s left behind when the
+      // inner <img> is deleted via keyboard shortcut or any other path).
+      editor.on('component:remove', (comp: any) => {
+        if (comp.is?.('image')) {
+          const p = comp.parent?.();
+          if (p && p.getAttributes?.()?.['data-te-role'] === 'image-wrapper' && p.components?.().length === 0) {
+            setTimeout(() => { try { p.remove(); } catch {} }, 0);
+          }
+        }
       });
 
       // Keep the right-hand properties panel in sync with the canvas selection.
@@ -3518,6 +3649,19 @@ const TemplateVisualEditor = forwardRef<TemplateVisualEditorHandle, TemplateVisu
             attributes: { class: 'fa fa-image' },
             command: (ed: Editor) => ed.runCommand('open-assets', { target: ed.getSelected() }),
           });
+          // If the image is inside an image-wrapper, use the wrapper-aware
+          // drag command so the entire block moves as one unit.
+          const inWrapper = component.parent?.()?.getAttributes?.()?.['data-te-role'] === 'image-wrapper';
+          if (inWrapper) {
+            const moveIdx = tb.findIndex((b: any) => b.command === 'tlb-move');
+            if (moveIdx >= 0) {
+              tb[moveIdx] = {
+                attributes: { class: 'fa fa-arrows' },
+                label: '≡',
+                command: 'te-wrapper-move',
+              };
+            }
+          }
         }
         component.set('toolbar', tb);
       });
@@ -3525,7 +3669,42 @@ const TemplateVisualEditor = forwardRef<TemplateVisualEditorHandle, TemplateVisu
       editor.on('component:update', () => setTick((t) => t + 1));
       editor.on('component:styleUpdate', () => setTick((t) => t + 1));
       editor.on('device:select', (deviceModel) => {
-        if (deviceModel) setDevice(deviceModel.get('id') || 'desktop');
+        const devId = deviceModel ? deviceModel.get('id') || 'desktop' : 'desktop';
+        deviceRef.current = devId;
+        setDevice(devId);
+        injectMobileCss(editor, devId === 'mobile');
+      });
+      // GrapesJS can rebuild the frame document (on load / undo / component
+      // swaps); re-apply the responsive styles so mobile mode always keeps
+      // the email reflowed to the 375px viewport.
+      editor.on('canvas:frame:load', () => {
+        injectMobileCss(editor, deviceRef.current === 'mobile');
+      });
+      editor.on('component:update', () => {
+        if (deviceRef.current === 'mobile') injectMobileCss(editor, true);
+      });
+
+      // When an image-wrapper is added (e.g. block drop), auto-select the
+      // inner <img> so the selection outline / resize handles appear on the
+      // actual image, not the full-width wrapper.
+      editor.on('component:add', (comp: any) => {
+        if (comp.getAttributes?.()?.['data-te-role'] === 'image-wrapper') {
+          const img = comp.components?.().models?.find((c: any) => c.is?.('image'));
+          if (img) {
+            setTimeout(() => editor.select(img), 0);
+          }
+        }
+      });
+
+      // If the wrapper itself gets selected (e.g. programmatic selection),
+      // redirect to the inner <img> so the selection box matches the image.
+      editor.on('component:selected', (comp: any) => {
+        if (comp.getAttributes?.()?.['data-te-role'] === 'image-wrapper') {
+          const img = comp.components?.().models?.find((c: any) => c.is?.('image'));
+          if (img) {
+            setTimeout(() => editor.select(img), 0);
+          }
+        }
       });
 
       // Double-clicking an image opens the asset manager so a new image can be
@@ -3590,7 +3769,7 @@ const TemplateVisualEditor = forwardRef<TemplateVisualEditorHandle, TemplateVisu
     }, []);
 
 return (
-      <div className={fullscreen ? 'te-editor te-fs' : 'te-editor'}>
+      <div className={`te-editor${fullscreen ? ' te-fs' : ''}${device === 'mobile' ? ' te-device-mobile' : ''}`}>
         <style>{EDITOR_CSS}</style>
         <div className="te-head">
           <div className="te-devices">
@@ -3651,8 +3830,11 @@ return (
         </div>
         <div className="te-body">
           <div className="te-blocks">
-            <div className="te-blocks-head">CONTENT</div>
-            <div className="te-blocks-scroll" ref={blocksScrollRef} />
+            <div className="te-blocks-head" onClick={() => setContentCollapsed((p) => !p)}>
+              <span className="te-blocks-arrow">{contentCollapsed ? '▲' : '▼'}</span>
+              CONTENT
+            </div>
+            <div className="te-blocks-scroll" ref={blocksScrollRef} style={contentCollapsed ? { display: 'none' } : undefined} />
           </div>
           <div className="te-canvas-wrap">
             <div className="te-canvas" ref={canvasRef} />

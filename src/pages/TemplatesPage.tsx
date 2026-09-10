@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { EmailTemplate } from '../types/campaign'
 import type { TabKey } from '../types'
 import {
@@ -8,6 +8,7 @@ import {
 import { resolveTemplateHtml } from '../services/templateResolve'
 import { toEmailSafeHtml } from '../utils/emailRender'
 import { TemplateThumb } from '../components/TemplateThumb'
+import { MOBILE_RESPONSIVE_CSS } from '../components/TemplateVisualEditor'
 import { openNewTemplateInEditor, openTemplateInEditor } from '../services/templateBridge'
 
 interface TemplatesPageProps {
@@ -57,6 +58,18 @@ export default function TemplatesPage({ onNavigate, onToast }: TemplatesPageProp
   const [previewOpen, setPreviewOpen] = useState(false)
   const [previewHtml, setPreviewHtml] = useState('')
   const [previewDevice, setPreviewDevice] = useState<'desktop' | 'mobile'>('desktop')
+
+  const displayPreviewHtml = useMemo(() => {
+    if (previewDevice !== 'mobile' || !previewHtml) return previewHtml
+    const mobileStyle = `<style>${MOBILE_RESPONSIVE_CSS}</style>`
+    if (/<head[\s>]/i.test(previewHtml)) {
+      return previewHtml.replace(/<\/head>/i, `${mobileStyle}</head>`)
+    }
+    if (/<body[\s>]/i.test(previewHtml)) {
+      return previewHtml.replace(/<body([\s>])/i, `${mobileStyle}<body$1`)
+    }
+    return `${mobileStyle}${previewHtml}`
+  }, [previewHtml, previewDevice])
 
   const [deleteTarget, setDeleteTarget] = useState<EmailTemplate | null>(null)
   const [deleting, setDeleting] = useState(false)
@@ -515,7 +528,7 @@ export default function TemplatesPage({ onNavigate, onToast }: TemplatesPageProp
               <iframe
                 title="email preview"
                 sandbox=""
-                srcDoc={previewHtml}
+                srcDoc={displayPreviewHtml}
                 style={{
                   width: previewDevice === 'mobile' ? '375px' : '640px',
                   height: '660px',

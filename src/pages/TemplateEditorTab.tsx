@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { EmailTemplate } from '../types/campaign';
 import type { TabKey } from '../types';
 import {
@@ -9,7 +9,7 @@ import {
   uploadEmailTemplate,
 } from '../services/campaignService';
 import TemplateVisualEditor, {
-  BLANK_TEMPLATE_HTML,
+  MOBILE_RESPONSIVE_CSS,
   type TemplateVisualEditorHandle,
 } from '../components/TemplateVisualEditor';
 import { toEmailSafeHtml } from '../utils/emailRender';
@@ -174,6 +174,18 @@ export default function TemplateEditorTab({ onToast, onNavigate }: TemplateEdito
   const [previewDevice, setPreviewDevice] = useState<'desktop' | 'mobile'>('desktop');
   const [previewHtml, setPreviewHtml] = useState('');
 
+  const displayPreviewHtml = useMemo(() => {
+    if (previewDevice !== 'mobile' || !previewHtml) return previewHtml;
+    const mobileStyle = `<style>${MOBILE_RESPONSIVE_CSS}</style>`;
+    if (/<head[\s>]/i.test(previewHtml)) {
+      return previewHtml.replace(/<\/head>/i, `${mobileStyle}</head>`);
+    }
+    if (/<body[\s>]/i.test(previewHtml)) {
+      return previewHtml.replace(/<body([\s>])/i, `${mobileStyle}<body$1`);
+    }
+    return `${mobileStyle}${previewHtml}`;
+  }, [previewHtml, previewDevice]);
+
   const [saveAsOpen, setSaveAsOpen] = useState(false);
   const [saveAsMode, setSaveAsMode] = useState<'new' | 'copy'>('new');
   const [saveAsName, setSaveAsName] = useState('');
@@ -336,22 +348,6 @@ export default function TemplateEditorTab({ onToast, onNavigate }: TemplateEdito
       setDirty(false);
       setTemplateLoadError(null);
       onToast('New blank template created.', 'info');
-    };
-    if (dirty) setUnsavedAction(() => proceed);
-    else proceed();
-  };
-
-  const startBlankTemplate = () => {
-    const proceed = () => {
-      const html = toEmailSafeHtml(BLANK_TEMPLATE_HTML);
-      loadedHtmlRef.current = html;
-      setSelectedTemplate(null);
-      setHtmlContent(html);
-      setEditorKey((k) => k + 1);
-      setMode('visual');
-      setDirty(false);
-      setTemplateLoadError(null);
-      onToast('Blank template started — build your email from an empty canvas.', 'info');
     };
     if (dirty) setUnsavedAction(() => proceed);
     else proceed();
@@ -619,15 +615,6 @@ export default function TemplateEditorTab({ onToast, onNavigate }: TemplateEdito
         <button type="button" style={toolButton} onClick={startNewTemplate}>
           + New Template
         </button>
-        <button
-          type="button"
-          style={{ ...toolButton, color: '#7C3AED', borderColor: '#DDD6FE', background: '#F5F3FF' }}
-          onClick={startBlankTemplate}
-          title="Start from a completely empty email canvas with no default content"
-        >
-          ⬚ Blank Template
-        </button>
-
         <input
           ref={fileInputRef}
           type="file"
@@ -1338,7 +1325,7 @@ export default function TemplateEditorTab({ onToast, onNavigate }: TemplateEdito
               <iframe
                 title="email preview"
                 sandbox=""
-                srcDoc={previewHtml}
+                srcDoc={displayPreviewHtml}
                 style={{
                   width: previewDevice === 'mobile' ? '375px' : '640px',
                   height: '660px',
