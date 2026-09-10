@@ -1142,7 +1142,11 @@ async function fetchOpenedContacts(
     .select('contact_id, email, opened_at, campaign_id')
     .eq('campaign_id', campaignId)
     .order('opened_at', { ascending: false })
-  query = openedFilter ? query.neq('opened', true) : query.eq('opened', true)
+  // Same recipient rule as the Campaigns ActivityModal "Not Opened" tab:
+  // opened IS NOT TRUE AND clicked IS NOT TRUE.
+  query = openedFilter
+    ? query.not('opened', 'is', true).not('clicked', 'is', true)
+    : query.eq('opened', true)
   const { data: logs, error } = await query
   if (error) throw new Error(`Failed to fetch ${audience} contacts: ${error.message}`)
 
@@ -1197,7 +1201,11 @@ async function fetchOpenedContactsForAll(
     .from('email_logs')
     .select('contact_id, email, opened_at, campaign_id')
     .in('campaign_id', ids)
-  query = openedFilter ? query.neq('opened', true) : query.eq('opened', true)
+  // Same recipient rule as the Campaigns ActivityModal "Not Opened" tab:
+  // opened IS NOT TRUE AND clicked IS NOT TRUE.
+  query = openedFilter
+    ? query.not('opened', 'is', true).not('clicked', 'is', true)
+    : query.eq('opened', true)
   const { data: logs, error } = await query
   if (error) throw new Error(`Failed to fetch ${audience} contacts: ${error.message}`)
 
@@ -1323,6 +1331,42 @@ async function fetchAudienceCounts(campaignId: string): Promise<AudienceCounts> 
   return { opened: opened.size, not_opened: notOpened.size }
 }
 
+/**
+ * Exact "not opened" recipient count per ORIGINAL campaign, mirroring the
+ * Campaigns → eye icon → "Not Opened" tab (ActivityModal):
+ *
+ *   email_logs rows WHERE campaign_id = <campaign> AND opened IS NOT TRUE
+ *   AND clicked IS NOT TRUE
+ *
+ * This is the ONLY source the Follow-ups "Original Campaign" dropdown may use
+ * for its "X not opened" count so it always matches what Campaigns activity
+ * shows. It deliberately does NOT rely on the campaign's delivered/opened
+ * summary metrics (status='sent' rows or possibly-stale analytics), which do
+ * not reproduce the ActivityModal list.
+ */
+async function fetchNotOpenedCounts(campaignIds: string[]): Promise<Record<string, number>> {
+  const ids = (campaignIds || []).map((id) => String(id)).filter(Boolean)
+  if (ids.length === 0) return {}
+  const { data: logs, error } = await supabase
+    .from('email_logs')
+    .select('campaign_id, opened, clicked')
+    .in('campaign_id', ids)
+  if (error) {
+    console.error('fetchNotOpenedCounts failed:', error.message)
+    return {}
+  }
+  const counts: Record<string, number> = {}
+  for (const log of (logs || []) as Record<string, any>[]) {
+    // Same conditions as ActivityModal's "Not Opened" tab filter:
+    // status derived as 'Opened'/'Clicked' is excluded, everything else counts.
+    if (log.opened === true || log.clicked === true) continue
+    const cid = String(log.campaign_id || '')
+    if (!cid) continue
+    counts[cid] = (counts[cid] || 0) + 1
+  }
+  return counts
+}
+
 // ─── Sending (via the send-followup Edge Function) ─────────────────────────
 
 async function sendSelectedFollowups(
@@ -1361,6 +1405,116 @@ async function sendPendingFollowup(id: string): Promise<{ id: string; status: st
   return body.data || { id, status: 'sent' }
 }
 
+export interface NotOpenedFollowupTriggerParams {
+  originalCampaignId: string
+  followupCampaignId: string
+  sendInBatches: boolean
+  batchSize: number
+  firstBatchDelayHours: number
+  subsequentBatchDelayHours: number
+}
+
+export type NotOpenedFollowupTriggerResult =
+  | { mode: 'queued'; queued_recipient_count: number; next_batch_at: string }
+  | { mode: 'sent'; sent: number; skipped: number; failed: number; results: SendSelectedFollowupResult[] }
+  | { mode: 'none'; recipient_count: number }
+
+/**
+ * Continue a NOT_OPENED follow-up into the existing sending/queue pipeline
+ * immediately after its config is created.
+ *
+ * Non-openers never open the original campaign, so the open-event triggers
+ * (automatic mode + sync_pending reconciliation) can never fire for them. This
+ * is the ONLY path that advances a not-opened follow-up past its initial draft
+ * record: it selects the exact recipients the Campaigns ActivityModal → "Not
+ * Opened" tab shows (opened IS NOT TRUE AND clicked IS NOT TRUE, already-sent
+ * contacts excluded) and hands them to the existing pipeline:
+ *
+ *   - Batched:   the follow-up campaign is queued as 'scheduled' so the
+ *                scheduled-campaign-runner Edge Function drains it in the
+ *                configured batches (it already resolves trigger_type and
+ *                filters non-openers server-side).
+ *   - Non-batch: sent now via sendSelectedFollowups (the send-followup Edge
+ *                Function, which is already not-opened-audience aware).
+ *
+ * Existing opened behavior is untouched: this is called ONLY for not_opened.
+ */
+async function triggerNotOpenedFollowupSend(
+  params: NotOpenedFollowupTriggerParams
+): Promise<NotOpenedFollowupTriggerResult> {
+  const originalId = params.originalCampaignId ? String(params.originalCampaignId) : ''
+  if (!originalId) throw new Error('original_campaign_id is required')
+  const followupCampaignId = params.followupCampaignId ? String(params.followupCampaignId) : ''
+  if (!followupCampaignId) throw new Error('follow-up campaign is required')
+
+  // Same recipients the Campaigns "eye icon → Not Opened" tab shows.
+  const recipients =
+    originalId === 'all'
+      ? await fetchOpenedContactsForAll(followupCampaignId, 'not_opened')
+      : await fetchOpenedContacts(originalId, followupCampaignId, 'not_opened')
+
+  const recipientIds = recipients
+    .map((r) => String(r.contact_id || ''))
+    .filter(Boolean)
+
+  if (recipientIds.length === 0) {
+    return { mode: 'none', recipient_count: 0 }
+  }
+
+  if (params.sendInBatches) {
+    // Existing batch-queue mechanism — mirrors the composer's batched send
+    // panel: mark the follow-up campaign 'scheduled' with next_batch_at so the
+    // scheduled-campaign-runner Edge Function drains it in configured batches.
+    const firstDelayMs =
+      Math.max(0, Number(params.firstBatchDelayHours) || 0) * 60 * 60 * 1000
+    const nextBatchAt = new Date(Date.now() + firstDelayMs).toISOString()
+    const batchSize =
+      Number.isInteger(params.batchSize) && params.batchSize > 0
+        ? params.batchSize
+        : 30
+    const { error: queueError } = await supabase
+      .from('campaigns')
+      .update({
+        status: 'scheduled',
+        next_batch_at: nextBatchAt,
+        current_batch_number: 0,
+        send_in_batches: true,
+        batch_size: batchSize,
+        first_batch_delay_hours: Number.isFinite(params.firstBatchDelayHours)
+          ? params.firstBatchDelayHours
+          : 1,
+        subsequent_batch_delay_hours: Number.isFinite(params.subsequentBatchDelayHours)
+          ? params.subsequentBatchDelayHours
+          : (Number(params.firstBatchDelayHours) || 1),
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', followupCampaignId)
+    if (queueError) {
+      throw new Error(`Failed to queue batched not-opened follow-up: ${queueError.message}`)
+    }
+    return {
+      mode: 'queued',
+      queued_recipient_count: recipientIds.length,
+      next_batch_at: nextBatchAt,
+    }
+  }
+
+  const results = await sendSelectedFollowups(originalId, {
+    contact_ids: recipientIds,
+    followup_campaign_id: followupCampaignId,
+  })
+
+  let sent = 0
+  let skipped = 0
+  let failed = 0
+  for (const r of results) {
+    if (r.status === 'sent') sent++
+    else if (r.status === 'skipped') skipped++
+    else if (r.status === 'failed') failed++
+  }
+  return { mode: 'sent', sent, skipped, failed, results }
+}
+
 export {
   fetchFollowupConfigs,
   createFollowupConfig,
@@ -1369,7 +1523,9 @@ export {
   fetchOpenedContacts,
   fetchOpenedContactsForAll,
   fetchAudienceCounts,
+  fetchNotOpenedCounts,
   sendSelectedFollowups,
   fetchPendingFollowups,
   sendPendingFollowup,
+  triggerNotOpenedFollowupSend,
 }

@@ -899,7 +899,10 @@ async function getOpenedByContact(
     .in('contact_id', contactIds);
 
   if (notOpenedAudience) {
-    query = query.neq('opened', true);
+    // Same recipient rule as the Campaigns ActivityModal "Not Opened" tab:
+    // opened IS NOT TRUE AND clicked IS NOT TRUE (NULL opens count as
+    // not-opened). A `.neq('opened', true)` would wrongly drop NULL rows.
+    query = query.not('opened', 'is', true).not('clicked', 'is', true);
   } else {
     query = query.eq('opened', true);
   }
@@ -1180,20 +1183,31 @@ async function handleSendPending(pendingId: string): Promise<{ id: string; statu
     throw new Error('This follow-up is scheduled — it will be sent automatically at its scheduled time');
   }
 
-  // Re-verify the recipient genuinely opened the original campaign before
-  // sending. A follow-up must NEVER go to a non-opener — even via a queued row.
-  const { data: openedCheck, error: openedCheckError } = await supabase
+  // Re-verify the recipient matches the follow-up's stored audience before
+  // sending. An "opened" follow-up goes ONLY to openers; a "not_opened"
+  // follow-up goes ONLY to contacts who did NOT open/click the original
+  // (same rule as the Campaigns ActivityModal "Not Opened" tab).
+  const pendingNotOpenedAudience = await isNotOpenedAudience(String(pending.followup_campaign_id));
+  const audienceCheck = supabase
     .from('email_logs')
     .select('contact_id')
     .eq('campaign_id', pending.campaign_id)
-    .eq('contact_id', pending.contact_id)
-    .eq('opened', true)
-    .limit(1);
+    .eq('contact_id', pending.contact_id);
+  const openedCheck = pendingNotOpenedAudience
+    ? await audienceCheck.not('opened', 'is', true).not('clicked', 'is', true).limit(1)
+    : await audienceCheck.eq('opened', true).limit(1);
+  const openedCheckError = openedCheck.error;
   if (openedCheckError) {
-    throw new Error(`Failed to verify the recipient opened the original campaign: ${openedCheckError.message}`);
+    throw new Error(
+      `Failed to verify the recipient ${pendingNotOpenedAudience ? 'did not open' : 'opened'} the original campaign: ${openedCheckError.message}`
+    );
   }
-  if (!openedCheck || openedCheck.length === 0) {
-    throw new Error('Recipient did not open the original campaign — follow-up not sent');
+  if (!openedCheck.data || openedCheck.data.length === 0) {
+    throw new Error(
+      pendingNotOpenedAudience
+        ? 'Recipient opened the original campaign — not-opened follow-up not sent'
+        : 'Recipient did not open the original campaign — follow-up not sent'
+    );
   }
 
   // Load the follow-up campaign's attachments once and send them with this
@@ -1253,13 +1267,22 @@ async function handleSyncPending(): Promise<{ created: number; total_configs: nu
     // scheduled times — do not queue them as on-open pending rows here.
     if (await isScheduledFollowup(followupCampaignId)) continue;
 
-    const { data: openedLogs, error: openedError } = await supabase
+    // Materialize pending rows for the recipients of THIS config's stored
+    // audience. Opened configs queue openers; not-opened configs queue the
+    // contacts who did NOT open/click (same rule as the Campaigns ActivityModal
+    // "Not Opened" tab).
+    const syncNotOpenedAudience = await isNotOpenedAudience(followupCampaignId);
+    const audienceQuery = supabase
       .from('email_logs')
       .select('contact_id, email, opened_at')
-      .eq('campaign_id', originalCampaignId)
-      .eq('opened', true);
+      .eq('campaign_id', originalCampaignId);
+    const audienceResult = await (syncNotOpenedAudience
+      ? audienceQuery.not('opened', 'is', true).not('clicked', 'is', true)
+      : audienceQuery.eq('opened', true));
+    const openedLogs = audienceResult.data;
+    const openedError = audienceResult.error;
     if (openedError) {
-      logErr(`sync_pending: could not read openers for ${originalCampaignId}: ${openedError.message}`);
+      logErr(`sync_pending: could not read ${syncNotOpenedAudience ? 'non-openers' : 'openers'} for ${originalCampaignId}: ${openedError.message}`);
       continue;
     }
 

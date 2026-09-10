@@ -464,7 +464,12 @@ async function resolveContactsForCampaign(
       .from('email_logs')
       .select('contact_id, opened_at')
       .eq('campaign_id', sourceCampaignId);
-    const audienceLogs = notOpenedAudience ? await openedQuery.neq('opened', true) : await openedQuery.eq('opened', true);
+    // Same recipient rule as the Campaigns ActivityModal "Not Opened" tab:
+    // opened IS NOT TRUE AND clicked IS NOT TRUE (NULL opens count as
+    // not-opened). A `.neq('opened', true)` would wrongly drop NULL rows.
+    const audienceLogs = notOpenedAudience
+      ? await openedQuery.not('opened', 'is', true).not('clicked', 'is', true)
+      : await openedQuery.eq('opened', true);
     const openedError = audienceLogs.error;
     if (openedError) throw new Error(`Failed to fetch opened contacts: ${openedError.message}`);
     // Prefer the MOST RECENT open per contact so follow-up bookkeeping records

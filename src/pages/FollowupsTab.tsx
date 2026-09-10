@@ -27,9 +27,11 @@ import {
   fetchOpenedContacts,
   fetchOpenedContactsForAll,
   fetchAudienceCounts,
+  fetchNotOpenedCounts,
   sendSelectedFollowups,
   fetchPendingFollowups,
   sendPendingFollowup,
+  triggerNotOpenedFollowupSend,
 } from '../services/followupService'
 import { supabase } from '../supabase'
 import type {
@@ -222,6 +224,10 @@ export default function FollowupsTab({
   const [originalId, setOriginalId] = useState('')
   const [followupAudience, setFollowupAudience] = useState<FollowupAudience>('opened')
   const [audienceCounts, setAudienceCounts] = useState<{ opened: number; not_opened: number } | null>(null)
+  // Exact per-campaign "not opened" counts (campaign_id → count) that mirror
+  // the Campaigns ActivityModal "Not Opened" tab; used by the Original
+  // Campaign dropdown options.
+  const [notOpenedCounts, setNotOpenedCounts] = useState<Record<string, number>>({})
   const [followupMode, setFollowupMode] = useState<FollowupMode>('manual')
   const [reuseExisting, setReuseExisting] = useState(false)
   const [existingFollowupId, setExistingFollowupId] = useState('')
@@ -448,6 +454,20 @@ const DELAY_OPTIONS = [
       cancelled = true
     }
   }, [originalId, followupAudience, loadAllOpened])
+
+  // Per-campaign "not opened" counts for the Original Campaign dropdown —
+  // fetched from the same email_logs conditions as the Campaigns ActivityModal
+  // "Not Opened" tab, so the dropdown count always matches the activity view.
+  useEffect(() => {
+    const ids = (campaigns || []).map((c) => String(c.id || '')).filter(Boolean)
+    let cancelled = false
+    void fetchNotOpenedCounts(ids).then((counts) => {
+      if (!cancelled) setNotOpenedCounts(counts)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [campaigns])
 
   const refreshAll = useCallback(async () => {
     await Promise.all([loadConfigs(), loadPending(), loadAllOpened()])
@@ -776,6 +796,45 @@ const DELAY_OPTIONS = [
             : 'Follow-up configured.',
         'success',
       )
+
+      // NOT_OPENED follow-ups have no natural "open" event, so nothing in the
+      // existing pipeline can ever advance them past the draft record that
+      // creation just wrote. Continue straight into the existing sending/queue
+      // pipeline (identical recipients to the Campaigns ActivityModal → "Not
+      // Opened" tab): batched → queued for the scheduled-campaign-runner;
+      // otherwise sent now via the send-followup Edge Function. Skipped when a
+      // future campaign schedule was configured (delivered by the scheduler).
+      if (followupAudience === 'not_opened' && followupCampaignId && !enableSchedule) {
+        const triggered = await triggerNotOpenedFollowupSend({
+          originalCampaignId: result.original_campaign_id,
+          followupCampaignId,
+          sendInBatches,
+          batchSize,
+          firstBatchDelayHours: batchDelayHours,
+          subsequentBatchDelayHours: batchDelayHours,
+        })
+        if (triggered.mode === 'queued') {
+          onToast(
+            `Not-opened follow-up created and queued — ${triggered.queued_recipient_count} recipient(s), starting now. ` +
+              `Next batch at ${formatDateTime(triggered.next_batch_at)}.`,
+            'success',
+          )
+        } else if (triggered.mode === 'sent') {
+          const parts: string[] = []
+          if (triggered.sent > 0) parts.push(`${triggered.sent} sent`)
+          if (triggered.skipped > 0) parts.push(`${triggered.skipped} skipped`)
+          if (triggered.failed > 0) parts.push(`${triggered.failed} failed`)
+          onToast(
+            `Not-opened follow-up created and sent to ${triggered.sent} recipient(s)${parts.length > 0 ? ` (${parts.join(', ')})` : ''}.`,
+            'success',
+          )
+        } else {
+          onToast(
+            'Follow-up created, but no not-opened recipients were found to send to.',
+            'success',
+          )
+        }
+      }
 
       setCampaignName('')
       setSubjectLine('')
@@ -1653,7 +1712,7 @@ const DELAY_OPTIONS = [
                       const name = String(c.name || 'Unnamed')
                       const type = String(c.campaignType || c.type || '')
                       const opened = String(c.opened ?? 0)
-                      const notOpened = String((Number(c.deliveredCount ?? c.delivered_count ?? c.sent ?? 0) - Number(c.opened ?? 0)) || 0)
+                      const notOpened = String(notOpenedCounts[cid] ?? 0)
                       return (
                         <Fragment key={cid}>
                           <option value={`${cid}:opened`}>
