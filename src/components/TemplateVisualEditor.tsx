@@ -324,12 +324,12 @@ const EMAIL_EDITOR_BLOCKS = [
     },
   },
   {
-    id: 'te-section',
-    label: 'Section',
+    id: 'te-link',
+    label: 'Link',
     category: 'CONTENT',
-    media: '<span class="te-blk">▧</span>',
+    media: '<span class="te-blk">🔗</span>',
     content:
-      '<table data-te-role="section" role="presentation" cellpadding="0" cellspacing="0" width="100%" style="width: 100%; margin: 0 0 16px; background-color: #F8FAFC; border-radius: 8px;"><tr><td style="padding: 16px;"></td></tr></table>',
+      '<a data-te-role="link" href="#" style="font-family: Arial, Helvetica, sans-serif; font-size: 16px; color: #2563EB; text-decoration: underline; margin: 0 0 12px;">Click here</a>',
   },
   {
     id: 'te-columns-1',
@@ -467,7 +467,7 @@ function getDocumentHtml(editor: Editor): string {
   // clean — EXCEPT the explicit Container marker (`data-te-role="container"`),
   // which must survive so the container hierarchy is reconstructed on reload
   // and preserved verbatim on preview/send.
-  html = html.replace(/\s+data-te-role=(?:"(?!container|image-wrapper")[^"]*"|'(?!container|image-wrapper')[^']*')/gi, '');
+  html = html.replace(/\s+data-te-role=(?:"(?!container|image-wrapper|section|link")[^"]*"|'(?!container|image-wrapper|section|link')[^']*')/gi, '');
   return html;
 }
 
@@ -1105,6 +1105,11 @@ function isSectionLike(component: Component | null): boolean {
 
 function isButtonLike(component: Component | null): boolean {
   return getTag(component) === 'a';
+}
+
+/** True when the component is the dedicated "Link" content block. */
+function isLinkBlock(component: Component | null): boolean {
+  return component?.getAttributes()?.['data-te-role'] === 'link';
 }
 
 /** True when the component is (or wraps) the configurable "Social" block. */
@@ -2653,8 +2658,75 @@ function PropertiesPanel({ editor, component, tick, onError }: PropertiesPanelPr
     </div>
   );
 
+   // ── Link properties ──
+   if (isLinkBlock(component)) {
+     sections.push(
+       <div key="link">
+         <Field label="Link Text">
+           <TextInput
+             value={String(component.get('content') || '')}
+             onChange={(v) => component.set('content', v)}
+           />
+         </Field>
+         <Field label="URL">
+           <TextInput
+             value={String(component.getAttributes().href || '')}
+             onChange={(v) => setAttr('href', normalizeButtonUrl(v))}
+             placeholder="https://…"
+           />
+         </Field>
+         <Field label="Open in New Tab">
+           <ToggleBtn
+             active={component.getAttributes().target === '_blank'}
+             onClick={() => setAttr('target', component.getAttributes().target === '_blank' ? '' : '_blank')}
+           >
+             {component.getAttributes().target === '_blank' ? 'Yes' : 'No'}
+           </ToggleBtn>
+         </Field>
+         <Field label="Font Family">
+           <SelectInput
+             value={getStyle('font-family') || 'Arial, Helvetica, sans-serif'}
+             onChange={(v) => setStyle('font-family', v)}
+             options={FONT_FAMILIES}
+           />
+         </Field>
+         <Field label="Font Size">
+           <NumberInput
+             value={parseFloat(getStyle('font-size')) ? String(parseFloat(getStyle('font-size'))) : ''}
+             onChange={(v) => setStyle('font-size', v ? `${parseFloat(v) || 0}px` : '')}
+             min={8}
+             max={72}
+           />
+         </Field>
+         <Field label="Text Color">
+           <ColorInput
+             value={getStyle('color')}
+             onChange={(v) => {
+               if (isValidColorValue(v)) setStyle('color', v);
+             }}
+             onReset={() => setStyle('color', '#2563EB')}
+           />
+         </Field>
+         <Field label="Underline">
+           <ToggleBtn
+             active={getStyle('text-decoration').toLowerCase().includes('underline')}
+             onClick={() => setStyle('text-decoration', getStyle('text-decoration').toLowerCase().includes('underline') ? 'none' : 'underline')}
+           >
+             {getStyle('text-decoration').toLowerCase().includes('underline') ? 'On' : 'Off'}
+           </ToggleBtn>
+         </Field>
+         <Field label="Alignment">
+           <AlignmentButtons value={getStyle('text-align') || 'left'} onChange={setAlignment} />
+         </Field>
+         <Field label="Spacing">
+           <SpacingFields getStyle={getStyle} setStyle={setStyle} />
+         </Field>
+       </div>
+     );
+   }
+
    // ── Text properties ──
-   if (isTextLike(component) && !isButtonLike(component)) {
+   if (isTextLike(component) && !isButtonLike(component) && !isLinkBlock(component)) {
      const hasSimpleContent = (component.get('components')?.length ?? 0) <= 1;
      sections.push(
        <div key="text">
@@ -2871,7 +2943,7 @@ function PropertiesPanel({ editor, component, tick, onError }: PropertiesPanelPr
   }
 
   // ── Button / link properties ──
-  if (isButtonLike(component)) {
+  if (isButtonLike(component) && !isLinkBlock(component)) {
     sections.push(
       <div key="button">
         <Field label="Button Text">
