@@ -3133,9 +3133,11 @@ export const MOBILE_RESPONSIVE_CSS = `
     padding: 0 !important;
     overflow-x: hidden !important;
   }
-  /* Every table (including fixed-width content cards) is capped to the viewport */
-  table { max-width: 100% !important; }
-  td, th { max-width: 100% !important; word-wrap: break-word !important; overflow-wrap: break-word !important; }
+  /* Every table (including fixed-width content cards) is capped to the
+     viewport. Both width and max-width are set so HTML width attributes
+     (e.g. width="600") and inline style widths are fully overridden. */
+  table { width: 100% !important; max-width: 100% !important; min-width: 0 !important; table-layout: auto !important; }
+  td, th { width: auto !important; max-width: 100% !important; min-width: 0 !important; word-wrap: break-word !important; overflow-wrap: break-word !important; }
   /* Images scale down to the viewport while keeping their aspect ratio */
   img { max-width: 100% !important; height: auto !important; }
   /* Text blocks wrap instead of overflowing */
@@ -3223,6 +3225,11 @@ const EDITOR_CSS = `
 .te-editor .gjs-toolbar-item { font-size: 12px; padding: 0 6px; display: inline-flex; align-items: center; justify-content: center; min-width: 26px; }
 .te-editor .gjs-drop-indicator { background: #2563EB; height: 3px; border-radius: 3px; }
 .te-editor .gjs-com-badge { background: #2563EB; }
+
+/* Asset-manager upload-area image preview */
+.te-am-img-preview { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; padding: 20px; min-height: 120px; box-sizing: border-box; }
+.te-am-img-preview img { max-width: 100%; max-height: 180px; object-fit: contain; border-radius: 6px; background: #1a1a1a; }
+.te-am-img-preview-name { font-size: 12px; color: #94A3B8; word-break: break-all; text-align: center; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 `;
 
 /* ─── Main component ─────────────────────────────────────────────────────── */
@@ -3237,6 +3244,7 @@ const TemplateVisualEditor = forwardRef<TemplateVisualEditorHandle, TemplateVisu
     const deviceRef = useRef('desktop');
     const onChangeRef = useRef(onChange);
     const onErrorRef = useRef(onError);
+    const previewUrlRef = useRef<string | null>(null);
 
     const [editor, setEditor] = useState<Editor | null>(null);
     const [selected, setSelected] = useState<Component | null>(null);
@@ -3314,6 +3322,58 @@ const TemplateVisualEditor = forwardRef<TemplateVisualEditorHandle, TemplateVisu
             const input = ev.target as HTMLInputElement | null;
             const fileList = ev.dataTransfer ? ev.dataTransfer.files : input?.files;
             const files = Array.from(fileList ?? []).filter((f) => f.type.startsWith('image/'));
+
+            // Show image preview in the upload drop-area immediately
+            if (files.length > 0) {
+              // Revoke previous preview URL
+              if (previewUrlRef.current) {
+                URL.revokeObjectURL(previewUrlRef.current);
+                previewUrlRef.current = null;
+              }
+              const file = files[0];
+              const objectUrl = URL.createObjectURL(file);
+              previewUrlRef.current = objectUrl;
+
+              // Find the GrapesJS upload form and inject a preview
+              const uploadForm = document.querySelector(
+                '.gjs-am-file-uploader form'
+              ) as HTMLElement | null;
+              if (uploadForm) {
+                // Remove any existing preview
+                const old = uploadForm.querySelector('.te-am-img-preview');
+                if (old) old.remove();
+
+                // Hide the default "Drop files here…" title
+                const titleEl = uploadForm.querySelector(
+                  '[id$="title"]'
+                ) as HTMLElement | null;
+                if (titleEl) titleEl.style.display = 'none';
+
+                // Build the preview container
+                const wrap = document.createElement('div');
+                wrap.className = 'te-am-img-preview';
+
+                const img = document.createElement('img');
+                img.src = objectUrl;
+                wrap.appendChild(img);
+
+                const name = document.createElement('span');
+                name.className = 'te-am-img-preview-name';
+                name.textContent = file.name;
+                wrap.appendChild(name);
+
+                // Insert before the hidden file input
+                const fileInput = uploadForm.querySelector(
+                  'input[type="file"]'
+                );
+                if (fileInput) {
+                  uploadForm.insertBefore(wrap, fileInput);
+                } else {
+                  uploadForm.appendChild(wrap);
+                }
+              }
+            }
+
             const results: { src: string }[] = [];
             for (const file of files) {
               try {
@@ -3749,6 +3809,11 @@ const TemplateVisualEditor = forwardRef<TemplateVisualEditorHandle, TemplateVisu
       return () => {
         destroyedRef.current = true;
         if (timerRef.current) clearTimeout(timerRef.current);
+        // Revoke any lingering image preview object URL
+        if (previewUrlRef.current) {
+          URL.revokeObjectURL(previewUrlRef.current);
+          previewUrlRef.current = null;
+        }
         canvas.removeEventListener('scroll', onCanvasScroll);
         if (editorRef.current) {
           onChangeRef.current(getDocumentHtml(editorRef.current));
@@ -3784,7 +3849,7 @@ return (
             <button
               type="button"
               onClick={() => switchDevice('mobile')}
-              title="Switch the canvas to a mobile width (390px)"
+              title="Switch the canvas to a mobile width (375px)"
               style={deviceTab(device === 'mobile')}
             >
               Mobile
