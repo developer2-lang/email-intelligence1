@@ -3227,11 +3227,11 @@ const EDITOR_CSS = `
 .te-devices { display: flex; align-items: center; gap: 6px; }
 .te-hint { font-size: 11.5px; color: #94A3B8; }
 .te-body { display: grid; grid-template-columns: minmax(0, 92px) minmax(0, 1fr) minmax(0, 320px); grid-template-rows: minmax(0, 1fr); min-width: 0; max-width: 100%; min-height: 560px; height: calc(100vh - 360px); overflow: hidden; }
-.te-blocks { grid-column: 1; min-width: 0; border-right: 1px solid #E2E8F0; display: flex; flex-direction: column; align-items: flex-start; background: #FFFFFF; }
+.te-blocks { grid-column: 1; min-width: 0; border-right: 1px solid #E2E8F0; display: flex; flex-direction: column; align-items: flex-start; background: #000000; }
 .te-pane-head { padding: 11px 14px; font-size: 10.5px; font-weight: 700; letter-spacing: 0.1em; color: #64748B; border-bottom: 1px solid #E2E8F0; text-transform: uppercase; }
 .te-blocks-head { padding: 5px 4px 3px; flex: none; font-size: 10px; font-weight: 800; letter-spacing: 0.16em; color: #0F172A; text-transform: uppercase; cursor: pointer; display: flex; align-items: center; justify-content: flex-start; gap: 5px; user-select: none; white-space: nowrap; }
 .te-blocks-head .te-blocks-arrow { font-size: 8px; line-height: 1; color: #64748B; }
-.te-blocks-scroll { flex: 1; overflow-y: auto; margin: 0; padding: 2px; background: #FFFFFF; border-radius: 4px; box-sizing: border-box; scrollbar-width: thin; scrollbar-color: #D1D5DB transparent; }
+.te-blocks-scroll { flex: 1; overflow-y: auto; margin: 0; padding: 2px; background: #000000; border-radius: 4px; box-sizing: border-box; scrollbar-width: thin; scrollbar-color: #D1D5DB transparent; }
 .te-blocks-scroll::-webkit-scrollbar { width: 5px; }
 .te-blocks-scroll::-webkit-scrollbar-thumb { background: #D1D5DB; border-radius: 8px; }
 .te-blocks-scroll::-webkit-scrollbar-track { background: transparent; }
@@ -3254,12 +3254,12 @@ const EDITOR_CSS = `
    carrying classes "gjs-blocks-cs gjs-one-bg gjs-two-color". The gjs-one-bg
    class from grapes.min.css paints it var(--gjs-primary-color) which resolves
    to #444 (dark gray) and is the visible dark panel behind the CONTENT items.
-   Force every wrapper/container in the CONTENT panel to white/transparent so
-   no dark background can survive anywhere (including inline styles). */
+   Force every wrapper/container in the CONTENT panel to black/transparent so
+   no light background can survive anywhere (including inline styles). */
 .te-blocks,
 .te-blocks-scroll {
-  background: #FFFFFF !important;
-  background-color: #FFFFFF !important;
+  background: #000000 !important;
+  background-color: #000000 !important;
 }
 .te-blocks-scroll .gjs-blocks-cs,
 .te-blocks-scroll .gjs-one-bg,
