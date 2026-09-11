@@ -3226,19 +3226,19 @@ const EDITOR_CSS = `
 .te-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; padding: 10px 14px; border-bottom: 1px solid #E2E8F0; background: #F8FAFC; }
 .te-devices { display: flex; align-items: center; gap: 6px; }
 .te-hint { font-size: 11.5px; color: #94A3B8; }
-.te-body { display: grid; grid-template-columns: minmax(0, 400px) minmax(0, 1fr) minmax(0, 320px); grid-template-rows: minmax(0, 1fr); min-width: 0; max-width: 100%; min-height: 560px; height: calc(100vh - 360px); overflow: hidden; }
-.te-blocks { grid-column: 1; min-width: 0; border-right: 1px solid #E2E8F0; display: flex; flex-direction: column; background: #FFFFFF; }
+.te-body { display: grid; grid-template-columns: minmax(0, 92px) minmax(0, 1fr) minmax(0, 320px); grid-template-rows: minmax(0, 1fr); min-width: 0; max-width: 100%; min-height: 560px; height: calc(100vh - 360px); overflow: hidden; }
+.te-blocks { grid-column: 1; min-width: 0; border-right: 1px solid #E2E8F0; display: flex; flex-direction: column; align-items: flex-start; background: #FFFFFF; }
 .te-pane-head { padding: 11px 14px; font-size: 10.5px; font-weight: 700; letter-spacing: 0.1em; color: #64748B; border-bottom: 1px solid #E2E8F0; text-transform: uppercase; }
-.te-blocks-head { padding: 16px 18px 12px; font-size: 11px; font-weight: 800; letter-spacing: 0.16em; color: #0F172A; text-transform: uppercase; cursor: pointer; display: flex; align-items: center; gap: 8px; user-select: none; }
+.te-blocks-head { padding: 5px 4px 3px; flex: none; font-size: 10px; font-weight: 800; letter-spacing: 0.16em; color: #0F172A; text-transform: uppercase; cursor: pointer; display: flex; align-items: center; justify-content: flex-start; gap: 5px; user-select: none; white-space: nowrap; }
 .te-blocks-head .te-blocks-arrow { font-size: 8px; line-height: 1; color: #64748B; }
-.te-blocks-scroll { flex: 1; overflow-y: auto; margin: 0 12px 12px; padding: 14px; background: #3A3A3A; border-radius: 14px; box-sizing: border-box; scrollbar-width: thin; scrollbar-color: rgba(255,255,255,0.3) transparent; }
-.te-blocks-scroll::-webkit-scrollbar { width: 8px; }
-.te-blocks-scroll::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.25); border-radius: 8px; }
+.te-blocks-scroll { flex: 1; overflow-y: auto; margin: 0; padding: 2px; background: #FFFFFF; border-radius: 4px; box-sizing: border-box; scrollbar-width: thin; scrollbar-color: #D1D5DB transparent; }
+.te-blocks-scroll::-webkit-scrollbar { width: 5px; }
+.te-blocks-scroll::-webkit-scrollbar-thumb { background: #D1D5DB; border-radius: 8px; }
 .te-blocks-scroll::-webkit-scrollbar-track { background: transparent; }
 .te-canvas-wrap { grid-column: 2; min-width: 0; min-height: 0; position: relative; background: #F3F4F6; overflow: hidden; display: flex; justify-content: center; align-items: stretch; }
 .te-canvas { flex: 1 1 auto; width: 100%; height: 100%; min-width: 0; min-height: 0; display: flex; justify-content: center; align-items: flex-start; overflow: auto; }
 .te-props { grid-column: 3; min-width: 0; border-left: 1px solid #E2E8F0; overflow-y: auto; background: #FFFFFF; }
-.te-blk { display: inline-flex; align-items: center; justify-content: center; width: 46px; height: 46px; background: #E4EDFF; color: #1D4ED8; border-radius: 13px; font-weight: 700; font-size: 18px; font-family: Arial, sans-serif; }
+.te-blk { display: inline-flex; align-items: center; justify-content: center; width: 32px; height: 32px; background: #E4EDFF; color: #1D4ED8; border-radius: 8px; font-weight: 700; font-size: 14px; font-family: Arial, sans-serif; }
 .te-empty-hint { position: absolute; top: 12px; left: 50%; transform: translateX(-50%); z-index: 5; pointer-events: none; display: flex; align-items: center; gap: 8px; padding: 8px 16px; border-radius: 999px; background: rgba(15,23,42,0.72); color: #FFFFFF; font-size: 12.5px; font-weight: 600; box-shadow: 0 2px 10px rgba(15,23,42,0.25); white-space: nowrap; }
 .te-empty-hint .te-empty-dot { width: 8px; height: 8px; border-radius: 50%; background: #60A5FA; animation: tePulse 1.6s ease-in-out infinite; }
 @keyframes tePulse { 0%, 100% { opacity: 0.35; } 50% { opacity: 1; } }
@@ -3250,24 +3250,42 @@ const EDITOR_CSS = `
 .te-editor.te-fs .te-body { flex: 1 1 auto; height: auto; min-height: 0; }
 .te-editor.te-fs .te-head { border-radius: 0; }
 
-.te-blocks-scroll .gjs-block-categories { margin: 0; }
-.te-blocks-scroll .gjs-block-category { margin: 0; background: transparent; }
+/* GrapesJS's BlocksView renders the whole block list inside an outer wrapper
+   carrying classes "gjs-blocks-cs gjs-one-bg gjs-two-color". The gjs-one-bg
+   class from grapes.min.css paints it var(--gjs-primary-color) which resolves
+   to #444 (dark gray) and is the visible dark panel behind the CONTENT items.
+   Force every wrapper/container in the CONTENT panel to white/transparent so
+   no dark background can survive anywhere (including inline styles). */
+.te-blocks,
+.te-blocks-scroll {
+  background: #FFFFFF !important;
+  background-color: #FFFFFF !important;
+}
+.te-blocks-scroll .gjs-blocks-cs,
+.te-blocks-scroll .gjs-one-bg,
+.te-blocks-scroll .gjs-one-bg .gjs-block-categories,
+.te-blocks-scroll .gjs-blocks-no-cat,
+.te-blocks-scroll .gjs-block-categories { margin: 0; padding: 0; background: transparent !important; background-color: transparent !important; display: flex; flex-direction: column; align-items: flex-start; }
+.te-blocks-scroll .gjs-two-color { color: inherit !important; }
+.te-blocks-scroll .gjs-block-category { margin: 0; background: transparent !important; background-color: transparent !important; display: flex; flex-direction: column; align-items: flex-start; }
 .te-blocks-scroll .gjs-block-category.gjs-open { border-bottom: none; }
-.te-blocks-scroll .gjs-block-category .gjs-title { background: transparent; border: none; padding: 0 2px 14px; margin: 0; font-size: 11px; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase; color: #FFFFFF; cursor: pointer; display: flex; align-items: center; gap: 6px; user-select: none; }
-.te-blocks-scroll .gjs-block-category .gjs-title .gjs-caret-icon { font-family: Arial, sans-serif; font-style: normal; font-size: 8px; line-height: 1; margin: 0; color: #A8B1C0; }
-.te-blocks-scroll .gjs-block-category.gjs-open .gjs-title .gjs-caret-icon::before { content: '▼'; }
-.te-blocks-scroll .gjs-block-category:not(.gjs-open) .gjs-title .gjs-caret-icon::before { content: '▶'; }
-.te-blocks-scroll .gjs-blocks-c { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; justify-content: initial; }
-.te-blocks-scroll .gjs-block { width: 100%; min-width: 0; min-height: 116px; margin: 0; padding: 14px 8px 12px; border: 1px solid #E5E7EB; border-radius: 12px; background: #FFFFFF; box-sizing: border-box; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; cursor: grab; box-shadow: none; transition: border-color 0.15s ease, box-shadow 0.15s ease, transform 0.15s ease; }
+/* The custom .te-blocks-head already renders the "▼ CONTENT" title above the
+   list. GrapesJS renders an identical category title inside the scroll area
+   (.gjs-title), so it is a redundant duplicate label — hide it and keep the
+   category container (the blocks themselves still render inside it). */
+.te-blocks-scroll .gjs-block-category .gjs-title { display: none; }
+.te-blocks-scroll .gjs-block-category .gjs-title .gjs-caret-icon { display: none; }
+.te-blocks-scroll .gjs-blocks-c { display: flex !important; flex-direction: column !important; align-items: flex-start !important; justify-content: flex-start !important; gap: 4px; }
+.te-blocks-scroll .gjs-block { width: 74px; height: 74px; flex: 0 0 auto; min-width: 0; margin: 0; padding: 6px 4px; border: 1px solid #E5E7EB; border-radius: 8px; background: #FFFFFF !important; background-color: #FFFFFF !important; box-sizing: border-box; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; cursor: grab; box-shadow: none; transition: border-color 0.15s ease, box-shadow 0.15s ease, transform 0.15s ease; }
 .te-blocks-scroll .gjs-block:hover { border-color: #93C5FD; box-shadow: 0 3px 10px rgba(37, 99, 235, 0.16); }
 .te-blocks-scroll .gjs-block:active { border: 2px solid #2563EB; cursor: grabbing; }
 .te-blocks-scroll .gjs-block.gjs-bdrag { border: 2px solid #2563EB; cursor: grabbing; }
-.te-blocks-scroll .gjs-block__media { margin: 0; pointer-events: none; display: flex; align-items: center; justify-content: center; }
-.te-blocks-scroll .gjs-block-svg svg { width: 20px; height: 20px; }
-.te-blocks-scroll .gjs-block-label { font-size: 11.5px; font-weight: 600; color: #1F2937; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; line-height: 1.3; }
+.te-blocks-scroll .gjs-block__media { margin: 0; padding: 0; pointer-events: none; display: flex; align-items: center; justify-content: center; flex: none; width: 100%; }
+.te-blocks-scroll .gjs-block-svg svg { width: 22px; height: 22px; }
+.te-blocks-scroll .gjs-block-label { font-size: 9.5px; font-weight: 600; color: #1F2937; width: 100%; max-width: 100%; text-align: center; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; line-height: 1.15; }
 @media (max-width: 1400px) {
-  .te-body { grid-template-columns: minmax(0, 320px) minmax(0, 1fr) minmax(0, 320px); }
-  .te-blocks-scroll { margin: 0 10px 10px; padding: 12px; }
+  .te-body { grid-template-columns: minmax(0, 92px) minmax(0, 1fr) minmax(0, 320px); }
+  .te-blocks-scroll { margin: 0; padding: 3px; }
 }
 
 /* Collapsed CONTENT panel: the left rail shrinks to just the heading + arrow
@@ -3280,7 +3298,7 @@ const EDITOR_CSS = `
 /* Collapsed PROPERTIES panel: the right rail shrinks to just the heading +
    arrow width instead of hiding the children inside a fixed-width column, so
    the empty white panel disappears and the canvas expands and stays centered. */
-.te-editor.te-props-collapsed .te-body { grid-template-columns: minmax(0, 400px) minmax(0, 1fr) auto; }
+.te-editor.te-props-collapsed .te-body { grid-template-columns: minmax(0, 260px) minmax(0, 1fr) auto; }
 .te-editor.te-props-collapsed .te-props { border-left: 1px solid #E2E8F0; }
 .te-editor.te-props-collapsed .te-pane-head { padding: 14px 6px; flex-direction: column; gap: 6px; align-items: center; text-align: center; }
 
@@ -3325,8 +3343,97 @@ const EDITOR_CSS = `
 }
 .te-editor .gjs-selected { outline: 2px solid #2563EB !important; outline-offset: -2px; }
 .te-editor .gjs-highlighter { outline: 1px dashed #60A5FA; }
-.te-editor .gjs-toolbar { border-radius: 6px; }
-.te-editor .gjs-toolbar-item { font-size: 12px; padding: 0 6px; display: inline-flex; align-items: center; justify-content: center; min-width: 26px; }
+/* ── Enlarged image-editing toolbar ───────────────────────────────────── */
+.te-editor .gjs-toolbar {
+  display: inline-flex !important;
+  align-items: center !important;
+  gap: 4px !important;
+  padding: 6px 8px !important;
+  border-radius: 10px !important;
+  background: #1E293B !important;
+  box-shadow: 0 4px 16px rgba(15,23,42,0.32), 0 0 0 1px rgba(255,255,255,0.08) !important;
+  border: none !important;
+  min-height: 44px !important;
+  white-space: nowrap !important;
+  z-index: 200 !important;
+}
+.te-editor .gjs-toolbar-item {
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  min-width: 36px !important;
+  min-height: 34px !important;
+  padding: 5px 10px !important;
+  font-size: 15px !important;
+  font-weight: 600 !important;
+  color: #E2E8F0 !important;
+  background: rgba(255,255,255,0.07) !important;
+  border: 1px solid rgba(255,255,255,0.10) !important;
+  border-radius: 7px !important;
+  cursor: pointer !important;
+  transition: background 0.12s ease, border-color 0.12s ease, transform 0.1s ease !important;
+  text-decoration: none !important;
+  line-height: 1 !important;
+}
+.te-editor .gjs-toolbar-item:hover {
+  background: rgba(255,255,255,0.16) !important;
+  border-color: rgba(255,255,255,0.22) !important;
+  transform: translateY(-1px) !important;
+}
+.te-editor .gjs-toolbar-item:active {
+  transform: scale(0.96) !important;
+}
+.te-editor .gjs-toolbar-item i,
+.te-editor .gjs-toolbar-item .fa,
+.te-editor .gjs-toolbar-item [class*="fa "] {
+  font-size: 15px !important;
+  width: 18px !important;
+  height: 18px !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+}
+/* Text labels inside toolbar items (e.g. the "Replace" button) */
+.te-editor .gjs-toolbar-item span {
+  font-size: 14px !important;
+  font-weight: 700 !important;
+  letter-spacing: 0.02em !important;
+  color: inherit !important;
+}
+/* Smaller gap before the delete button (visual separation) */
+.te-editor .gjs-toolbar-item:last-child {
+  margin-left: 2px !important;
+}
+/* Remove any default GrapesJS toolbar background/border that fights ours */
+.te-editor .gjs-toolbar > * {
+  margin: 0 !important;
+  padding: 0 !important;
+}
+/* Responsive: slightly smaller on narrow viewports */
+@media (max-width: 900px) {
+  .te-editor .gjs-toolbar {
+    min-height: 40px !important;
+    padding: 4px 6px !important;
+    gap: 3px !important;
+  }
+  .te-editor .gjs-toolbar-item {
+    min-width: 32px !important;
+    min-height: 30px !important;
+    padding: 4px 8px !important;
+    font-size: 14px !important;
+  }
+  .te-editor .gjs-toolbar-item i,
+  .te-editor .gjs-toolbar-item .fa,
+  .te-editor .gjs-toolbar-item [class*="fa "] {
+    font-size: 14px !important;
+    width: 16px !important;
+    height: 16px !important;
+  }
+  .te-editor .gjs-toolbar-item.gjs-toolbar-item--text {
+    font-size: 12px !important;
+    padding: 4px 10px !important;
+  }
+}
 .te-editor .gjs-drop-indicator { background: #2563EB; height: 3px; border-radius: 3px; }
 .te-editor .gjs-com-badge { background: #2563EB; }
 
