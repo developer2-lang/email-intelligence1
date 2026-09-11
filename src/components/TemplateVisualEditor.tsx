@@ -3288,26 +3288,33 @@ const EDITOR_CSS = `
   .te-blocks-scroll { margin: 0; padding: 3px; }
 }
 
-/* Collapsed CONTENT panel: the left rail shrinks to just the heading + arrow
-   width instead of hiding the children inside a fixed-width column, so the
-   empty white panel disappears and the canvas expands and stays centered. */
+/* Collapsed CONTENT panel: takes ZERO layout space. The column becomes "auto"
+   so it shrinks to exactly the header width; the block list disappears and the
+   canvas expands into the freed space. The collapsed rail is painted with the
+   EXACT canvas backdrop color (#F3F4F6, same as .te-canvas-wrap) instead of
+   transparent: grid cells still stretch the full row height, so a transparent
+   background would let the white .te-editor behind it show through as a leftover
+   white vertical strip. Matching gray makes the rail invisible against the
+   workspace — only the slim "▲ CONTENT" header remains, no white anywhere. */
 .te-editor.te-content-collapsed .te-body { grid-template-columns: auto minmax(0, 1fr) minmax(0, 320px); }
-.te-editor.te-content-collapsed .te-blocks { border-right: 1px solid #E2E8F0; }
-.te-editor.te-content-collapsed .te-blocks-head { padding: 14px 6px; flex-direction: column; gap: 6px; align-items: center; text-align: center; }
+.te-editor.te-content-collapsed .te-blocks { border-right: none; background: #F3F4F6 !important; background-color: #F3F4F6 !important; }
+.te-editor.te-content-collapsed .te-blocks-head { flex-direction: row; gap: 4px; padding: 6px 8px; align-items: center; justify-content: center; text-align: left; }
 
-/* Collapsed PROPERTIES panel: the right rail shrinks to just the heading +
-   arrow width instead of hiding the children inside a fixed-width column, so
-   the empty white panel disappears and the canvas expands and stays centered. */
-.te-editor.te-props-collapsed .te-body { grid-template-columns: minmax(0, 260px) minmax(0, 1fr) auto; }
-.te-editor.te-props-collapsed .te-props { border-left: 1px solid #E2E8F0; }
-.te-editor.te-props-collapsed .te-pane-head { padding: 14px 6px; flex-direction: column; gap: 6px; align-items: center; text-align: center; }
+/* Collapsed PROPERTIES panel: identical shrink-to-header behavior on the right.
+   The panel and its (unmounted) content disappear; the rail is painted with the
+   canvas backdrop color (#F3F4F6) so no white column can show through, leaving
+   only the slim "▲ PROPERTIES" header while the canvas expands into the freed
+   space. */
+.te-editor.te-props-collapsed .te-body { grid-template-columns: minmax(0, 92px) minmax(0, 1fr) auto; }
+.te-editor.te-props-collapsed .te-props { border-left: none; background: #F3F4F6 !important; background-color: #F3F4F6 !important; }
+.te-editor.te-props-collapsed .te-pane-head { flex-direction: row; gap: 6px; padding: 6px 8px; align-items: center; justify-content: center; text-align: left; background: #F3F4F6 !important; background-color: #F3F4F6 !important; border-bottom: none; }
 
 /* Both CONTENT and PROPERTIES collapsed: only the two slim headers remain and
    the center canvas fills the full row between them. */
 .te-editor.te-content-collapsed.te-props-collapsed .te-body { grid-template-columns: auto minmax(0, 1fr) auto; }
 
 @media (max-width: 1400px) {
-  .te-editor.te-props-collapsed .te-body { grid-template-columns: minmax(0, 320px) minmax(0, 1fr) auto; }
+  .te-editor.te-props-collapsed .te-body { grid-template-columns: minmax(0, 92px) minmax(0, 1fr) auto; }
   .te-editor.te-content-collapsed.te-props-collapsed .te-body { grid-template-columns: auto minmax(0, 1fr) auto; }
 }
 
