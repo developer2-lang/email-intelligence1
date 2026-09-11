@@ -3222,12 +3222,12 @@ export const MOBILE_RESPONSIVE_CSS = `
 `;
 
 const EDITOR_CSS = `
-.te-editor { display: flex; flex-direction: column; border: 1px solid #E2E8F0; border-radius: 14px; overflow: hidden; background: #FFFFFF; box-shadow: 0 1px 3px rgba(15,23,42,0.06); }
+.te-editor { display: flex; flex-direction: column; border: 1px solid #E2E8F0; border-radius: 14px; overflow: hidden; background: #FFFFFF; box-shadow: 0 1px 3px rgba(15,23,42,0.06); max-width: 100%; min-width: 0; }
 .te-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; padding: 10px 14px; border-bottom: 1px solid #E2E8F0; background: #F8FAFC; }
 .te-devices { display: flex; align-items: center; gap: 6px; }
 .te-hint { font-size: 11.5px; color: #94A3B8; }
-.te-body { display: flex; min-height: 560px; height: calc(100vh - 360px); }
-.te-blocks { width: 400px; flex-shrink: 0; border-right: 1px solid #E2E8F0; display: flex; flex-direction: column; background: #FFFFFF; }
+.te-body { display: grid; grid-template-columns: minmax(0, 400px) minmax(0, 1fr) minmax(0, 320px); grid-template-rows: minmax(0, 1fr); min-width: 0; max-width: 100%; min-height: 560px; height: calc(100vh - 360px); overflow: hidden; }
+.te-blocks { grid-column: 1; min-width: 0; border-right: 1px solid #E2E8F0; display: flex; flex-direction: column; background: #FFFFFF; }
 .te-pane-head { padding: 11px 14px; font-size: 10.5px; font-weight: 700; letter-spacing: 0.1em; color: #64748B; border-bottom: 1px solid #E2E8F0; text-transform: uppercase; }
 .te-blocks-head { padding: 16px 18px 12px; font-size: 11px; font-weight: 800; letter-spacing: 0.16em; color: #0F172A; text-transform: uppercase; cursor: pointer; display: flex; align-items: center; gap: 8px; user-select: none; }
 .te-blocks-head .te-blocks-arrow { font-size: 8px; line-height: 1; color: #64748B; }
@@ -3235,9 +3235,9 @@ const EDITOR_CSS = `
 .te-blocks-scroll::-webkit-scrollbar { width: 8px; }
 .te-blocks-scroll::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.25); border-radius: 8px; }
 .te-blocks-scroll::-webkit-scrollbar-track { background: transparent; }
-.te-canvas-wrap { flex: 1; min-width: 0; min-height: 0; position: relative; background: #F3F4F6; overflow: hidden; }
-.te-canvas { position: absolute; inset: 0; display: flex; justify-content: center; align-items: flex-start; overflow: auto; }
-.te-props { width: 320px; flex-shrink: 0; border-left: 1px solid #E2E8F0; overflow-y: auto; background: #FFFFFF; }
+.te-canvas-wrap { grid-column: 2; min-width: 0; min-height: 0; position: relative; background: #F3F4F6; overflow: hidden; display: flex; justify-content: center; align-items: stretch; }
+.te-canvas { flex: 1 1 auto; width: 100%; height: 100%; min-width: 0; min-height: 0; display: flex; justify-content: center; align-items: flex-start; overflow: auto; }
+.te-props { grid-column: 3; min-width: 0; border-left: 1px solid #E2E8F0; overflow-y: auto; background: #FFFFFF; }
 .te-blk { display: inline-flex; align-items: center; justify-content: center; width: 46px; height: 46px; background: #E4EDFF; color: #1D4ED8; border-radius: 13px; font-weight: 700; font-size: 18px; font-family: Arial, sans-serif; }
 .te-empty-hint { position: absolute; top: 12px; left: 50%; transform: translateX(-50%); z-index: 5; pointer-events: none; display: flex; align-items: center; gap: 8px; padding: 8px 16px; border-radius: 999px; background: rgba(15,23,42,0.72); color: #FFFFFF; font-size: 12.5px; font-weight: 600; box-shadow: 0 2px 10px rgba(15,23,42,0.25); white-space: nowrap; }
 .te-empty-hint .te-empty-dot { width: 8px; height: 8px; border-radius: 50%; background: #60A5FA; animation: tePulse 1.6s ease-in-out infinite; }
@@ -3257,7 +3257,7 @@ const EDITOR_CSS = `
 .te-blocks-scroll .gjs-block-category .gjs-title .gjs-caret-icon { font-family: Arial, sans-serif; font-style: normal; font-size: 8px; line-height: 1; margin: 0; color: #A8B1C0; }
 .te-blocks-scroll .gjs-block-category.gjs-open .gjs-title .gjs-caret-icon::before { content: '▼'; }
 .te-blocks-scroll .gjs-block-category:not(.gjs-open) .gjs-title .gjs-caret-icon::before { content: '▶'; }
-.te-blocks-scroll .gjs-blocks-c { display: grid; grid-template-columns: repeat(auto-fill, minmax(104px, 1fr)); gap: 12px; justify-content: initial; }
+.te-blocks-scroll .gjs-blocks-c { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; justify-content: initial; }
 .te-blocks-scroll .gjs-block { width: 100%; min-width: 0; min-height: 116px; margin: 0; padding: 14px 8px 12px; border: 1px solid #E5E7EB; border-radius: 12px; background: #FFFFFF; box-sizing: border-box; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; cursor: grab; box-shadow: none; transition: border-color 0.15s ease, box-shadow 0.15s ease, transform 0.15s ease; }
 .te-blocks-scroll .gjs-block:hover { border-color: #93C5FD; box-shadow: 0 3px 10px rgba(37, 99, 235, 0.16); }
 .te-blocks-scroll .gjs-block:active { border: 2px solid #2563EB; cursor: grabbing; }
@@ -3266,14 +3266,46 @@ const EDITOR_CSS = `
 .te-blocks-scroll .gjs-block-svg svg { width: 20px; height: 20px; }
 .te-blocks-scroll .gjs-block-label { font-size: 11.5px; font-weight: 600; color: #1F2937; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; line-height: 1.3; }
 @media (max-width: 1400px) {
-  .te-blocks { width: 320px; }
+  .te-body { grid-template-columns: minmax(0, 320px) minmax(0, 1fr) minmax(0, 320px); }
   .te-blocks-scroll { margin: 0 10px 10px; padding: 12px; }
+}
+
+/* Collapsed CONTENT panel: the left rail shrinks to just the heading + arrow
+   width instead of hiding the children inside a fixed-width column, so the
+   empty white panel disappears and the canvas expands and stays centered. */
+.te-editor.te-content-collapsed .te-body { grid-template-columns: auto minmax(0, 1fr) minmax(0, 320px); }
+.te-editor.te-content-collapsed .te-blocks { border-right: 1px solid #E2E8F0; }
+.te-editor.te-content-collapsed .te-blocks-head { padding: 14px 6px; flex-direction: column; gap: 6px; align-items: center; text-align: center; }
+
+/* Collapsed PROPERTIES panel: the right rail shrinks to just the heading +
+   arrow width instead of hiding the children inside a fixed-width column, so
+   the empty white panel disappears and the canvas expands and stays centered. */
+.te-editor.te-props-collapsed .te-body { grid-template-columns: minmax(0, 400px) minmax(0, 1fr) auto; }
+.te-editor.te-props-collapsed .te-props { border-left: 1px solid #E2E8F0; }
+.te-editor.te-props-collapsed .te-pane-head { padding: 14px 6px; flex-direction: column; gap: 6px; align-items: center; text-align: center; }
+
+/* Both CONTENT and PROPERTIES collapsed: only the two slim headers remain and
+   the center canvas fills the full row between them. */
+.te-editor.te-content-collapsed.te-props-collapsed .te-body { grid-template-columns: auto minmax(0, 1fr) auto; }
+
+@media (max-width: 1400px) {
+  .te-editor.te-props-collapsed .te-body { grid-template-columns: minmax(0, 320px) minmax(0, 1fr) auto; }
+  .te-editor.te-content-collapsed.te-props-collapsed .te-body { grid-template-columns: auto minmax(0, 1fr) auto; }
 }
 
 .te-editor .gjs-pn-panel, .te-editor .gjs-pn-views-container { display: none; }
 .te-editor .gjs-cv-canvas { position: relative; width: 100%; height: auto; top: 0; left: 0; min-width: 0; overflow: visible; }
 .te-editor .gjs-cv-canvas__frames { position: static; width: 100%; height: auto; overflow: visible; }
 .te-editor .gjs-frame-wrapper { position: relative; height: auto; margin: 26px auto 40px; box-shadow: 0 4px 18px rgba(15,23,42,0.12); border-radius: 4px; }
+/* Never animate the frame size: GrapesJS adds the frame-wrapper--anim class
+   (and the frame itself carries a transition) every time the device width or
+   the auto-height changes. Those 0.35s width/height animations turn a desktop
+   to mobile switch into a shaking, re-centering wobble while the auto-height
+   ResizeObserver keeps reflowing the email mid-transition. The Desktop/Mobile
+   switch must be an immediate, stable layout change. */
+.te-editor .gjs-frame-wrapper,
+.te-editor .gjs-frame-wrapper--anim,
+.te-editor .gjs-frame { transition: none !important; }
 /* Phone-like frame for the mobile canvas: rounded bezel + subtle screen
    inset so the 375px preview reads as a real device, not a shrunk desktop. */
 .te-editor.te-device-mobile .gjs-frame-wrapper {
@@ -3304,6 +3336,14 @@ const EDITOR_CSS = `
 .te-am-img-preview-name { font-size: 12px; color: #94A3B8; word-break: break-all; text-align: center; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 `;
 
+// [TEMP-DIAG REMOVE] Helper used by the mobile resize diagnostic sampler.
+function firstDiff(prev: Record<string, number | string>, cur: Record<string, number | string>): boolean {
+  for (const k of Object.keys(cur)) {
+    if (String(prev[k]) !== String(cur[k])) return true;
+  }
+  return false;
+}
+
 /* ─── Main component ─────────────────────────────────────────────────────── */
 
 const TemplateVisualEditor = forwardRef<TemplateVisualEditorHandle, TemplateVisualEditorProps>(
@@ -3324,6 +3364,7 @@ const TemplateVisualEditor = forwardRef<TemplateVisualEditorHandle, TemplateVisu
     const [device, setDevice] = useState('desktop');
     const [isEmpty, setIsEmpty] = useState(true);
     const [contentCollapsed, setContentCollapsed] = useState(false);
+    const [propsCollapsed, setPropsCollapsed] = useState(true);
 
     useEffect(() => {
       onChangeRef.current = onChange;
@@ -3905,8 +3946,70 @@ const TemplateVisualEditor = forwardRef<TemplateVisualEditorHandle, TemplateVisu
       editorRef.current?.setDevice(id);
     }, []);
 
+    // [TEMP-DIAG REMOVE] When Mobile is selected, sample the frame metrics every
+    // animation frame for ~3.5s and log every change. Goal: capture the exact
+    // alternating values of the mobile resize loop (e.g. 375 -> 530 -> 375).
+    useEffect(() => {
+      if (device !== 'mobile' || !editor) return;
+      const ed = editorRef.current;
+      if (!ed) return;
+      let raf = 0;
+      let running = true;
+      let prev: Record<string, number | string> = {};
+      let changes = 0;
+      let start = performance.now();
+      let lastA = '';
+      let lastB = '';
+      const tick = () => {
+        if (!running) return;
+        raf = requestAnimationFrame(tick);
+        try {
+          const frameDoc = ed.Canvas.getDocument();
+          if (!frameDoc) return;
+          const win = frameDoc.defaultView;
+          const body = frameDoc.body;
+          const docEl = frameDoc.documentElement;
+          const iframe = win?.frameElement as HTMLElement | null;
+          const s = {
+            t: Math.round(performance.now() - start),
+            frameH: iframe ? getComputedStyle(iframe).height : '?',
+            frameW: iframe ? getComputedStyle(iframe).width : '?',
+            bodySH: body.scrollHeight,
+            bodyCH: body.clientHeight,
+            bodySW: body.scrollWidth,
+            bodyCW: body.clientWidth,
+            htmlSH: docEl.scrollHeight,
+            winIH: win?.innerHeight ?? '?',
+            winIW: win?.innerWidth ?? '?',
+          };
+          const sig =
+            `${s.frameW}|${s.frameH}|${s.bodySH}|${s.bodySW}|${s.bodyCH}|${s.bodyCW}|${s.htmlSH}|${s.winIH}`;
+          if (Object.keys(prev).length === 0 || firstDiff(prev, s)) {
+            changes += 1;
+            lastA = lastB;
+            lastB = sig;
+            console.log('[te-diag]', JSON.stringify(s));
+          }
+          prev = s as unknown as Record<string, number | string>;
+          if (performance.now() - start > 3500) stop();
+        } catch {
+          /* frame not ready */
+        }
+      };
+      const stop = () => {
+        running = false;
+        cancelAnimationFrame(raf);
+        console.warn(
+          `[te-diag] DONE changes=${changes} lastA=${lastA} lastB=${lastB} OSCILLATING=${lastA !== lastB ? 'YES' : 'no'}`
+        );
+      };
+      tick();
+      return stop;
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [device, editor]);
+
 return (
-      <div className={`te-editor${fullscreen ? ' te-fs' : ''}${device === 'mobile' ? ' te-device-mobile' : ''}`}>
+      <div className={`te-editor${fullscreen ? ' te-fs' : ''}${device === 'mobile' ? ' te-device-mobile' : ''}${contentCollapsed ? ' te-content-collapsed' : ''}${propsCollapsed ? ' te-props-collapsed' : ''}`}>
         <style>{EDITOR_CSS}</style>
         <div className="te-head">
           <div className="te-devices">
@@ -3983,15 +4086,23 @@ return (
             )}
           </div>
           <div className="te-props">
-            <div className="te-pane-head" style={{ background: '#FFFFFF' }}>
+            <div
+              className="te-pane-head"
+              style={{ background: '#FFFFFF', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '8px', userSelect: 'none' }}
+              onClick={() => setPropsCollapsed((p) => !p)}
+              title={propsCollapsed ? 'Show properties' : 'Hide properties'}
+            >
+              <span className="te-blocks-arrow">{propsCollapsed ? '▲' : '▼'}</span>
               Properties
             </div>
-            <PropertiesPanel
-              editor={editor}
-              component={selected}
-              tick={tick}
-              onError={(m) => onErrorRef.current?.(m)}
-            />
+            {!propsCollapsed && (
+              <PropertiesPanel
+                editor={editor}
+                component={selected}
+                tick={tick}
+                onError={(m) => onErrorRef.current?.(m)}
+              />
+            )}
           </div>
         </div>
       </div>
