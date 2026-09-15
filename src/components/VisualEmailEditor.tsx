@@ -3,6 +3,19 @@ import grapesjs, { type Editor } from 'grapesjs';
 import 'grapesjs/dist/css/grapes.min.css';
 import { uploadEmailImage } from '../services/campaignService';
 
+const TOOLBAR_CSS = `
+.te-editor .gjs-toolbar { display: flex !important; flex-direction: row !important; align-items: center !important; gap: 3px !important; padding: 5px 6px !important; border-radius: 10px !important; background: #1a2236 !important; box-shadow: 0 6px 20px rgba(0,0,0,0.35), 0 0 0 1px rgba(255,255,255,0.08) !important; border: none !important; width: max-content !important; max-width: 100% !important; white-space: nowrap !important; z-index: 300 !important; }
+.te-editor .gjs-toolbar-item { display: inline-flex !important; align-items: center !important; justify-content: center !important; flex-shrink: 0 !important; height: 34px !important; min-width: 34px !important; padding: 0 10px !important; font-size: 15px !important; font-weight: 700 !important; letter-spacing: 0 !important; color: #CBD5E1 !important; background: rgba(255,255,255,0.07) !important; border: 1px solid rgba(255,255,255,0.1) !important; border-radius: 6px !important; cursor: pointer !important; transition: background 0.12s ease, border-color 0.12s ease, color 0.12s ease !important; text-decoration: none !important; line-height: 1 !important; box-sizing: border-box !important; white-space: nowrap !important; overflow: visible !important; }
+.te-editor .gjs-toolbar-item:hover { background: rgba(96, 165, 250, 0.2) !important; border-color: rgba(96, 165, 250, 0.5) !important; color: #F1F5F9 !important; }
+.te-editor .gjs-toolbar-item:active { transform: scale(0.94) !important; }
+.te-editor .gjs-toolbar-item#te-delete { width: 34px !important; min-width: 34px !important; padding: 0 !important; margin-left: 4px !important; color: #F87171 !important; background: rgba(248, 113, 113, 0.1) !important; border: 1px solid rgba(248, 113, 113, 0.25) !important; border-radius: 6px !important; position: relative !important; }
+.te-editor .gjs-toolbar-item#te-delete::before { content: '' !important; position: absolute !important; left: -6px !important; top: 6px !important; bottom: 6px !important; width: 1px !important; background: rgba(255,255,255,0.15) !important; }
+.te-editor .gjs-toolbar-item#te-delete:hover { background: rgba(248, 113, 113, 0.25) !important; border-color: rgba(248, 113, 113, 0.5) !important; color: #FCA5A5 !important; }
+.te-editor .gjs-toolbar-item i, .te-editor .gjs-toolbar-item .fa, .te-editor .gjs-toolbar-item [class*="fa "], .te-editor .gjs-toolbar-item span, .te-editor .gjs-toolbar-item svg { font-size: 15px !important; font-weight: 400 !important; line-height: 1 !important; color: inherit !important; font-family: inherit !important; width: auto !important; height: auto !important; max-width: 20px !important; max-height: 20px !important; min-width: 16px !important; min-height: 16px !important; margin: 0 !important; padding: 0 !important; }
+.te-editor .gjs-toolbar-item svg { width: 18px !important; height: 18px !important; }
+.te-editor .gjs-toolbar > * { margin: 0 !important; padding: 0 !important; }
+`;
+
 export interface VisualEmailEditorHandle {
   /** Serialize the current canvas back to a full HTML document (doctype + head + body + embedded CSS). */
   getHtml: () => string;
@@ -217,7 +230,10 @@ const EMAIL_BLOCKS = [
 
 // Custom GrapesJS plugin: registers the email blocks, image replace/toolbar
 // affordances, and the asset-library toolbar button.
-function emailEditorPlugin(editor: Editor): void {
+function emailEditorPlugin(
+  editor: Editor,
+  opts: { onError?: (message: string) => void } = {},
+): void {
   const bm = editor.BlockManager;
 
   // Make the Button (rendered as an <a>, i.e. the built-in `link` component
@@ -252,12 +268,31 @@ function emailEditorPlugin(editor: Editor): void {
     });
   }
 
-  // Double-clicking an image opens the asset manager so an uploaded (or
-  // already-uploaded) image can replace the one in the layout.
+  // Double-clicking an image opens the system file picker directly, bypassing
+  // the asset-manager modal. After the user picks an image it is uploaded and
+  // set as the component's src.
   editor.on('component:dblclick', (component) => {
-    if (component && component.is && component.is('image')) {
-      editor.runCommand('open-assets', { target: component });
-    }
+    if (!component || !component.is || !component.is('image')) return;
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = 'image/png,image/jpeg,image/jpg,image/webp,image/gif';
+    input.style.display = 'none';
+    document.body.appendChild(input);
+    input.addEventListener('change', async () => {
+      const file = input.files?.[0];
+      document.body.removeChild(input);
+      if (!file) return;
+      try {
+        const src = await uploadEmailImage(file);
+        component.set('src', src);
+      } catch (err) {
+        opts.onError?.(err instanceof Error ? err.message : 'Failed to upload image.');
+      }
+    });
+    input.addEventListener('cancel', () => {
+      document.body.removeChild(input);
+    });
+    input.click();
   });
 
   // Add a "Replace" action to the toolbar of a selected image so users can swap
@@ -371,6 +406,10 @@ const VisualEmailEditor = forwardRef<VisualEmailEditorHandle, VisualEmailEditorP
       const container = containerRef.current;
       if (!container) return;
 
+      const styleEl = document.createElement('style');
+      styleEl.textContent = TOOLBAR_CSS;
+      document.head.appendChild(styleEl);
+
       destroyedRef.current = false;
 
       const editor = grapesjs.init({
@@ -380,6 +419,11 @@ const VisualEmailEditor = forwardRef<VisualEmailEditorHandle, VisualEmailEditorP
         fromElement: false,
         storageManager: false,
         plugins: [emailEditorPlugin],
+        pluginsOpts: {
+          emailEditorPlugin: {
+            onError: (msg: string) => onErrorRef.current?.(msg),
+          },
+        },
         blockManager: {},
         styleManager: { sectors: EMAIL_STYLE_SECTORS },
         assetManager: {
@@ -444,6 +488,9 @@ const VisualEmailEditor = forwardRef<VisualEmailEditorHandle, VisualEmailEditorP
       return () => {
         destroyedRef.current = true;
         if (timerRef.current) clearTimeout(timerRef.current);
+        if (styleEl && styleEl.parentNode) {
+          styleEl.parentNode.removeChild(styleEl);
+        }
         // Flush any pending edit before the editor is torn down (e.g. when the
         // user switches to Source/Preview mode or unmounts the tab).
         if (editorRef.current) {

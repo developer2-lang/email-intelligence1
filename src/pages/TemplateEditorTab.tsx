@@ -35,10 +35,7 @@ const DEFAULT_TEMPLATE_HTML = `<!DOCTYPE html>
       <td align="center" style="background-color: #F3F4F6; padding: 32px 16px;">
         <table width="600" cellpadding="0" cellspacing="0" role="presentation" style="width: 600px; background-color: #FFFFFF; border-radius: 12px; overflow: hidden;">
           <tr>
-            <td style="padding: 32px;">
-              <h1 style="margin: 0 0 12px; font-family: Arial, Helvetica, sans-serif; font-size: 24px; color: #1F2937;">New Template</h1>
-              <p style="margin: 0 0 12px; font-family: Arial, Helvetica, sans-serif; font-size: 15px; line-height: 1.7; color: #374151;">Hi {{first_name}},</p>
-              <p style="margin: 0; font-family: Arial, Helvetica, sans-serif; font-size: 15px; line-height: 1.7; color: #374151;">Start editing this email by dragging blocks from the left panel, or click this text to edit it directly.</p>
+            <td style="padding: 32px; min-height: 500px; height: 500px;">
             </td>
           </tr>
         </table>

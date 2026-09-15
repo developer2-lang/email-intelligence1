@@ -44,10 +44,6 @@ const LOGO_PLACEHOLDER = `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(
   '<svg xmlns="http://www.w3.org/2000/svg" width="200" height="80"><rect width="100%" height="100%" fill="#1E3A8A"/><text x="50%" y="56%" fill="#FFFFFF" font-family="Arial, sans-serif" font-size="28" font-weight="bold" text-anchor="middle" letter-spacing="6">IUOVA</text></svg>'
 )}`;
 
-const VIDEO_PLACEHOLDER = `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(
-  '<svg xmlns="http://www.w3.org/2000/svg" width="480" height="270"><rect width="100%" height="100%" fill="#0F172A"/><circle cx="240" cy="135" r="48" fill="#FFFFFF" opacity="0.92"/><polygon points="222,112 222,158 264,135" fill="#2563EB"/></svg>'
-)}`;
-
 const FONT_FAMILIES = [
   'Arial',
   'Arial Black',
@@ -122,7 +118,7 @@ const UNIVERSAL_RESIZE = {
  */
 function makeAllTypesResizable(editor: Editor): void {
   const dc = editor.DomComponents;
-  const skip = new Set(['wrapper', 'body', 'image', 'link', 'p']);
+  const skip = new Set(['wrapper', 'body', 'image', 'p']);
   dc.getTypes().forEach((t: any) => {
     const id = (t && (t.id || t.name)) || t;
     if (!id || skip.has(id)) return;
@@ -288,16 +284,6 @@ const EMAIL_EDITOR_BLOCKS = [
     content: '<div style="height: 32px; line-height: 32px; font-size: 0;">&nbsp;</div>',
   },
   {
-    id: 'te-video',
-    label: 'Video',
-    category: 'CONTENT',
-    media: '<span class="te-blk">▶</span>',
-    content:
-      '<a href="https://www.youtube.com/" style="display: block; text-decoration: none; margin: 0 auto 16px; max-width: 480px;"><img src="' +
-      VIDEO_PLACEHOLDER +
-      '" alt="Watch the video" width="480" style="display: block; width: 100%; height: auto; border-radius: 8px; border: 0;" /></a>',
-  },
-  {
     id: 'te-social',
     label: 'Social',
     category: 'CONTENT',
@@ -329,7 +315,7 @@ const EMAIL_EDITOR_BLOCKS = [
     category: 'CONTENT',
     media: '<span class="te-blk">🔗</span>',
     content:
-      '<a data-te-role="link" href="#" style="font-family: Arial, Helvetica, sans-serif; font-size: 16px; color: #2563EB; text-decoration: underline; margin: 0 0 12px;">Click here</a>',
+      '<a data-te-role="link" href="#" style="display: inline-block; font-family: Arial, Helvetica, sans-serif; font-size: 16px; color: #2563EB; padding: 8px 16px; margin: 0 0 12px; min-width: 120px; text-align: center; box-sizing: border-box;">Click here</a>',
   },
   {
     id: 'te-columns-1',
@@ -347,9 +333,9 @@ const EMAIL_EDITOR_BLOCKS = [
     category: 'CONTENT',
     media: '<span class="te-blk">▮▯</span>',
     content:
-      '<table role="presentation" cellpadding="0" cellspacing="0" style="width: 100%; margin: 0 0 16px;"><tr>' +
-      `<td width="50%" valign="top" style="width: 50%; vertical-align: top; padding: 0 8px;"><p style="${EMAIL_BLOCK_BASE} margin: 0;">Column 1</p></td>` +
-      `<td width="50%" valign="top" style="width: 50%; vertical-align: top; padding: 0 8px;"><p style="${EMAIL_BLOCK_BASE} margin: 0;">Column 2</p></td>` +
+      '<table data-te-role="columns" role="presentation" cellpadding="0" cellspacing="0" style="width: 100%; margin: 0 0 16px;"><tr>' +
+      `<td width="50%" valign="top" style="width: 50%; vertical-align: top; padding: 0 8px;" data-gjs-droppable="true"><div data-gjs-droppable="true" data-te-col="" data-te-col-num="1" style="margin: 0; min-height: 80px; padding: 12px;"><span data-te-placeholder="" style="font-size: 28px; font-weight: 700; color: #CBD5E1; pointer-events: none;">1</span></div></td>` +
+      `<td width="50%" valign="top" style="width: 50%; vertical-align: top; padding: 0 8px;" data-gjs-droppable="true"><div data-gjs-droppable="true" data-te-col="" data-te-col-num="2" style="margin: 0; min-height: 80px; padding: 12px;"><span data-te-placeholder="" style="font-size: 28px; font-weight: 700; color: #CBD5E1; pointer-events: none;">2</span></div></td>` +
       '</tr></table>',
   },
   {
@@ -358,10 +344,10 @@ const EMAIL_EDITOR_BLOCKS = [
     category: 'CONTENT',
     media: '<span class="te-blk">▮▮▯</span>',
     content:
-      '<table role="presentation" cellpadding="0" cellspacing="0" style="width: 100%; margin: 0 0 16px;"><tr>' +
-      `<td width="33%" valign="top" style="width: 33.33%; vertical-align: top; padding: 0 6px;"><p style="${EMAIL_BLOCK_BASE} margin: 0;">Column 1</p></td>` +
-      `<td width="33%" valign="top" style="width: 33.33%; vertical-align: top; padding: 0 6px;"><p style="${EMAIL_BLOCK_BASE} margin: 0;">Column 2</p></td>` +
-      `<td width="33%" valign="top" style="width: 33.33%; vertical-align: top; padding: 0 6px;"><p style="${EMAIL_BLOCK_BASE} margin: 0;">Column 3</p></td>` +
+      '<table data-te-role="columns" role="presentation" cellpadding="0" cellspacing="0" style="width: 100%; margin: 0 0 16px;"><tr>' +
+      `<td width="33%" valign="top" style="width: 33.33%; vertical-align: top; padding: 0 6px;" data-gjs-droppable="true"><div data-gjs-droppable="true" data-te-col="" data-te-col-num="1" style="margin: 0; min-height: 80px; padding: 12px;"><span data-te-placeholder="" style="font-size: 28px; font-weight: 700; color: #CBD5E1; pointer-events: none;">1</span></div></td>` +
+      `<td width="33%" valign="top" style="width: 33.33%; vertical-align: top; padding: 0 6px;" data-gjs-droppable="true"><div data-gjs-droppable="true" data-te-col="" data-te-col-num="2" style="margin: 0; min-height: 80px; padding: 12px;"><span data-te-placeholder="" style="font-size: 28px; font-weight: 700; color: #CBD5E1; pointer-events: none;">2</span></div></td>` +
+      `<td width="33%" valign="top" style="width: 33.33%; vertical-align: top; padding: 0 6px;" data-gjs-droppable="true"><div data-gjs-droppable="true" data-te-col="" data-te-col-num="3" style="margin: 0; min-height: 80px; padding: 12px;"><span data-te-placeholder="" style="font-size: 28px; font-weight: 700; color: #CBD5E1; pointer-events: none;">3</span></div></td>` +
       '</tr></table>',
   },
   {
@@ -433,6 +419,14 @@ const CHANGE_EVENTS = [
  * so email content reflows to fit a 375px viewport.
  */
 const MOBILE_CSS_ID = 'te-mobile-responsive';
+
+const COL_CSS_ID = 'te-column-styles';
+const COL_CSS = `
+[data-te-col] { border: 1px dashed #CBD5E1 !important; border-radius: 6px !important; min-height: 80px; }
+[data-te-col].te-col-selected { border: 2px solid #2563EB !important; }
+[data-te-col] img { max-width: 100% !important; height: 180px !important; object-fit: cover !important; border-radius: 6px !important; display: block !important; }
+[data-te-placeholder] { font-size: 28px; font-weight: 700; color: #CBD5E1; pointer-events: none; }
+`;
 function injectMobileCss(editor: Editor, mobile: boolean) {
   try {
     const frameDoc = editor.Canvas.getDocument();
@@ -451,7 +445,21 @@ function injectMobileCss(editor: Editor, mobile: boolean) {
   } catch { /* frame may not be ready yet */ }
 }
 
-function getDocumentHtml(editor: Editor): string {
+function injectColCss(editor: Editor) {
+  try {
+    const frameDoc = editor.Canvas.getDocument();
+    if (!frameDoc) return;
+    const existing = frameDoc.getElementById(COL_CSS_ID);
+    if (!existing) {
+      const style = frameDoc.createElement('style');
+      style.id = COL_CSS_ID;
+      style.textContent = COL_CSS;
+      frameDoc.head.appendChild(style);
+    }
+  } catch { /* frame may not be ready yet */ }
+}
+
+const getDocumentHtml = (editor: Editor): string => {
   const wrapper = editor.getWrapper();
   if (!wrapper) return '';
   let html = wrapper.toHTML({ asDocument: true, keepInlineStyle: true });
@@ -958,9 +966,11 @@ function AlignmentButtons({
 function TextStyleToggles({
   getStyle,
   setStyle,
+  onLinkClick,
 }: {
   getStyle: (prop: string) => string;
   setStyle: (prop: string, value: string) => void;
+  onLinkClick: () => void;
 }) {
   const isBold = () => {
     const w = getStyle('font-weight').trim().toLowerCase();
@@ -984,6 +994,13 @@ function TextStyleToggles({
         onClick={() => setStyle('text-decoration', isUnderline() ? 'none' : 'underline')}
       >
         U
+      </ToggleBtn>
+      <ToggleBtn
+        active={false}
+        title="Link — select the text to link first, then click"
+        onClick={onLinkClick}
+      >
+        <span style={{ textDecoration: 'underline', fontSize: '11px' }}>Link</span>
       </ToggleBtn>
     </div>
   );
@@ -1110,6 +1127,110 @@ function isButtonLike(component: Component | null): boolean {
 /** True when the component is the dedicated "Link" content block. */
 function isLinkBlock(component: Component | null): boolean {
   return component?.getAttributes()?.['data-te-role'] === 'link';
+}
+
+/**
+ * Apply an inline style to the currently selected text inside the editor
+ * iframe by wrapping the selection in a `<span>`. If there is no selection
+ * (or the selection is collapsed), this is a no-op — the caller should fall
+ * back to applying the style to the whole component.
+ *
+ * Returns `true` when a selection was successfully wrapped.
+ */
+function applyInlineStyleToSelection(
+  editor: Editor,
+  cssProp: string,
+  cssValue: string
+): boolean {
+  try {
+    const iframe = editor.Canvas.getFrameEl?.();
+    const iframeDoc = iframe?.contentDocument;
+    if (!iframeDoc) return false;
+    const sel = iframeDoc.getSelection();
+    if (!sel || sel.rangeCount === 0 || sel.isCollapsed) return false;
+
+    const range = sel.getRangeAt(0);
+
+    // Only apply when the selection is inside the currently selected component
+    // element (prevents styling across different blocks).
+    const el = editor.getSelected()?.getEl?.();
+    if (!el || !el.contains(range.startContainer) || !el.contains(range.endContainer)) return false;
+
+    const span = iframeDoc.createElement('span');
+    span.style.cssText = `${cssProp}: ${cssValue} !important;`;
+    range.surroundContents(span);
+
+    sel.removeAllRanges();
+    const newRange = iframeDoc.createRange();
+    newRange.selectNodeContents(span);
+    sel.addRange(newRange);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Wrap the currently selected text (inside the selected component) in a real
+ * `<a href>` link. Uses the same iframe-selection mechanism as
+ * `applyInlineStyleToSelection`, so the new anchor is picked up by GrapesJS's
+ * DOM observer and serialized into the saved/exported email HTML.
+ *
+ * Returns `true` when a selection was successfully wrapped.
+ */
+function wrapSelectionInLink(editor: Editor, url: string): boolean {
+  try {
+    const iframe = editor.Canvas.getFrameEl?.();
+    const iframeDoc = iframe?.contentDocument;
+    if (!iframeDoc) return false;
+    const sel = iframeDoc.getSelection();
+    if (!sel || sel.rangeCount === 0 || sel.isCollapsed) return false;
+
+    const range = sel.getRangeAt(0);
+
+    // Only apply when the selection is inside the currently selected component
+    // element (prevents linking across different blocks).
+    const el = editor.getSelected()?.getEl?.();
+    if (!el || !el.contains(range.startContainer) || !el.contains(range.endContainer)) return false;
+
+    const href = normalizeButtonUrl(url) || url;
+    const isMailto = /^mailto:/i.test(href);
+
+    // Avoid wrapping a selection that already lives inside an <a> (no nested
+    // links in email).
+    let node: Node | null = range.commonAncestorContainer;
+    while (node && node !== el) {
+      if (node.nodeType === Node.ELEMENT_NODE && (node as HTMLElement).tagName?.toLowerCase() === 'a') {
+        return false;
+      }
+      node = node.parentNode;
+    }
+
+    const anchor = iframeDoc.createElement('a') as HTMLAnchorElement;
+    anchor.href = href;
+    anchor.setAttribute('href', href);
+    anchor.setAttribute('target', '_blank');
+    anchor.setAttribute('rel', 'noopener');
+    if (isMailto) anchor.removeAttribute('target');
+    // Default link look so newly-linked text reads as a link in the canvas AND
+    // in the exported email (email-safe inline styles).
+    anchor.style.color = '#2563EB';
+    anchor.style.textDecoration = 'underline';
+
+    // extractContents + insertNode handles partial selections (e.g. text that
+    // partially crosses a bold <span>) without throwing.
+    const fragment = range.extractContents();
+    anchor.appendChild(fragment);
+    range.insertNode(anchor);
+
+    sel.removeAllRanges();
+    const newRange = iframeDoc.createRange();
+    newRange.selectNodeContents(anchor);
+    sel.addRange(newRange);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /** True when the component is (or wraps) the configurable "Social" block. */
@@ -2391,6 +2512,8 @@ function ContainerPropertiesPanel({
 function PropertiesPanel({ editor, component, tick, onError }: PropertiesPanelProps) {
   void tick;
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const [linkPrompt, setLinkPrompt] = useState(false);
+  const [linkDraft, setLinkDraft] = useState('');
 
   if (!editor || !component || component.get('type') === 'wrapper' || component.is?.('body')) {
     return editor ? <EmailSettingsPanel editor={editor} tick={tick} /> : null;
@@ -2462,6 +2585,18 @@ function PropertiesPanel({ editor, component, tick, onError }: PropertiesPanelPr
     } else {
       const n = parseFloat(value);
       setStyle('width', Number.isFinite(n) ? `${n}px` : '');
+    }
+  };
+
+  /** Wrap the currently-selected text inside this text block in a link. */
+  const addLinkToSelection = () => {
+    const href = linkDraft.trim();
+    if (!href) return;
+    if (wrapSelectionInLink(editor, href)) {
+      setLinkPrompt(false);
+      setLinkDraft('');
+    } else {
+      onError('Select the text to link first, then click Link.');
     }
   };
 
@@ -2686,14 +2821,23 @@ function PropertiesPanel({ editor, component, tick, onError }: PropertiesPanelPr
          <Field label="Font Family">
            <SelectInput
              value={getStyle('font-family') || 'Arial, Helvetica, sans-serif'}
-             onChange={(v) => setStyle('font-family', v)}
+             onChange={(v) => {
+               if (!applyInlineStyleToSelection(editor, 'font-family', v)) {
+                 setStyle('font-family', v);
+               }
+             }}
              options={FONT_FAMILIES}
            />
          </Field>
          <Field label="Font Size">
            <NumberInput
              value={parseFloat(getStyle('font-size')) ? String(parseFloat(getStyle('font-size'))) : ''}
-             onChange={(v) => setStyle('font-size', v ? `${parseFloat(v) || 0}px` : '')}
+             onChange={(v) => {
+               const val = v ? `${parseFloat(v) || 0}px` : '';
+               if (!applyInlineStyleToSelection(editor, 'font-size', val)) {
+                 setStyle('font-size', val);
+               }
+             }}
              min={8}
              max={72}
            />
@@ -2702,30 +2846,46 @@ function PropertiesPanel({ editor, component, tick, onError }: PropertiesPanelPr
            <ColorInput
              value={getStyle('color')}
              onChange={(v) => {
-               if (isValidColorValue(v)) setStyle('color', v);
+               if (isValidColorValue(v)) {
+                 if (!applyInlineStyleToSelection(editor, 'color', v)) {
+                   setStyle('color', v);
+                 }
+               }
              }}
              onReset={() => setStyle('color', '#2563EB')}
            />
          </Field>
-         <Field label="Underline">
-           <ToggleBtn
-             active={getStyle('text-decoration').toLowerCase().includes('underline')}
-             onClick={() => setStyle('text-decoration', getStyle('text-decoration').toLowerCase().includes('underline') ? 'none' : 'underline')}
-           >
-             {getStyle('text-decoration').toLowerCase().includes('underline') ? 'On' : 'Off'}
-           </ToggleBtn>
-         </Field>
-         <Field label="Alignment">
-           <AlignmentButtons value={getStyle('text-align') || 'left'} onChange={setAlignment} />
-         </Field>
-         <Field label="Spacing">
-           <SpacingFields getStyle={getStyle} setStyle={setStyle} />
-         </Field>
-       </div>
-     );
-   }
+          <Field label="Underline">
+            <ToggleBtn
+              active={getStyle('text-decoration').toLowerCase().includes('underline')}
+              onClick={() => {
+                const next = getStyle('text-decoration').toLowerCase().includes('underline') ? 'none' : 'underline';
+                if (!applyInlineStyleToSelection(editor, 'text-decoration', next)) {
+                  setStyle('text-decoration', next);
+                }
+              }}
+            >
+              {getStyle('text-decoration').toLowerCase().includes('underline') ? 'On' : 'Off'}
+            </ToggleBtn>
+          </Field>
+          <Field label="Alignment">
+            <AlignmentButtons value={getStyle('text-align') || 'left'} onChange={setAlignment} />
+          </Field>
+          <Field label="Block Position">
+            <AlignmentButtons
+              value={getParagraphBlockPosition(component)}
+              onChange={(v) => setParagraphBlockPosition(component, v)}
+              options={PARAGRAPH_POSITIONS}
+            />
+          </Field>
+          <Field label="Spacing">
+            <SpacingFields getStyle={getStyle} setStyle={setStyle} />
+          </Field>
+        </div>
+      );
+    }
 
-   // ── Text properties ──
+    // ── Text properties ──
    if (isTextLike(component) && !isButtonLike(component) && !isLinkBlock(component)) {
      const hasSimpleContent = (component.get('components')?.length ?? 0) <= 1;
      sections.push(
@@ -2759,7 +2919,11 @@ function PropertiesPanel({ editor, component, tick, onError }: PropertiesPanelPr
         <Field label="Font Family">
           <SelectInput
             value={getStyle('font-family') || 'Arial, Helvetica, sans-serif'}
-            onChange={(v) => setStyle('font-family', v)}
+            onChange={(v) => {
+              if (!applyInlineStyleToSelection(editor, 'font-family', v)) {
+                setStyle('font-family', v);
+              }
+            }}
             options={FONT_FAMILIES}
           />
         </Field>
@@ -2767,7 +2931,12 @@ function PropertiesPanel({ editor, component, tick, onError }: PropertiesPanelPr
           <Field label="Font Size">
             <NumberInput
               value={parseFloat(getStyle('font-size')) ? String(parseFloat(getStyle('font-size'))) : ''}
-              onChange={(v) => setStyle('font-size', v ? `${parseFloat(v) || 0}px` : '')}
+              onChange={(v) => {
+                const val = v ? `${parseFloat(v) || 0}px` : '';
+                if (!applyInlineStyleToSelection(editor, 'font-size', val)) {
+                  setStyle('font-size', val);
+                }
+              }}
               min={6}
               max={96}
             />
@@ -2781,8 +2950,56 @@ function PropertiesPanel({ editor, component, tick, onError }: PropertiesPanelPr
           </Field>
         </div>
         <Field label="Style">
-          <TextStyleToggles getStyle={getStyle} setStyle={setStyle} />
+          <TextStyleToggles
+            getStyle={getStyle}
+            setStyle={setStyle}
+            onLinkClick={() => {
+              setLinkPrompt((open) => !open);
+              if (!linkPrompt) setLinkDraft('');
+            }}
+          />
         </Field>
+        {linkPrompt && (
+          <div style={{ marginBottom: '10px' }}>
+            <Field label="Link URL">
+              <input
+                autoFocus
+                type="text"
+                style={inputStyle}
+                value={linkDraft}
+                placeholder="https://example.com"
+                spellCheck={false}
+                onChange={(e) => setLinkDraft(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') addLinkToSelection();
+                  if (e.key === 'Escape') {
+                    setLinkPrompt(false);
+                    setLinkDraft('');
+                  }
+                }}
+              />
+            </Field>
+            <div style={{ display: 'flex', gap: '6px' }}>
+              <button
+                type="button"
+                style={smallBtn('#2563EB', '#FFFFFF', '#2563EB')}
+                onClick={addLinkToSelection}
+              >
+                Add Link
+              </button>
+              <button
+                type="button"
+                style={smallBtn('#FFFFFF', '#475569', '#CBD5E1')}
+                onClick={() => {
+                  setLinkPrompt(false);
+                  setLinkDraft('');
+                }}
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        )}
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px' }}>
           <Field label="Line Height">
             <NumberInput
@@ -2807,7 +3024,11 @@ function PropertiesPanel({ editor, component, tick, onError }: PropertiesPanelPr
           <ColorInput
             value={getStyle('color')}
             onChange={(v) => {
-              if (isValidColorValue(v)) setStyle('color', v);
+              if (isValidColorValue(v)) {
+                if (!applyInlineStyleToSelection(editor, 'color', v)) {
+                  setStyle('color', v);
+                }
+              }
             }}
             onReset={() => setStyle('color', '')}
           />
@@ -2962,7 +3183,11 @@ function PropertiesPanel({ editor, component, tick, onError }: PropertiesPanelPr
         <Field label="Font Family">
           <SelectInput
             value={getStyle('font-family') || 'Arial, Helvetica, sans-serif'}
-            onChange={(v) => setStyle('font-family', v)}
+            onChange={(v) => {
+              if (!applyInlineStyleToSelection(editor, 'font-family', v)) {
+                setStyle('font-family', v);
+              }
+            }}
             options={FONT_FAMILIES}
           />
         </Field>
@@ -2970,7 +3195,12 @@ function PropertiesPanel({ editor, component, tick, onError }: PropertiesPanelPr
           <Field label="Font Size">
             <NumberInput
               value={parseFloat(getStyle('font-size')) ? String(parseFloat(getStyle('font-size'))) : ''}
-              onChange={(v) => setStyle('font-size', v ? `${parseFloat(v) || 0}px` : '')}
+              onChange={(v) => {
+                const val = v ? `${parseFloat(v) || 0}px` : '';
+                if (!applyInlineStyleToSelection(editor, 'font-size', val)) {
+                  setStyle('font-size', val);
+                }
+              }}
               min={8}
               max={72}
             />
@@ -2987,7 +3217,11 @@ function PropertiesPanel({ editor, component, tick, onError }: PropertiesPanelPr
           <ColorInput
             value={getStyle('color')}
             onChange={(v) => {
-              if (isValidColorValue(v)) setStyle('color', v);
+              if (isValidColorValue(v)) {
+                if (!applyInlineStyleToSelection(editor, 'color', v)) {
+                  setStyle('color', v);
+                }
+              }
             }}
             onReset={() => setStyle('color', '#FFFFFF')}
           />
@@ -3226,19 +3460,19 @@ const EDITOR_CSS = `
 .te-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; padding: 10px 14px; border-bottom: 1px solid #E2E8F0; background: #F8FAFC; }
 .te-devices { display: flex; align-items: center; gap: 6px; }
 .te-hint { font-size: 11.5px; color: #94A3B8; }
-.te-body { display: grid; grid-template-columns: minmax(0, 92px) minmax(0, 1fr) minmax(0, 320px); grid-template-rows: minmax(0, 1fr); min-width: 0; max-width: 100%; min-height: 560px; height: calc(100vh - 360px); overflow: hidden; }
-.te-blocks { grid-column: 1; min-width: 0; border-right: 1px solid #E2E8F0; display: flex; flex-direction: column; align-items: flex-start; background: #000000; }
+.te-body { display: grid; grid-template-columns: minmax(0, 180px) minmax(0, 1fr) minmax(0, 320px); grid-template-rows: minmax(0, 1fr); min-width: 0; max-width: 100%; min-height: 560px; height: calc(100vh - 360px); overflow: hidden; }
+.te-blocks { grid-column: 1; min-width: 0; border-right: 1px solid #E2E8F0; display: flex; flex-direction: column; align-items: flex-start; background: #111827; overflow: hidden; }
 .te-pane-head { padding: 11px 14px; font-size: 10.5px; font-weight: 700; letter-spacing: 0.1em; color: #64748B; border-bottom: 1px solid #E2E8F0; text-transform: uppercase; }
-.te-blocks-head { padding: 5px 4px 3px; flex: none; font-size: 10px; font-weight: 800; letter-spacing: 0.16em; color: #0F172A; text-transform: uppercase; cursor: pointer; display: flex; align-items: center; justify-content: flex-start; gap: 5px; user-select: none; white-space: nowrap; }
-.te-blocks-head .te-blocks-arrow { font-size: 8px; line-height: 1; color: #64748B; }
-.te-blocks-scroll { flex: 1; overflow-y: auto; margin: 0; padding: 2px; background: #000000; border-radius: 4px; box-sizing: border-box; scrollbar-width: thin; scrollbar-color: #D1D5DB transparent; }
+.te-blocks-head { padding: 8px 10px 6px; flex: none; font-size: 11px; font-weight: 800; letter-spacing: 0.12em; color: #FFFFFF; text-transform: uppercase; cursor: pointer; display: flex; align-items: center; justify-content: flex-start; gap: 5px; user-select: none; white-space: nowrap; border-bottom: 1px solid #1F2937; }
+.te-blocks-head .te-blocks-arrow { font-size: 8px; line-height: 1; color: #94A3B8; }
+.te-blocks-scroll { flex: 1; overflow-y: auto; margin: 0; padding: 6px 6px; background: #111827; border-radius: 4px; box-sizing: border-box; scrollbar-width: thin; scrollbar-color: #4B5563 transparent; width: 100%; max-width: 100%; }
 .te-blocks-scroll::-webkit-scrollbar { width: 5px; }
-.te-blocks-scroll::-webkit-scrollbar-thumb { background: #D1D5DB; border-radius: 8px; }
+.te-blocks-scroll::-webkit-scrollbar-thumb { background: #4B5563; border-radius: 8px; }
 .te-blocks-scroll::-webkit-scrollbar-track { background: transparent; }
 .te-canvas-wrap { grid-column: 2; min-width: 0; min-height: 0; position: relative; background: #F3F4F6; overflow: hidden; display: flex; justify-content: center; align-items: stretch; }
 .te-canvas { flex: 1 1 auto; width: 100%; height: 100%; min-width: 0; min-height: 0; display: flex; justify-content: center; align-items: flex-start; overflow: auto; }
 .te-props { grid-column: 3; min-width: 0; border-left: 1px solid #E2E8F0; overflow-y: auto; background: #FFFFFF; }
-.te-blk { display: inline-flex; align-items: center; justify-content: center; width: 32px; height: 32px; background: #E4EDFF; color: #1D4ED8; border-radius: 8px; font-weight: 700; font-size: 14px; font-family: Arial, sans-serif; }
+.te-blk { display: inline-flex; align-items: center; justify-content: center; width: 36px; height: 36px; background: #2563EB; color: #FFFFFF; border-radius: 8px; font-weight: 700; font-size: 15px; font-family: Arial, sans-serif; }
 .te-empty-hint { position: absolute; top: 12px; left: 50%; transform: translateX(-50%); z-index: 5; pointer-events: none; display: flex; align-items: center; gap: 8px; padding: 8px 16px; border-radius: 999px; background: rgba(15,23,42,0.72); color: #FFFFFF; font-size: 12.5px; font-weight: 600; box-shadow: 0 2px 10px rgba(15,23,42,0.25); white-space: nowrap; }
 .te-empty-hint .te-empty-dot { width: 8px; height: 8px; border-radius: 50%; background: #60A5FA; animation: tePulse 1.6s ease-in-out infinite; }
 @keyframes tePulse { 0%, 100% { opacity: 0.35; } 50% { opacity: 1; } }
@@ -3258,16 +3492,16 @@ const EDITOR_CSS = `
    no light background can survive anywhere (including inline styles). */
 .te-blocks,
 .te-blocks-scroll {
-  background: #000000 !important;
-  background-color: #000000 !important;
+  background: #111827 !important;
+  background-color: #111827 !important;
 }
 .te-blocks-scroll .gjs-blocks-cs,
 .te-blocks-scroll .gjs-one-bg,
 .te-blocks-scroll .gjs-one-bg .gjs-block-categories,
 .te-blocks-scroll .gjs-blocks-no-cat,
-.te-blocks-scroll .gjs-block-categories { margin: 0; padding: 0; background: transparent !important; background-color: transparent !important; display: flex; flex-direction: column; align-items: flex-start; }
+.te-blocks-scroll .gjs-block-categories { margin: 0; padding: 0; background: transparent !important; background-color: transparent !important; display: flex; flex-direction: column; align-items: flex-start; width: 100% !important; max-width: 100% !important; }
 .te-blocks-scroll .gjs-two-color { color: inherit !important; }
-.te-blocks-scroll .gjs-block-category { margin: 0; background: transparent !important; background-color: transparent !important; display: flex; flex-direction: column; align-items: flex-start; }
+.te-blocks-scroll .gjs-block-category { margin: 0; background: transparent !important; background-color: transparent !important; display: flex; flex-direction: column; align-items: flex-start; max-width: 100% !important; }
 .te-blocks-scroll .gjs-block-category.gjs-open { border-bottom: none; }
 /* The custom .te-blocks-head already renders the "▼ CONTENT" title above the
    list. GrapesJS renders an identical category title inside the scroll area
@@ -3275,17 +3509,17 @@ const EDITOR_CSS = `
    category container (the blocks themselves still render inside it). */
 .te-blocks-scroll .gjs-block-category .gjs-title { display: none; }
 .te-blocks-scroll .gjs-block-category .gjs-title .gjs-caret-icon { display: none; }
-.te-blocks-scroll .gjs-blocks-c { display: flex !important; flex-direction: column !important; align-items: flex-start !important; justify-content: flex-start !important; gap: 4px; }
-.te-blocks-scroll .gjs-block { width: 74px; height: 74px; flex: 0 0 auto; min-width: 0; margin: 0; padding: 6px 4px; border: 1px solid #E5E7EB; border-radius: 8px; background: #FFFFFF !important; background-color: #FFFFFF !important; box-sizing: border-box; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; cursor: grab; box-shadow: none; transition: border-color 0.15s ease, box-shadow 0.15s ease, transform 0.15s ease; }
-.te-blocks-scroll .gjs-block:hover { border-color: #93C5FD; box-shadow: 0 3px 10px rgba(37, 99, 235, 0.16); }
-.te-blocks-scroll .gjs-block:active { border: 2px solid #2563EB; cursor: grabbing; }
-.te-blocks-scroll .gjs-block.gjs-bdrag { border: 2px solid #2563EB; cursor: grabbing; }
-.te-blocks-scroll .gjs-block__media { margin: 0; padding: 0; pointer-events: none; display: flex; align-items: center; justify-content: center; flex: none; width: 100%; }
-.te-blocks-scroll .gjs-block-svg svg { width: 22px; height: 22px; }
-.te-blocks-scroll .gjs-block-label { font-size: 9.5px; font-weight: 600; color: #1F2937; width: 100%; max-width: 100%; text-align: center; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; line-height: 1.15; }
+.te-blocks-scroll .gjs-blocks-c { display: flex !important; flex-direction: column !important; align-items: stretch !important; justify-content: flex-start !important; gap: 6px !important; max-width: 100% !important; }
+.te-blocks-scroll .gjs-block { width: 100%; height: 52px; flex: 0 0 auto; min-width: 0; margin: 0 0 6px 0; padding: 0 10px; border: 1.5px solid #1E293B; border-radius: 10px; background: #FFFFFF !important; background-color: #FFFFFF !important; box-sizing: border-box; display: flex; flex-direction: row; align-items: center; justify-content: flex-start; gap: 10px; cursor: grab; box-shadow: none; transition: border-color 0.15s ease, box-shadow 0.15s ease, transform 0.15s ease; }
+.te-blocks-scroll .gjs-block:hover { border-color: #2563EB; box-shadow: 0 3px 12px rgba(37, 99, 235, 0.2); }
+.te-blocks-scroll .gjs-block:active { border: 2px solid #1D4ED8; cursor: grabbing; transform: scale(0.98); }
+.te-blocks-scroll .gjs-block.gjs-bdrag { border: 2px solid #1D4ED8; cursor: grabbing; box-shadow: 0 8px 24px rgba(37, 99, 235, 0.3); }
+.te-blocks-scroll .gjs-block__media { margin: 0; padding: 0; pointer-events: none; display: flex; align-items: center; justify-content: center; flex: none; width: 36px; height: 36px; }
+.te-blocks-scroll .gjs-block-svg svg { width: 18px; height: 18px; }
+.te-blocks-scroll .gjs-block-label { font-size: 12px; font-weight: 600; color: #1E293B; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; line-height: 1.2; }
 @media (max-width: 1400px) {
-  .te-body { grid-template-columns: minmax(0, 92px) minmax(0, 1fr) minmax(0, 320px); }
-  .te-blocks-scroll { margin: 0; padding: 3px; }
+  .te-body { grid-template-columns: minmax(0, 160px) minmax(0, 1fr) minmax(0, 280px); }
+  .te-blocks-scroll { margin: 0; padding: 4px 6px; }
 }
 
 /* Collapsed CONTENT panel: takes ZERO layout space. The column becomes "auto"
@@ -3298,14 +3532,15 @@ const EDITOR_CSS = `
    workspace — only the slim "▲ CONTENT" header remains, no white anywhere. */
 .te-editor.te-content-collapsed .te-body { grid-template-columns: auto minmax(0, 1fr) minmax(0, 320px); }
 .te-editor.te-content-collapsed .te-blocks { border-right: none; background: #F3F4F6 !important; background-color: #F3F4F6 !important; }
-.te-editor.te-content-collapsed .te-blocks-head { flex-direction: row; gap: 4px; padding: 6px 8px; align-items: center; justify-content: center; text-align: left; }
+.te-editor.te-content-collapsed .te-blocks-head { flex-direction: row; gap: 4px; padding: 6px 8px; align-items: center; justify-content: center; text-align: left; color: #1E293B; }
+.te-editor.te-content-collapsed .te-blocks-head .te-blocks-arrow { color: #475569; }
 
 /* Collapsed PROPERTIES panel: identical shrink-to-header behavior on the right.
    The panel and its (unmounted) content disappear; the rail is painted with the
    canvas backdrop color (#F3F4F6) so no white column can show through, leaving
    only the slim "▲ PROPERTIES" header while the canvas expands into the freed
    space. */
-.te-editor.te-props-collapsed .te-body { grid-template-columns: minmax(0, 92px) minmax(0, 1fr) auto; }
+.te-editor.te-props-collapsed .te-body { grid-template-columns: minmax(0, 180px) minmax(0, 1fr) auto; }
 .te-editor.te-props-collapsed .te-props { border-left: none; background: #F3F4F6 !important; background-color: #F3F4F6 !important; }
 .te-editor.te-props-collapsed .te-pane-head { flex-direction: row; gap: 6px; padding: 6px 8px; align-items: center; justify-content: center; text-align: left; background: #F3F4F6 !important; background-color: #F3F4F6 !important; border-bottom: none; }
 
@@ -3314,7 +3549,7 @@ const EDITOR_CSS = `
 .te-editor.te-content-collapsed.te-props-collapsed .te-body { grid-template-columns: auto minmax(0, 1fr) auto; }
 
 @media (max-width: 1400px) {
-  .te-editor.te-props-collapsed .te-body { grid-template-columns: minmax(0, 92px) minmax(0, 1fr) auto; }
+ .te-editor.te-props-collapsed .te-body { grid-template-columns: minmax(0, 160px) minmax(0, 1fr) auto; }
   .te-editor.te-content-collapsed.te-props-collapsed .te-body { grid-template-columns: auto minmax(0, 1fr) auto; }
 }
 
@@ -3349,68 +3584,113 @@ const EDITOR_CSS = `
   padding: 0;
 }
 .te-editor .gjs-selected { outline: 2px solid #2563EB !important; outline-offset: -2px; }
+.te-editor .gjs-selected [data-te-role="link"],
+.te-editor [data-te-role="link"] { display: inline-block !important; min-width: 120px !important; }
 .te-editor .gjs-highlighter { outline: 1px dashed #60A5FA; }
-/* ── Enlarged image-editing toolbar ───────────────────────────────────── */
+/* ── Selected-element floating toolbar ────────────────────────────────── */
+/* Clean, spacious toolbar. B/I/U/S are clearly visible as white-on-dark
+   with a separator before the red trash-icon delete button. */
 .te-editor .gjs-toolbar {
-  display: inline-flex !important;
+  display: flex !important;
+  flex-direction: row !important;
   align-items: center !important;
-  gap: 4px !important;
-  padding: 6px 8px !important;
+  gap: 3px !important;
+  padding: 5px 6px !important;
   border-radius: 10px !important;
-  background: #1E293B !important;
-  box-shadow: 0 4px 16px rgba(15,23,42,0.32), 0 0 0 1px rgba(255,255,255,0.08) !important;
+  background: #1a2236 !important;
+  box-shadow: 0 6px 20px rgba(0,0,0,0.35), 0 0 0 1px rgba(255,255,255,0.08) !important;
   border: none !important;
-  min-height: 44px !important;
+  width: max-content !important;
   white-space: nowrap !important;
-  z-index: 200 !important;
+  z-index: 300 !important;
 }
+
+/* ── Format buttons (B, I, U, S) ───────────────────────────────────── */
 .te-editor .gjs-toolbar-item {
   display: inline-flex !important;
   align-items: center !important;
   justify-content: center !important;
-  min-width: 36px !important;
-  min-height: 34px !important;
-  padding: 5px 10px !important;
+  flex-shrink: 0 !important;
+  height: 34px !important;
+  min-width: 34px !important;
+  padding: 0 10px !important;
   font-size: 15px !important;
-  font-weight: 600 !important;
-  color: #E2E8F0 !important;
+  font-weight: 700 !important;
+  letter-spacing: 0 !important;
+  color: #CBD5E1 !important;
   background: rgba(255,255,255,0.07) !important;
-  border: 1px solid rgba(255,255,255,0.10) !important;
-  border-radius: 7px !important;
+  border: 1px solid rgba(255,255,255,0.1) !important;
+  border-radius: 6px !important;
   cursor: pointer !important;
-  transition: background 0.12s ease, border-color 0.12s ease, transform 0.1s ease !important;
+  transition: background 0.12s ease, border-color 0.12s ease, color 0.12s ease !important;
   text-decoration: none !important;
   line-height: 1 !important;
+  box-sizing: border-box !important;
+  white-space: nowrap !important;
+  overflow: visible !important;
 }
 .te-editor .gjs-toolbar-item:hover {
-  background: rgba(255,255,255,0.16) !important;
-  border-color: rgba(255,255,255,0.22) !important;
-  transform: translateY(-1px) !important;
+  background: rgba(96, 165, 250, 0.2) !important;
+  border-color: rgba(96, 165, 250, 0.5) !important;
+  color: #F1F5F9 !important;
 }
 .te-editor .gjs-toolbar-item:active {
-  transform: scale(0.96) !important;
+  transform: scale(0.94) !important;
 }
+
+/* ── Delete button — red trash icon, separated from format buttons ─── */
+.te-editor .gjs-toolbar-item#te-delete {
+  width: 34px !important;
+  min-width: 34px !important;
+  padding: 0 !important;
+  margin-left: 4px !important;
+  color: #F87171 !important;
+  background: rgba(248, 113, 113, 0.1) !important;
+  border: 1px solid rgba(248, 113, 113, 0.25) !important;
+  border-radius: 6px !important;
+  position: relative !important;
+}
+/* Vertical separator line before delete */
+.te-editor .gjs-toolbar-item#te-delete::before {
+  content: '' !important;
+  position: absolute !important;
+  left: -6px !important;
+  top: 6px !important;
+  bottom: 6px !important;
+  width: 1px !important;
+  background: rgba(255,255,255,0.15) !important;
+}
+.te-editor .gjs-toolbar-item#te-delete:hover {
+  background: rgba(248, 113, 113, 0.25) !important;
+  border-color: rgba(248, 113, 113, 0.5) !important;
+  color: #FCA5A5 !important;
+}
+
+/* ── Icon glyphs (fa-trash etc.) ────────────────────────────────────── */
 .te-editor .gjs-toolbar-item i,
 .te-editor .gjs-toolbar-item .fa,
-.te-editor .gjs-toolbar-item [class*="fa "] {
+.te-editor .gjs-toolbar-item [class*="fa "],
+.te-editor .gjs-toolbar-item span,
+.te-editor .gjs-toolbar-item svg {
   font-size: 15px !important;
+  font-weight: 400 !important;
+  line-height: 1 !important;
+  color: inherit !important;
+  font-family: inherit !important;
+  width: auto !important;
+  height: auto !important;
+  max-width: 20px !important;
+  max-height: 20px !important;
+  min-width: 16px !important;
+  min-height: 16px !important;
+  margin: 0 !important;
+  padding: 0 !important;
+}
+.te-editor .gjs-toolbar-item svg {
   width: 18px !important;
   height: 18px !important;
-  display: inline-flex !important;
-  align-items: center !important;
-  justify-content: center !important;
 }
-/* Text labels inside toolbar items (e.g. the "Replace" button) */
-.te-editor .gjs-toolbar-item span {
-  font-size: 14px !important;
-  font-weight: 700 !important;
-  letter-spacing: 0.02em !important;
-  color: inherit !important;
-}
-/* Smaller gap before the delete button (visual separation) */
-.te-editor .gjs-toolbar-item:last-child {
-  margin-left: 2px !important;
-}
+
 /* Remove any default GrapesJS toolbar background/border that fights ours */
 .te-editor .gjs-toolbar > * {
   margin: 0 !important;
@@ -3419,30 +3699,34 @@ const EDITOR_CSS = `
 /* Responsive: slightly smaller on narrow viewports */
 @media (max-width: 900px) {
   .te-editor .gjs-toolbar {
-    min-height: 40px !important;
-    padding: 4px 6px !important;
-    gap: 3px !important;
+    min-height: 38px !important;
+    padding: 4px 5px !important;
+    gap: 2px !important;
   }
   .te-editor .gjs-toolbar-item {
-    min-width: 32px !important;
-    min-height: 30px !important;
-    padding: 4px 8px !important;
+    height: 30px !important;
+    min-width: 30px !important;
+    padding: 0 8px !important;
     font-size: 14px !important;
+  }
+  .te-editor .gjs-toolbar-item#te-delete {
+    width: 30px !important;
+    min-width: 30px !important;
   }
   .te-editor .gjs-toolbar-item i,
   .te-editor .gjs-toolbar-item .fa,
-  .te-editor .gjs-toolbar-item [class*="fa "] {
-    font-size: 14px !important;
-    width: 16px !important;
-    height: 16px !important;
-  }
-  .te-editor .gjs-toolbar-item.gjs-toolbar-item--text {
-    font-size: 12px !important;
-    padding: 4px 10px !important;
+  .te-editor .gjs-toolbar-item [class*="fa "],
+  .te-editor .gjs-toolbar-item span,
+  .te-editor .gjs-toolbar-item svg {
+    font-size: 13px !important;
+    max-width: 16px !important;
+    max-height: 16px !important;
+    min-width: 14px !important;
+    min-height: 14px !important;
   }
 }
 .te-editor .gjs-drop-indicator { background: #2563EB; height: 3px; border-radius: 3px; }
-.te-editor .gjs-com-badge { background: #2563EB; }
+.te-editor .gjs-com-badge { display: none !important; }
 
 /* Asset-manager upload-area image preview */
 .te-am-img-preview { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; padding: 20px; min-height: 120px; box-sizing: border-box; }
@@ -3618,6 +3902,12 @@ const TemplateVisualEditor = forwardRef<TemplateVisualEditorHandle, TemplateVisu
             if (selectedComp && results[0]) {
               selectedComp.set('src', results[0].src);
             }
+            // Auto-close asset manager after successful upload
+            if (results.length > 0) {
+              setTimeout(() => {
+                try { editor.Commands.stop('open-assets'); } catch { /* ok */ }
+              }, 300);
+            }
           },
         },
       });
@@ -3657,7 +3947,21 @@ const TemplateVisualEditor = forwardRef<TemplateVisualEditorHandle, TemplateVisu
             : (linkType.model.prototype as any).defaults;
         editor.DomComponents.addType('link', {
           model: {
-            defaults: { ...(linkDefaults || {}), resizable: true },
+            defaults: {
+              ...(linkDefaults || {}),
+              resizable: UNIVERSAL_RESIZE,
+              // `textable` lives in `defaults` (NOT only in `init()`) because
+              // GrapesJS builds the drag-validation model with
+              // `temporary: true`, which skips `init()` (Component
+              // initialize() gates the whole post-add block on
+              // `!opt.temporary`). The sorter's escape hatch
+              // (`droppable === false && target.isInstanceOf('text') &&
+              // srcModel.get('textable')`) therefore only sees `textable`
+              // when it comes from defaults. Excluded variants (footer,
+              // social, button, media links) are flipped back to `false` in
+              // `init()` below.
+              textable: true,
+            },
             init() {
               try {
                 const getAttrs = (c: any) => (c && c.getAttributes ? c.getAttributes() : {});
@@ -3674,6 +3978,7 @@ const TemplateVisualEditor = forwardRef<TemplateVisualEditorHandle, TemplateVisu
                 if (inSocial || inFooter) {
                   this.set('resizable', false);
                   this.set('editable', false);
+                  this.set('textable', false);
                   return;
                 }
                 const flagged = attrs && attrs['data-te-button'] !== undefined;
@@ -3687,15 +3992,85 @@ const TemplateVisualEditor = forwardRef<TemplateVisualEditorHandle, TemplateVisu
                       this.addAttributes({ href: norm });
                     }
                   }
+
+                  // The Button block is wrapped in <table><tr><td>. Those
+                  // structural ancestors are also made resizable by
+                  // `makeAllTypesResizable`, so their own blue resize borders
+                  // stack on the link's resize box — clicking a button showed
+                  // TWO overlapping resize boxes. Only the link (the visible
+                  // button) must stay the resize/selection target. Stop at the
+                  // first <table> so container/section tables (meant to be
+                  // resizable) are never touched.
+                  let anc: any = this.parent();
+                  while (anc) {
+                    anc.set('resizable', false);
+                    anc.set('selectable', false);
+                    anc.set('hoverable', false);
+                    const ancTag = String(anc.get('tagName') || '').toLowerCase();
+                    if (ancTag === 'table') break;
+                    anc = anc.parent();
+                  }
                 }
                 const hasMedia = this.components().models.some((c: any) => {
                   const t = String(c.get('tagName') || '').toLowerCase();
                   return t === 'img' || t === 'svg' || c.get('type') === 'image';
                 });
-                this.set('resizable', true);
+                this.set('resizable', UNIVERSAL_RESIZE);
                 this.set('editable', flagged || !hasMedia);
+
+                // `textable` (set by default above) is the GrapesJS-native flag
+                // that lets this link be dropped/re-positioned INSIDE a Text box
+                // (Paragraph/Text block/Heading). The built-in `text` types set
+                // `droppable: false`; GrapesJS's sorter explicitly allows sources
+                // that are `textable` into text targets (with inline cursor
+                // positioning), otherwise the Link can only land as a sibling of
+                // the text box. Dragging it next to a text box still works exactly
+                // as before. Only true text links (the Link block / inline links)
+                // keep this — Button blocks and footer/social/media links are
+                // flipped back to non-textable here.
+                this.set('textable', !flagged && !hasMedia);
+
+                // The Link is a SINGLE selectable/resizable component. GrapesJS
+                // may parse the inner text ("Click here") as a nested `text`
+                // child component, which `makeAllTypesResizable` would otherwise
+                // give its own resize handles and selection box — producing the
+                // second, smaller blue box around the text. Lock every non-media
+                // child so only the <a> link itself can be selected/resized. The
+                // link's own `editable` flag still allows inline text editing,
+                // and inner <img>/<svg> elements stay selectable for image
+                // editing (wrap-image-in-link feature).
+                const lockChildren = () => {
+                  this.components().each((child: any) => {
+                    const tag = String(child.get('tagName') || '').toLowerCase();
+                    const isMedia = tag === 'img' || tag === 'svg' || child.get('type') === 'image';
+                    if (isMedia) return;
+                    child.set({
+                      selectable: false,
+                      hoverable: false,
+                      resizable: false,
+                    });
+                  });
+                };
+                lockChildren();
+                this.on('add', lockChildren);
+                this.on('loaded', lockChildren);
               } catch {
                 /* best-effort: leave defaults intact */
+              }
+            },
+          },
+          // Keep `textable` (drag-into-text) but strip the `contenteditable="false"`
+          // the base view adds for textable elements — that attribute makes the
+          // whole <a> subtree non-editable, so double-clicking the link text can't
+          // place a caret. `extendFnView` runs this method right after the parent
+          // `updateAttributes` (View.extend chains parent-then-child), so every
+          // re-render stays clean. The model-level `textable` flag is untouched
+          // and still drives the sorter's drag/caret-insert behavior.
+          extendFnView: ['updateAttributes'],
+          view: {
+            updateAttributes() {
+              if (this.el && this.el.removeAttribute) {
+                this.el.removeAttribute('contenteditable');
               }
             },
           },
@@ -3730,6 +4105,11 @@ const TemplateVisualEditor = forwardRef<TemplateVisualEditorHandle, TemplateVisu
               cell.set('selectable', false);
               cell.set('hoverable', false);
               cell.set('droppable', true);
+              cell.components().models.forEach((child: any) => {
+                if (String(child.get('tagName') || '').toLowerCase() === 'p') {
+                  child.set('droppable', true);
+                }
+              });
             });
           });
         } catch {
@@ -3756,6 +4136,39 @@ const TemplateVisualEditor = forwardRef<TemplateVisualEditorHandle, TemplateVisu
 
       registerTableBlockType('te-container', 'container');
       registerTableBlockType('te-section', 'section');
+
+      const makeColumnCellsDroppable = (tableComp: any) => {
+        try {
+          tableComp.components().models.forEach((row: any) => {
+            if (String(row.get('tagName') || '').toLowerCase() !== 'tr') return;
+            row.components().models.forEach((cell: any) => {
+              if (String(cell.get('tagName') || '').toLowerCase() !== 'td') return;
+              cell.set('droppable', true);
+              cell.components().models.forEach((child: any) => {
+                const tag = String(child.get('tagName') || '').toLowerCase();
+                if (tag === 'div' || tag === 'p') {
+                  child.set('droppable', true);
+                }
+              });
+            });
+          });
+        } catch {
+          /* best-effort */
+        }
+      };
+
+      editor.DomComponents.addType('te-columns', {
+        isComponent: (el: any) =>
+          !!el && !!el.getAttribute && el.getAttribute('data-te-role') === 'columns',
+        model: {
+          defaults: { resizable: UNIVERSAL_RESIZE },
+          init() {
+            const apply = () => makeColumnCellsDroppable(this);
+            apply();
+            this.on('loaded', apply);
+          },
+        },
+      });
 
       // Image wrapper: the full-width <div> that centres the actual <img>.
       // The wrapper itself must never be the selection/resize target — only
@@ -3808,40 +4221,6 @@ const TemplateVisualEditor = forwardRef<TemplateVisualEditorHandle, TemplateVisu
         return comp;
       };
 
-      editor.Commands.add('te-move-up', {
-        run(ed: Editor) {
-          const comp = ed.getSelected();
-          if (!comp || !comp.parent()) return;
-          const target = getImageWrapperTarget(comp);
-          if (!target.parent() || target.index() <= 0) return;
-          target.move(target.parent() as Component, { at: target.index() - 1 });
-          ed.select(comp);
-        },
-      });
-
-      editor.Commands.add('te-move-down', {
-        run(ed: Editor) {
-          const comp = ed.getSelected();
-          if (!comp || !comp.parent()) return;
-          const target = getImageWrapperTarget(comp);
-          if (!target.parent()) return;
-          target.move(target.parent() as Component, { at: target.index() + 1 });
-          ed.select(comp);
-        },
-      });
-
-      editor.Commands.add('te-duplicate', {
-        run(ed: Editor) {
-          const comp = ed.getSelected();
-          if (!comp || !comp.parent()) return;
-          const target = getImageWrapperTarget(comp);
-          const clone = target.clone();
-          target.parent()?.append(clone, { at: target.index() + 1 });
-          const img = clone.components?.().models?.find((c: any) => c.is?.('image'));
-          ed.select(img || clone);
-        },
-      });
-
       editor.Commands.add('te-delete', {
         run(ed: Editor) {
           const comp = ed.getSelected();
@@ -3849,23 +4228,6 @@ const TemplateVisualEditor = forwardRef<TemplateVisualEditorHandle, TemplateVisu
           if (window.confirm('Delete this element from the email?')) {
             const target = getImageWrapperTarget(comp);
             target.remove();
-          }
-        },
-      });
-
-      // Wrapper-aware drag-move: when the user grabs the ≡ handle on an image
-      // that lives inside an image-wrapper, select the wrapper first so
-      // GrapesJS's built-in tlb-move drags the entire wrapper block.
-      editor.Commands.add('te-wrapper-move', {
-        run(ed: Editor) {
-          const comp = ed.getSelected();
-          if (!comp) return;
-          const target = getImageWrapperTarget(comp);
-          if (target !== comp) {
-            ed.select(target);
-            setTimeout(() => ed.runCommand('tlb-move'), 0);
-          } else {
-            ed.runCommand('tlb-move');
           }
         },
       });
@@ -3885,6 +4247,27 @@ const TemplateVisualEditor = forwardRef<TemplateVisualEditorHandle, TemplateVisu
       editor.on('component:selected', (component: Component) => {
         setSelected(component);
         setTick((t) => t + 1);
+
+        // Highlight only the selected column's [data-te-col] div
+        try {
+          const iframe = editor.Canvas.getFrameEl?.();
+          const iframeDoc = iframe?.contentDocument;
+          if (iframeDoc) {
+            // Remove highlight from all columns
+            iframeDoc.querySelectorAll('.te-col-selected').forEach((el) => el.classList.remove('te-col-selected'));
+            // Walk up component tree to find [data-te-col]
+            let comp: any = component;
+            while (comp) {
+              const attrs = comp.getAttributes ? comp.getAttributes() : {};
+              if (attrs['data-te-col'] !== undefined) {
+                const el = comp.getEl?.();
+                if (el) el.classList.add('te-col-selected');
+                break;
+              }
+              comp = comp.parent();
+            }
+          }
+        } catch { /* best-effort */ }
 
         // The email background scaffold (the outer `email-wrapper` table and its
         // structural rows/cells) must behave like the canvas — it is never
@@ -3920,39 +4303,23 @@ const TemplateVisualEditor = forwardRef<TemplateVisualEditorHandle, TemplateVisu
           return;
         }
 
-        // Build a custom toolbar with move up/down + duplicate + delete so
-        // every block is independently movable, reorderable and removable.
+        // Build a compact toolbar with only Delete (trash icon). Resize is
+        // handled by native GrapesJS handles on the element itself.
         const tb: any[] = [
-          { id: 'te-move-up', label: '↑', command: 'te-move-up' },
-          { id: 'te-move-down', label: '↓', command: 'te-move-down' },
-          { id: 'te-duplicate', label: '⧉', command: 'te-duplicate' },
-          { attributes: { class: 'fa fa-arrows' }, label: '≡', command: 'tlb-move' },
-          { id: 'te-delete', label: '✕', command: 'te-delete' },
+          { id: 'te-delete', label: '<i class="fa fa-trash-o"></i>', command: 'te-delete' },
         ];
-        if (component.is && component.is('image')) {
-          tb.push({
-            id: 'te-replace-image',
-            label: 'Replace',
-            attributes: { class: 'fa fa-image' },
-            command: (ed: Editor) => ed.runCommand('open-assets', { target: ed.getSelected() }),
-          });
-          // If the image is inside an image-wrapper, use the wrapper-aware
-          // drag command so the entire block moves as one unit.
-          const inWrapper = component.parent?.()?.getAttributes?.()?.['data-te-role'] === 'image-wrapper';
-          if (inWrapper) {
-            const moveIdx = tb.findIndex((b: any) => b.command === 'tlb-move');
-            if (moveIdx >= 0) {
-              tb[moveIdx] = {
-                attributes: { class: 'fa fa-arrows' },
-                label: '≡',
-                command: 'te-wrapper-move',
-              };
-            }
-          }
-        }
         component.set('toolbar', tb);
       });
-      editor.on('selection:deselected', () => setSelected(null));
+      editor.on('selection:deselected', () => {
+        setSelected(null);
+        try {
+          const iframe = editor.Canvas.getFrameEl?.();
+          const iframeDoc = iframe?.contentDocument;
+          if (iframeDoc) {
+            iframeDoc.querySelectorAll('.te-col-selected').forEach((el) => el.classList.remove('te-col-selected'));
+          }
+        } catch { /* best-effort */ }
+      });
       editor.on('component:update', () => setTick((t) => t + 1));
       editor.on('component:styleUpdate', () => setTick((t) => t + 1));
       editor.on('device:select', (deviceModel) => {
@@ -3966,6 +4333,71 @@ const TemplateVisualEditor = forwardRef<TemplateVisualEditorHandle, TemplateVisu
       // the email reflowed to the 375px viewport.
       editor.on('canvas:frame:load', () => {
         injectMobileCss(editor, deviceRef.current === 'mobile');
+        injectColCss(editor);
+
+        // Keyboard arrow-key positioning for Link elements.
+        // When a Link is selected, arrow keys shift it by adjusting margins.
+        try {
+          const iframe = editor.Canvas.getFrameEl?.();
+          const iframeDoc = iframe?.contentDocument;
+          if (iframeDoc) {
+            iframeDoc.addEventListener('keydown', (e: KeyboardEvent) => {
+              const comp = editor.getSelected();
+              if (!comp || !isLinkBlock(comp)) return;
+              // Skip when editing text inline (contenteditable)
+              const sel = iframeDoc.getSelection();
+              if (sel && sel.rangeCount > 0) {
+                const node = sel.getRangeAt(0).startContainer;
+                if (node.nodeType === Node.TEXT_NODE || (node as HTMLElement)?.isContentEditable) return;
+              }
+              const key = e.key;
+              if (!['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(key)) return;
+              e.preventDefault();
+              e.stopPropagation();
+              const STEP = 5;
+              const style = { ...(comp.getStyle() || {}) };
+              const shorthand = expandMarginShorthand(String(style.margin || ''));
+              let mt = parseFloat(String(style['margin-top'] || shorthand.top)) || 0;
+              let ml = parseFloat(String(style['margin-left'] || shorthand.left)) || 0;
+              // If margin-left is "auto" (from block-position), convert to px first
+              if (String(style['margin-left'] || shorthand.left).trim() === 'auto') {
+                const el = comp.getEl?.();
+                ml = el ? Math.round(el.offsetLeft) : 0;
+              }
+              if (String(style['margin-top'] || shorthand.top).trim() === 'auto') {
+                mt = 0;
+              }
+              delete style.margin;
+              if (key === 'ArrowUp') mt -= STEP;
+              if (key === 'ArrowDown') mt += STEP;
+              if (key === 'ArrowLeft') ml -= STEP;
+              if (key === 'ArrowRight') ml += STEP;
+              style['margin-top'] = `${mt}px`;
+              style['margin-left'] = `${ml}px`;
+              // Preserve existing margin-right / margin-bottom
+              if (!style['margin-right']) style['margin-right'] = shorthand.right || '0';
+              if (!style['margin-bottom']) style['margin-bottom'] = shorthand.bottom || '0';
+              comp.setStyle(style);
+              setTick((t) => t + 1);
+            });
+          }
+        } catch { /* best-effort */ }
+
+        // Prevent default link navigation in the editor canvas so that
+        // single-click selects the Link and double-click enters inline
+        // text-editing mode (contentEditable), matching Text element behavior.
+        try {
+          const iframe2 = editor.Canvas.getFrameEl?.();
+          const iframeDoc2 = iframe2?.contentDocument;
+          if (iframeDoc2) {
+            iframeDoc2.addEventListener('click', (e: MouseEvent) => {
+              const target = e.target as HTMLElement;
+              if (target && target.closest && target.closest('a')) {
+                e.preventDefault();
+              }
+            }, true);
+          }
+        } catch { /* best-effort */ }
       });
       editor.on('component:update', () => {
         if (deviceRef.current === 'mobile') injectMobileCss(editor, true);
@@ -3981,6 +4413,22 @@ const TemplateVisualEditor = forwardRef<TemplateVisualEditorHandle, TemplateVisu
             setTimeout(() => editor.select(img), 0);
           }
         }
+        // Remove placeholder number when content is dropped into a column
+        try {
+          let parent = comp.parent?.();
+          while (parent) {
+            const attrs = parent.getAttributes ? parent.getAttributes() : {};
+            if (attrs['data-te-col'] !== undefined) {
+              const el = parent.getEl?.();
+              if (el) {
+                const ph = el.querySelector('[data-te-placeholder]');
+                if (ph) ph.remove();
+              }
+              break;
+            }
+            parent = parent.parent();
+          }
+        } catch { /* best-effort */ }
       });
 
       // If the wrapper itself gets selected (e.g. programmatic selection),
@@ -3994,12 +4442,151 @@ const TemplateVisualEditor = forwardRef<TemplateVisualEditorHandle, TemplateVisu
         }
       });
 
-      // Double-clicking an image opens the asset manager so a new image can be
-      // picked without touching the source HTML.
-      editor.on('component:dblclick', (component: Component) => {
-        if (component.is && component.is('image')) {
-          editor.runCommand('open-assets', { target: component });
+      // Text/content components nested inside a Link must never be selected on
+      // their own — clicking the link text should select the parent Link so only
+      // ONE blue bounding box appears. If a child gets selected (e.g. click or
+      // programmatic selection), redirect to the nearest ancestor `link`. Images
+      // inside links are excluded — they remain individually selectable for the
+      // wrap-image-in-link editing feature.
+      editor.on('component:selected', (comp: any) => {
+        if (!comp || typeof comp.is !== 'function') return;
+        if (comp.is('link')) return;
+        const selTag = String(comp.get?.('tagName') || '').toLowerCase();
+        if (selTag === 'img' || selTag === 'svg' || comp.get?.('type') === 'image') return;
+        let anc: any = comp.parent?.();
+        while (anc) {
+          if (anc.is?.('link')) {
+            setTimeout(() => editor.select(anc), 0);
+            return;
+          }
+          anc = anc.parent?.();
         }
+      });
+
+      // Double-clicking an image opens the system file picker directly, bypassing
+      // the asset-manager modal. After the user picks an image it is uploaded and
+      // set as the component's src.
+      editor.on('component:dblclick', (component: Component) => {
+        if (!component.is || !component.is('image')) return;
+        const input = document.createElement('input');
+        input.type = 'file';
+        input.accept = 'image/png,image/jpeg,image/jpg,image/webp,image/gif';
+        input.style.display = 'none';
+        document.body.appendChild(input);
+        input.addEventListener('change', async () => {
+          const file = input.files?.[0];
+          document.body.removeChild(input);
+          if (!file) return;
+          try {
+            const src = await uploadEmailImage(file);
+            component.set('src', src);
+          } catch (err) {
+            onErrorRef.current?.(err instanceof Error ? err.message : 'Failed to upload image.');
+          }
+        });
+        input.addEventListener('cancel', () => {
+          document.body.removeChild(input);
+        });
+        input.click();
+      });
+
+      // Inject "Upload Image" button + existing images list into asset manager
+      editor.on('run:open-assets', () => {
+        setTimeout(() => {
+          try {
+            const modal = document.querySelector('.gjs-am-modal') || document.querySelector('[class*="gjs-am"]');
+            if (!modal) return;
+            if (modal.querySelector('.te-am-custom-panel')) return;
+
+            // Clear any leftover preview from previous uploads
+            const oldPreview = modal.querySelector('.te-am-img-preview');
+            if (oldPreview) oldPreview.remove();
+            // Restore the drop-zone title if it was hidden
+            const titleEl = modal.querySelector('[id$="title"]') as HTMLElement | null;
+            if (titleEl) titleEl.style.display = '';
+            // Clear GrapesJS internal asset list so old uploads don't persist
+            try { editor.AssetManager?.clear?.(); } catch { /* ok */ }
+
+            // --- Upload Image button ---
+            const uploadArea = modal.querySelector('.gjs-am-file-uploader') || modal.querySelector('[class*="uploader"]');
+
+            const btn = document.createElement('button');
+            btn.className = 'te-am-upload-btn';
+            btn.textContent = 'Upload Image';
+            btn.type = 'button';
+            btn.style.cssText = 'display: inline-block; margin: 12px 16px; padding: 10px 24px; font-size: 13px; font-weight: 600; color: #FFFFFF; background: #2563EB; border: none; border-radius: 6px; cursor: pointer; transition: background 0.15s;';
+            btn.onmouseenter = () => { btn.style.background = '#1D4ED8'; };
+            btn.onmouseleave = () => { btn.style.background = '#2563EB'; };
+            btn.onclick = () => {
+              const fileInput = document.querySelector('.gjs-am-file-uploader input[type="file"]') as HTMLInputElement | null;
+              if (fileInput) fileInput.click();
+            };
+
+            if (uploadArea && uploadArea.parentNode) {
+              uploadArea.parentNode.insertBefore(btn, uploadArea.nextSibling);
+            }
+
+            // --- Collect all images already in the template ---
+            const images: string[] = [];
+            try {
+              const wrapper = editor.getWrapper();
+              if (wrapper) {
+                const walk = (comp: any) => {
+                  if (comp.is?.('image')) {
+                    const src = comp.get?.('src');
+                    if (src && !src.startsWith('data:') && !images.includes(src)) {
+                      images.push(src);
+                    }
+                  }
+                  comp.components?.().models?.forEach(walk);
+                };
+                walk(wrapper);
+              }
+            } catch { /* best-effort */ }
+
+            if (images.length === 0) return;
+
+            // --- Build the "Template Images" panel ---
+            const panel = document.createElement('div');
+            panel.className = 'te-am-custom-panel';
+            panel.style.cssText = 'padding: 16px; border-top: 1px solid #333;';
+
+            const heading = document.createElement('div');
+            heading.style.cssText = 'font-size: 12px; font-weight: 700; color: #94A3B8; text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 12px;';
+            heading.textContent = 'Template Images';
+            panel.appendChild(heading);
+
+            const grid = document.createElement('div');
+            grid.style.cssText = 'display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 12px; max-height: 260px; overflow-y: auto;';
+
+            for (const src of images) {
+              const card = document.createElement('div');
+              card.style.cssText = 'cursor: pointer; border-radius: 8px; overflow: hidden; border: 2px solid transparent; transition: border-color 0.15s, transform 0.15s;';
+              card.onmouseenter = () => { card.style.borderColor = '#60A5FA'; card.style.transform = 'scale(1.03)'; };
+              card.onmouseleave = () => { card.style.borderColor = 'transparent'; card.style.transform = 'scale(1)'; };
+              card.onclick = () => {
+                const selected = editor.getSelected();
+                if (selected && selected.is?.('image')) {
+                  selected.set('src', src);
+                }
+                try { editor.Commands.stop('open-assets'); } catch { /* ok */ }
+              };
+
+              const img = document.createElement('img');
+              img.src = src;
+              img.style.cssText = 'width: 100%; height: 90px; object-fit: cover; display: block; background: #1a1a1a;';
+              card.appendChild(img);
+              grid.appendChild(card);
+            }
+
+            panel.appendChild(grid);
+
+            // Insert after the Upload Image button
+            if (btn.parentNode) {
+              btn.parentNode.insertBefore(panel, btn.nextSibling);
+            }
+          } catch { /* best-effort */ }
+        }, 300);
       });
 
       editor.on('asset:upload:error', (error) => {
