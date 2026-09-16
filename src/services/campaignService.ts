@@ -835,7 +835,7 @@ export async function uploadEmailImage(file: File): Promise<string> {
   const random = Math.random().toString(36).slice(2, 10);
   const path = `images/${Date.now()}-${random}.${ext}`;
 
-  const { data, error } = await supabase.storage
+  const { error } = await supabase.storage
     .from('email-template')
     .upload(path, file, {
       contentType: file.type || 'image/png',

@@ -89,7 +89,6 @@ export interface UpdateFollowupConfigPayload {
 /** GET /api/followups — list configured follow-up relationships with decorators. */
 export async function fetchFollowupConfigs(): Promise<FollowupConfigRow[]> {
   const CONFIG_TABLE = 'campaign_followups'
-  const TRIGGER_TYPE = 'opened'
   const ALL_FOLLOWUP_MARKER = '__ALL_FOLLOWUP__'
 
   const { data: configs, error } = await supabase
@@ -153,7 +152,7 @@ export async function fetchFollowupConfigs(): Promise<FollowupConfigRow[]> {
       }
       if (log.campaign_id) {
         const ts = new Date(log.created_at || 0).getTime()
-        if (ts >= (originalByFollowup.get(fupId) || 0).valueOf()) {
+        if (ts >= Number(originalByFollowup.get(fupId) || 0)) {
           originalByFollowup.set(fupId, String(log.campaign_id))
         }
       }
@@ -212,7 +211,7 @@ export async function fetchFollowupConfigs(): Promise<FollowupConfigRow[]> {
   const notOpenedByCampaign = new Map<String, number>()
   const { data: allCampaignLogs } = await supabase
     .from('email_logs')
-    .select('campaign_id, contact_id, opened')
+    .select('campaign_id, contact_id, email, opened')
   if (allCampaignLogs) {
     const openedSets = new Map<string, Set<string>>()
     const notOpenedSets = new Map<string, Set<string>>()
