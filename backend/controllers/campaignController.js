@@ -5,6 +5,9 @@
  * service, and return a consistent JSON envelope.
  */
 import * as campaignService from '../services/campaignService.js';
+import { supabase } from '../services/supabaseService.js';
+import { randomUUID } from 'node:crypto';
+import { Buffer } from 'node:buffer';
 
 // ─── Frontend-compatible one-step endpoints ────────────────────────────────
 
@@ -142,6 +145,41 @@ async function scheduleCampaignById(req, res, next) {
   }
 }
 
+async function uploadImage(req, res, next) {
+  try {
+    const { filename, data, contentType } = req.body || {};
+    if (!filename || !data || !contentType) {
+      const err = new Error('filename, data (base64), and contentType are required');
+      err.status = 400;
+      throw err;
+    }
+
+    const buffer = Buffer.from(data, 'base64');
+    const path = `images/${Date.now()}-${randomUUID()}.${filename.split('.').pop() || 'png'}`;
+
+    const { error: uploadError } = await supabase.storage
+      .from('email-template')
+      .upload(path, buffer, {
+        cacheControl: '3600',
+        contentType: contentType || 'image/png',
+        upsert: false,
+      });
+
+    if (uploadError) {
+      throw new Error(`Failed to upload image: ${uploadError.message}`);
+    }
+
+    const { data: urlData } = supabase.storage.from('email-template').getPublicUrl(path);
+    if (!urlData?.publicUrl) {
+      throw new Error('Could not resolve the uploaded image URL.');
+    }
+
+    res.json({ success: true, url: urlData.publicUrl });
+  } catch (error) {
+    next(error);
+  }
+}
+
 export {
   sendCampaign,
   scheduleCampaign,
@@ -153,4 +191,5 @@ export {
   deleteCampaign,
   sendCampaignById,
   scheduleCampaignById,
+  uploadImage,
 };

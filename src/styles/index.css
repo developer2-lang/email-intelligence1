@@ -46,6 +46,10 @@ body {
   background: #f5f7fb;
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
+  /* Guard against accidental horizontal page scroll from fixed/wide UI
+     (modals, toasts, editor chrome). Nested scroll containers keep their own
+     internal horizontal scrolling (tables, chart, editor canvas). */
+  overflow-x: hidden;
 }
 
 button {
@@ -85,6 +89,13 @@ textarea {
   z-index: 10;
 }
 
+.topbar-left {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
 .topbar-title {
   font-size: 17px;
   font-weight: 700;
@@ -106,6 +117,39 @@ textarea {
   padding: 16px 20px 24px;
 }
 
+/* ─── Mobile navigation toggle + drawer backdrop ───
+   Hidden by default; the hamburger only appears on small screens where the
+   sidebar turns into an off-canvas drawer (see the responsive section). */
+.nav-toggle {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  width: 38px;
+  height: 38px;
+  flex-shrink: 0;
+  border: 1px solid var(--border2);
+  background: var(--surface);
+  border-radius: 9px;
+  color: var(--text2);
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+}
+
+.nav-toggle:hover {
+  background: var(--surface2);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.nav-toggle svg {
+  width: 20px;
+  height: 20px;
+}
+
+.nav-backdrop {
+  display: none;
+}
+
 /* ─── Full-screen Template Editor mode ───
    Applied on <html> while the editor is expanded. The app sidebar + topbar and
    page chrome are hidden so the editor fills the viewport; the editor handles
@@ -118,6 +162,10 @@ html.te-fs-mode body {
 html.te-fs-mode .sidebar,
 html.te-fs-mode .topbar {
   display: none;
+}
+
+html.te-fs-mode .nav-backdrop {
+  display: none !important;
 }
 
 html.te-fs-mode .app {
@@ -1748,6 +1796,18 @@ canvas {
   }
 }
 
+/* Laptop / small desktop: tighten the shell chrome so everything fits without
+   horizontal page overflow while the fixed sidebar stays untouched. */
+@media (max-width: 1199px) {
+  .topbar {
+    padding: 13px 20px;
+  }
+
+  .content {
+    padding: 14px 18px 22px;
+  }
+}
+
 @media (max-width: 900px) {
   .app {
     flex-direction: column;
@@ -1797,8 +1857,175 @@ canvas {
     display: none;
   }
 
+  .topbar {
+    padding: 12px 16px;
+  }
+
+  .content {
+    padding: 12px 16px 20px;
+  }
+
   .grid-2 {
     grid-template-columns: 1fr;
+  }
+}
+
+/* Mobile: the sidebar becomes an off-canvas navigation drawer opened from the
+   hamburger button in the topbar. The rest of the shell compacts to the
+   viewport width. */
+@media (max-width: 600px) {
+  .app {
+    position: relative;
+  }
+
+  /* Hamburger only on screens where the drawer is active */
+  .nav-toggle {
+    display: inline-flex;
+  }
+
+  /* Off-canvas drawer */
+  .sidebar {
+    position: fixed;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    width: 264px;
+    height: 100vh;
+    height: 100dvh;
+    flex-shrink: 0;
+    border-right: 1px solid rgba(148, 163, 184, 0.08);
+    border-bottom: none;
+    transform: translateX(-100%);
+    visibility: hidden;
+    transition: transform 0.24s ease, visibility 0.24s ease;
+    z-index: 60;
+  }
+
+  .app.nav-open .sidebar {
+    transform: translateX(0);
+    visibility: visible;
+  }
+
+  .nav-backdrop {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(15, 23, 42, 0.45);
+    z-index: 55;
+  }
+
+  .app.nav-open .nav-backdrop {
+    display: block;
+  }
+
+  /* The drawer keeps the classic vertical navigation (reverting the tablet
+     horizontal pills) and re-shows the user footer inside the drawer. */
+  .side-nav {
+    flex-direction: column;
+    flex-wrap: nowrap;
+    align-items: stretch;
+    padding-top: 2px;
+    overflow-y: auto;
+  }
+
+  .side-section {
+    flex-direction: column;
+  }
+
+  .side-section-label {
+    width: auto;
+    padding: 0 12px 6px;
+  }
+
+  .side-item {
+    width: 100%;
+  }
+
+  .side-user {
+    display: flex;
+  }
+
+  .side-foot {
+    display: block;
+  }
+
+  /* Compact topbar */
+  .topbar {
+    padding: 10px 12px;
+    gap: 8px;
+  }
+
+  .topbar-title {
+    font-size: 15px;
+  }
+
+  .topbar-sub {
+    font-size: 11px;
+    margin-top: 1px;
+  }
+
+  .content {
+    padding: 10px 12px 18px;
+  }
+
+  .toast-wrap {
+    left: 12px;
+    right: 12px;
+    bottom: 12px;
+    max-width: none;
+    align-items: stretch;
+  }
+
+  .modal-overlay {
+    padding: 10px;
+  }
+
+  .modal {
+    width: 100%;
+    max-height: 92vh;
+  }
+
+  .modal-header,
+  .modal-footer {
+    flex-wrap: wrap;
+  }
+
+  .modal-body {
+    padding: 14px;
+  }
+
+  .bulkbar {
+    left: 12px;
+    right: 12px;
+    transform: none;
+    bottom: 12px;
+    justify-content: center;
+    flex-wrap: wrap;
+  }
+
+  .bulkbar-sep {
+    display: none;
+  }
+
+  .tabs {
+    overflow-x: auto;
+    flex-wrap: nowrap;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .tab {
+    white-space: nowrap;
+    flex-shrink: 0;
+  }
+}
+
+/* Small tablets / large phones: the fixed-width email preview iframe (640px)
+   must never force the page or the modal wider than the viewport. */
+@media (max-width: 767px) {
+  .modal iframe {
+    width: 100% !important;
+    max-width: 100%;
+    height: 520px !important;
   }
 }
 
@@ -2559,6 +2786,12 @@ canvas {
 @media (max-width: 900px) {
   .stats-row {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 600px) {
+  .stats-row {
+    grid-template-columns: 1fr;
   }
 }
 
@@ -4431,6 +4664,36 @@ button.tab.active {
 @media (max-width: 900px) {
   .seqdet-summary-grid {
     grid-template-columns: 1fr;
+  }
+}
+
+/* ─── Template Editor tab — saved-template list (small screens) ───
+   The saved-template rows and their section are styled with inline styles in
+   TemplateEditorTab.tsx; these overrides only adapt spacing/flow so rows never
+   overflow the viewport width on narrow screens. */
+@media (max-width: 640px) {
+  .te-saved-section {
+    padding: 14px 14px !important;
+    margin-top: 18px !important;
+  }
+
+  .te-saved-row {
+    flex-wrap: wrap !important;
+    row-gap: 8px;
+  }
+
+  /* Actions move below the name/thumbnail on very narrow screens */
+  .te-saved-row > div:last-child {
+    flex-basis: 100% !important;
+    flex-direction: row !important;
+    align-items: center !important;
+    justify-content: space-between !important;
+  }
+}
+
+@media (max-width: 420px) {
+  .te-saved-row > div:first-child {
+    display: none;
   }
 }
 

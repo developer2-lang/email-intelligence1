@@ -45,22 +45,22 @@ import { createClient } from 'npm:@supabase/supabase-js@2';
 import { personalizeTemplate } from '../_shared/personalization.ts';
 import { toEmailSafeHtml } from '../_shared/email-render.ts';
 
-const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
+const supabaseUrl = Deno.env.get('R_SUPABASE_URL')!;
 const supabaseKey =
-  Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') || Deno.env.get('SUPABASE_ANON_KEY')!;
+  Deno.env.get('R_SERVICE_ROLE_KEY') || Deno.env.get('SUPABASE_ANON_KEY')!;
 const supabase = createClient(supabaseUrl, supabaseKey);
 
 // ─── Configuration (env) ───────────────────────────────────────────────────
-const SMTP_HOST = (Deno.env.get('SMTP_HOST') || 'smtp.gmail.com').trim();
-const SMTP_PORT = parseInt(Deno.env.get('SMTP_PORT') || '465', 10);
-const SMTP_USER = (Deno.env.get('SMTP_USER') || '').trim();
-const SMTP_PASSWORD = Deno.env.get('SMTP_PASSWORD') || '';
-const SMTP_FROM_NAME = (Deno.env.get('SMTP_FROM_NAME') || '').trim();
-const SMTP_FROM_ADDR = (Deno.env.get('SMTP_FROM') || '').trim() || SMTP_USER;
-const SMTP_REPLY_TO = (Deno.env.get('SMTP_REPLY_TO') || '').trim() || SMTP_FROM_ADDR;
+const SMTP_HOST = (Deno.env.get('R_EMAIL_HOST') || 'smtp.gmail.com').trim();
+const SMTP_PORT = parseInt(Deno.env.get('R_EMAIL_PORT') || '465', 10);
+const SMTP_USER = (Deno.env.get('R_EMAIL_USER') || '').trim();
+const SMTP_PASSWORD = Deno.env.get('R_EMAIL_PASSWORD') || '';
+const SMTP_FROM_NAME = (Deno.env.get('R_EMAIL_FROM_NAME') || '').trim();
+const SMTP_FROM_ADDR = (Deno.env.get('R_EMAIL_FROM') || '').trim() || SMTP_USER;
+const SMTP_REPLY_TO = (Deno.env.get('R_EMAIL_REPLY_TO') || '').trim() || SMTP_FROM_ADDR;
 
 const EDGE_FUNCTION_BASE =
-  (Deno.env.get('EDGE_FUNCTION_URL') || '').trim().replace(/\/+$/, '') ||
+  (Deno.env.get('R_SUPABASE_EDGE_FUNCTION_URL') || '').trim().replace(/\/+$/, '') ||
   `${supabaseUrl.replace(/\/+$/, '')}/functions/v1`;
 
 // Pacing / budget. Send Now should go as far as possible in this invocation;
@@ -245,6 +245,7 @@ function buildCampaignRecord(data: CampaignPayload, status: string) {
     template_id: data.template_id ? String(data.template_id).trim() : null,
     schedule_date: data.schedule_date ? String(data.schedule_date).trim() : null,
     schedule_time: data.schedule_time ? String(data.schedule_time).trim() : null,
+    scheduled_at: (data.schedule_date && data.schedule_time) ? `${String(data.schedule_date).trim()} ${String(data.schedule_time).trim()}` : null,
     status,
   };
 
@@ -1420,6 +1421,7 @@ async function processCampaign(
       status: 'scheduled',
       schedule_date: todayISTDateStr(),
       schedule_time: nowISTTimeStr(),
+      scheduled_at: `${todayISTDateStr()} ${nowISTTimeStr()}`,
       recipient_count: stats.total,
     });
     log(

@@ -12,6 +12,7 @@ import SequencesTab from '../pages/SequencesTab'
 import SettingsTab from '../pages/SettingsTab'
 import TemplateEditorTab from '../pages/TemplateEditorTab'
 import TemplatesPage from '../pages/TemplatesPage'
+import LeadSearch from '../pages/LeadSearch'
 
 export interface AppRoutesProps {
   activeTab: TabKey
@@ -159,6 +160,9 @@ export default function AppRoutes(props: AppRoutesProps) {
 
     case 'contact-types':
       return <ContactTypesTab onToast={props.onToast} />
+
+    case 'lead-search':
+      return <LeadSearch />
 
     default:
       return null

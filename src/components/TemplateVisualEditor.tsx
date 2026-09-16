@@ -3553,6 +3553,74 @@ const EDITOR_CSS = `
   .te-editor.te-content-collapsed.te-props-collapsed .te-body { grid-template-columns: auto minmax(0, 1fr) auto; }
 }
 
+/* Laptop / small desktop: keep the three-pane layout but give the center canvas
+   more room by tightening the CONTENT rail and the (expanded) PROPERTIES panel,
+   and drop the secondary hint text that competes for toolbar space. */
+@media (max-width: 1199px) {
+  .te-hint { display: none; }
+  .te-body { grid-template-columns: minmax(0, 148px) minmax(0, 1fr) minmax(0, 252px); }
+  .te-editor.te-content-collapsed .te-body { grid-template-columns: auto minmax(0, 1fr) minmax(0, 252px); }
+  .te-editor.te-props-collapsed .te-body { grid-template-columns: minmax(0, 148px) minmax(0, 1fr) auto; }
+  .te-editor.te-content-collapsed.te-props-collapsed .te-body { grid-template-columns: auto minmax(0, 1fr) auto; }
+}
+
+/* Tablet: narrower rails so the canvas keeps a workable width and the fixed
+   height adapts to the reduced viewport. */
+@media (max-width: 900px) {
+  .te-head { padding: 9px 12px; gap: 8px; }
+  .te-body { grid-template-columns: minmax(0, 120px) minmax(0, 1fr) minmax(0, 224px); min-height: 520px; height: calc(100vh - 320px); }
+  .te-editor.te-content-collapsed .te-body { grid-template-columns: auto minmax(0, 1fr) minmax(0, 224px); }
+  .te-editor.te-props-collapsed .te-body { grid-template-columns: minmax(0, 120px) minmax(0, 1fr) auto; }
+  .te-editor.te-content-collapsed.te-props-collapsed .te-body { grid-template-columns: auto minmax(0, 1fr) auto; }
+}
+
+/* Mobile / narrow: stack the editor vertically. The CONTENT rail moves to the
+   top as a horizontally-scrolling strip of blocks, the canvas sits below it and
+   the PROPERTIES panel docks underneath. Every section uses the full available
+   width, so nothing overlaps or forces the page wider. */
+@media (max-width: 700px) {
+  .te-editor { border-radius: 12px; }
+  .te-head { flex-direction: column; align-items: stretch; gap: 8px; padding: 10px 12px; }
+  .te-devices { flex-wrap: wrap; }
+  .te-body { display: flex; flex-direction: column; height: auto; min-height: 0; overflow: visible; }
+
+  /* CONTENT rail: full-width strip, blocks flow horizontally */
+  .te-blocks { order: 1; width: 100%; min-width: 0; border-right: none; border-bottom: 1px solid #E2E8F0; max-height: 200px; min-height: 0; }
+  .te-blocks-scroll { overflow-y: hidden; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  .te-blocks-scroll .gjs-blocks-cs,
+  .te-blocks-scroll .gjs-one-bg,
+  .te-blocks-scroll .gjs-one-bg .gjs-block-categories,
+  .te-blocks-scroll .gjs-blocks-no-cat,
+  .te-blocks-scroll .gjs-block-categories { flex-direction: row; align-items: flex-start; width: max-content !important; max-width: none !important; min-width: 100%; }
+  .te-blocks-scroll .gjs-block-category { flex-direction: row; align-items: center; }
+  .te-blocks-scroll .gjs-blocks-c { flex-direction: row !important; align-items: center; gap: 6px !important; padding: 8px; }
+  .te-blocks-scroll .gjs-block { width: 118px; height: 52px; flex: 0 0 auto; margin: 0; }
+
+  /* Canvas */
+  .te-canvas-wrap { order: 2; flex: 1 1 auto; min-height: 440px; }
+
+  /* PROPERTIES rail docks below the canvas */
+  .te-props { order: 3; width: 100%; min-width: 0; border-left: none; border-top: 1px solid #E2E8F0; max-height: 40vh; min-height: 42px; }
+
+  /* Keep the collapsed rails compact inside the stacked layout */
+  .te-editor.te-content-collapsed .te-body,
+  .te-editor.te-props-collapsed .te-body,
+  .te-editor.te-content-collapsed.te-props-collapsed .te-body { grid-template-columns: none; }
+  .te-editor.te-content-collapsed .te-blocks { max-height: 44px; }
+  .te-editor.te-content-collapsed .te-blocks-scroll { display: none; }
+  .te-editor.te-props-collapsed .te-props { border-top: none; max-height: none; }
+
+  /* Empty-state hint must wrap instead of overflowing the canvas */
+  .te-empty-hint { white-space: normal; text-align: center; line-height: 1.45; max-width: calc(100% - 24px); padding: 7px 12px; }
+
+  /* Full-screen mode: fill the viewport height; the canvas flexes to the
+     remaining space so all three regions stay visible without page scroll. */
+  .te-editor.te-fs .te-body { overflow: hidden; }
+  .te-editor.te-fs .te-canvas-wrap { min-height: 0; }
+  .te-editor.te-fs .te-blocks { max-height: 160px; }
+  .te-editor.te-fs .te-props { max-height: 34vh; }
+}
+
 .te-editor .gjs-pn-panel, .te-editor .gjs-pn-views-container { display: none; }
 .te-editor .gjs-cv-canvas { position: relative; width: 100%; height: auto; top: 0; left: 0; min-width: 0; overflow: visible; }
 .te-editor .gjs-cv-canvas__frames { position: static; width: 100%; height: auto; overflow: visible; }
@@ -3726,6 +3794,7 @@ const EDITOR_CSS = `
   }
 }
 .te-editor .gjs-drop-indicator { background: #2563EB; height: 3px; border-radius: 3px; }
+.te-editor .gjs-badge,
 .te-editor .gjs-com-badge { display: none !important; }
 
 /* Asset-manager upload-area image preview */

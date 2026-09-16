@@ -15,7 +15,7 @@ const CAMPAIGNS_TABLE = 'campaigns'
 const TEMPLATES_TABLE = 'templates'
 /** Existing template Storage bucket (built-in storage-backed templates like
  * 'IUOVA Attractive' already read from it via templates.storage_bucket). */
-const TEMPLATES_BUCKET = 'email template'
+const TEMPLATES_BUCKET = 'email-template'
 const CAMPAIGN_SCHEDULES_TABLE = 'campaign_schedules'
 const ANALYTICS_TABLE = 'campaign_analytics'
 const EMAIL_LOGS_TABLE = 'email_logs'
@@ -339,6 +339,7 @@ function toInsertRow(input: CampaignInput) {
     campaign_type: input.campaign_type?.trim() || null,
     schedule_date: input.schedule_date || null,
     schedule_time: input.schedule_time?.trim() || null,
+    scheduled_at: (input.schedule_date && input.schedule_time) ? `${input.schedule_date} ${String(input.schedule_time).trim()}` : null,
     email_body: input.email_body || null,
     html_content: input.html_content || input.email_body || null,
     template_name: input.template_name?.trim() || null,
@@ -414,12 +415,13 @@ function mapRowToCampaign(
     bounced: 0,
     status,
     date:
+      row.scheduled_at ||
       row.schedule_date ||
       (isSent && row.created_at ? new Date(row.created_at).toISOString().slice(0, 10) : '—'),
     subject: row.subject_line || 'No Subject',
     fromName: row.from_name || '',
     campaignType: normalizeCampaignType(row.campaign_type),
-    scheduleDate: row.schedule_date || '',
+    scheduleDate: row.scheduled_at || row.schedule_date || '',
     scheduleTime: row.schedule_time || '',
     emailBody: row.html_content || row.email_body || '',
     templateName: row.template_name || '',
@@ -557,7 +559,7 @@ export async function fetchTemplates(): Promise<{ data: EmailTemplate[]; error: 
 }
 
 // ─── HTML email template upload (reuses the existing templates table + the
-//     existing `email template` Storage bucket) ─────────────────────────────
+//     existing `email-template` Storage bucket) ─────────────────────────────
 
 const HTML_TEMPLATE_EXT_RE = /\.(html?|htm)$/i
 
@@ -589,7 +591,7 @@ function isValidEmailHtml(content: string): boolean {
 
 /**
  * Upload a .html/.htm email template through the EXISTING template
- * architecture: the file bytes go to the `email template` Storage bucket and a
+ * architecture: the file bytes go to the `email-template` Storage bucket and a
  * metadata row is inserted into the `templates` table with
  * template_source='storage' + storage_bucket + storage_path, exactly like the
  * built-in storage-backed templates. The returned template resolves through the
@@ -661,7 +663,7 @@ export async function uploadEmailTemplate(file: File): Promise<EmailTemplate> {
  *
  * Storage files are replaced by uploading a NEW object and then deleting the
  * old one. The anon/publishable key used by the browser only has INSERT +
- * SELECT + DELETE policies on the `email template` bucket (never UPDATE), so a
+ * SELECT + DELETE policies on the `email-template` bucket (never UPDATE), so a
  * same-path upsert would be rejected — the delete-after-upload dance keeps the
  * template readable at every step and leaves no orphaned file behind.
  */
@@ -765,7 +767,7 @@ export interface DeleteTemplateResult {
 /**
  * Delete an email template by its REAL database ID (`templates.id`) — never by
  * name. Storage-backed templates also have their HTML file removed from the
- * `email template` bucket (best-effort: the object may already be gone).
+ * `email-template` bucket (best-effort: the object may already be gone).
  *
  * A template that is still referenced by a campaign (campaigns.template_name)
  * is NOT deleted — the caller gets `{ ok: false, inUse: true }` so the UI can
@@ -820,34 +822,48 @@ export async function deleteEmailTemplate(
 }
 
 /**
- * Upload an image file into the `email template` Storage bucket's `images/`
- * folder and return its public URL. The browser-visible anon key can INSERT
- * into this bucket (migration 20260819000000) and the bucket is public, so the
- * returned URL renders directly inside sent emails. A new path is generated per
- * upload so an existing image is never overwritten.
+ * Upload an image file directly to the `email-template` Storage bucket's
+ * `images/` folder and return its public URL. Uses the existing Supabase
+ * client (anon key), so it works for unauthenticated / anonymous users in
+ * Demo Mode as well as in production.
  */
 export async function uploadEmailImage(file: File): Promise<string> {
-  if (file.size <= 0) throw new Error(`'${file.name}' is empty and cannot be uploaded.`)
-  const extMatch = String(file.name || '').match(/\.([a-zA-Z0-9]+)$/)
-  const ext = extMatch ? extMatch[1].toLowerCase() : 'png'
-  const path = `images/${Date.now()}-${crypto.randomUUID()}.${ext}`
+  if (!file) throw new Error('No file provided');
+  if (file.size <= 0) throw new Error(`'${file.name}' is empty and cannot be uploaded.`);
 
-  const { error: uploadError } = await supabase.storage
-    .from(TEMPLATES_BUCKET)
+  const ext = (file.name.split('.').pop() || 'png').toLowerCase().replace(/[^a-z0-9]/g, '');
+  const random = Math.random().toString(36).slice(2, 10);
+  const path = `images/${Date.now()}-${random}.${ext}`;
+
+  const { data, error } = await supabase.storage
+    .from('email-template')
     .upload(path, file, {
-      cacheControl: '3600',
       contentType: file.type || 'image/png',
       upsert: false,
-    })
-  if (uploadError) {
-    throw new Error(`Failed to upload image '${file.name}': ${uploadError.message}`)
+      cacheControl: '3600',
+    });
+
+  if (error) {
+    console.error('[uploadEmailImage] Supabase upload error:', error);
+    throw new Error(`Upload failed: ${error.message}`);
   }
 
-  const { data } = supabase.storage.from(TEMPLATES_BUCKET).getPublicUrl(path)
-  if (!data?.publicUrl) {
-    throw new Error(`Could not resolve the uploaded image URL (${path}).`)
+  // Verify the file is actually there and readable
+  const { data: listData, error: listErr } = await supabase.storage
+    .from('email-template')
+    .list('images', { search: path.split('/').pop() });
+
+  if (listErr || !listData?.length) {
+    console.error('[uploadEmailImage] File not found after upload', { path, listErr });
+    throw new Error(`Upload succeeded but file not found at ${path}`);
   }
-  return data.publicUrl
+
+  const { data: { publicUrl } } = supabase.storage
+    .from('email-template')
+    .getPublicUrl(path);
+
+  console.log('[uploadEmailImage] Returning public URL:', publicUrl);
+  return publicUrl;
 }
 
 // ─── Cloud campaign launch (no local backend required) ─────────────────────
@@ -1104,6 +1120,7 @@ function buildCampaignRecord(payload: CampaignLaunchPayload, status: string): Re
     template_name: payload.template_name ? String(payload.template_name).trim() : null,
     schedule_date: payload.schedule_date ? String(payload.schedule_date).trim() : null,
     schedule_time: payload.schedule_time ? String(payload.schedule_time).trim() : null,
+    scheduled_at: (payload.schedule_date && payload.schedule_time) ? `${String(payload.schedule_date).trim()} ${String(payload.schedule_time).trim()}` : null,
     status,
   }
 
@@ -1577,14 +1594,18 @@ export async function saveFollowupConfig(
 // ─── Broken image URL fixup ────────────────────────────────────────────────
 // Imported templates (especially from Mailchimp) may contain external image
 // URLs that have since been deleted or restricted (403/404). When the
-// corresponding images exist in the 'email template' Storage bucket, this
+// corresponding images exist in the 'email-template' Storage bucket, this
 // helper swaps the broken <img src> with the correct Supabase Storage public
 // URL so the template renders in the editor and at send time.
 //
 // Every replacement is logged to the console for debugging.
 
+// Derive the storage base URL from the ACTIVE supabase client so broken-image
+// replacements always point at the SAME project the app is currently using —
+// never a stale hardcoded domain (which caused ERR_NAME_NOT_RESOLVED image
+// loads after the project URL changed).
 const SUPABASE_STORAGE_BASE =
-  `https://novreeapdwjnpzflyiey.supabase.co/storage/v1/object/public/${encodeURIComponent(TEMPLATES_BUCKET)}/images/`
+  supabase.storage.from(TEMPLATES_BUCKET).getPublicUrl('images/').data?.publicUrl || ''
 
 /**
  * Known broken external image URLs → correct Supabase Storage path mappings.
@@ -1610,6 +1631,7 @@ const BROKEN_URL_MAP: Record<string, string> = {
  */
 export function fixBrokenImageUrls(html: string): string {
   if (!html) return html
+  if (!SUPABASE_STORAGE_BASE) return html
   let result = html
   let replacementCount = 0
 

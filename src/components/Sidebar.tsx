@@ -5,6 +5,7 @@ import type { TabKey } from '../types'
 const NAV_SECTIONS: { label: string; tabs: TabKey[] }[] = [
   { label: 'Overview', tabs: ['dashboard', 'analytics'] },
   { label: 'Outreach', tabs: ['contacts', 'contact-types', 'campaigns', 'followups'] },
+  { label: 'Lead Gen', tabs: ['lead-search'] },
   { label: 'Templates', tabs: ['template-editor', 'template-library'] },
   { label: 'Automation', tabs: ['sequences', 'sequence-builder'] },
   { label: 'Settings', tabs: ['settings'] },
@@ -107,6 +108,12 @@ const NAV_ICONS: Record<TabKey, ReactNode> = {
       <line x1="3" y1="12" x2="21" y2="12" strokeDasharray="4 4" />
     </>
   ),
+  'lead-search': (
+    <>
+      <circle cx="11" cy="11" r="7" />
+      <line x1="21" y1="21" x2="16.65" y2="16.65" />
+    </>
+  ),
 }
 
 interface SidebarProps {
@@ -135,7 +142,7 @@ export default function Sidebar({ activeTab, onNavigate, prefFrom }: SidebarProp
   const userName = displayName(prefFrom)
 
   return (
-    <aside className="sidebar">
+    <aside className="sidebar" id="app-sidebar">
       <div className="side-brand">
         <div className="side-logo" aria-hidden="true">
           <Icon>

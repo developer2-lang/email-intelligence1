@@ -12,7 +12,7 @@
  * TRACKING_BASE_URL is unset open/click tracking will silently never fire for
  * real recipients. We warn loudly in that case.
  */
-const configured = (process.env.TRACKING_BASE_URL || '').trim();
+const configured = (process.env.R_TRACKING_BASE_URL || '').trim();
 // The URL builders below always append `/api/tracking/...`. If an operator sets
 // TRACKING_BASE_URL to `https://host/api` (a common mistake — the tracking
 // routes are mounted at `/api/tracking`, so the origin alone is correct), the

@@ -9,7 +9,8 @@ export type TabKey =
   | 'settings'
   | 'template-editor'
   | 'template-library'
-  | 'contact-types';
+  | 'contact-types'
+  | 'lead-search';
 
 export type CampTabState = 'list' | 'compose' | 'templates' | 'followups'
 

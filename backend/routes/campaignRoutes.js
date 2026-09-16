@@ -20,6 +20,7 @@
 import express from 'express';
 import * as controller from '../controllers/campaignController.js';
 import * as followupController from '../controllers/followupController.js';
+import { uploadImage } from '../controllers/campaignController.js';
 
 const router = express.Router();
 
@@ -27,6 +28,7 @@ const router = express.Router();
 router.post('/send', controller.sendCampaign);
 router.post('/schedule', controller.scheduleCampaign);
 router.post('/draft', controller.saveDraft);
+router.post('/upload-image', controller.uploadImage);
 
 // RESTful CRUD.
 router.get('/', controller.listCampaigns);

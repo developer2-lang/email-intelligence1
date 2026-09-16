@@ -69,19 +69,19 @@
  */ import { createClient } from 'npm:@supabase/supabase-js@2';
 import { personalizeTemplate } from '../_shared/personalization.ts';
 import { toEmailSafeHtml } from '../_shared/email-render.ts';
-const supabaseUrl = Deno.env.get('SUPABASE_URL');
-const supabaseKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') || Deno.env.get('SUPABASE_ANON_KEY');
+const supabaseUrl = Deno.env.get('R_SUPABASE_URL');
+const supabaseKey = Deno.env.get('R_SERVICE_ROLE_KEY') || Deno.env.get('SUPABASE_ANON_KEY');
 const supabase = createClient(supabaseUrl, supabaseKey);
 // ─── Configuration (env) ───────────────────────────────────────────────────
 const CRON_SECRET = (Deno.env.get('CRON_SECRET') || '').trim();
-const SMTP_HOST = (Deno.env.get('SMTP_HOST') || 'smtp.gmail.com').trim();
-const SMTP_PORT = parseInt(Deno.env.get('SMTP_PORT') || '465', 10);
-const SMTP_USER = (Deno.env.get('SMTP_USER') || '').trim();
-const SMTP_PASSWORD = Deno.env.get('SMTP_PASSWORD') || '';
-const SMTP_FROM_NAME = (Deno.env.get('SMTP_FROM_NAME') || '').trim();
-const SMTP_FROM_ADDR = (Deno.env.get('SMTP_FROM') || '').trim() || SMTP_USER;
-const SMTP_REPLY_TO = (Deno.env.get('SMTP_REPLY_TO') || '').trim() || SMTP_FROM_ADDR;
-const EDGE_FUNCTION_BASE = (Deno.env.get('EDGE_FUNCTION_URL') || '').trim().replace(/\/+$/, '') || `${supabaseUrl.replace(/\/+$/, '')}/functions/v1`;
+const SMTP_HOST = (Deno.env.get('R_EMAIL_HOST') || 'smtp.gmail.com').trim();
+const SMTP_PORT = parseInt(Deno.env.get('R_EMAIL_PORT') || '465', 10);
+const SMTP_USER = (Deno.env.get('R_EMAIL_USER') || '').trim();
+const SMTP_PASSWORD = Deno.env.get('R_EMAIL_PASSWORD') || '';
+const SMTP_FROM_NAME = (Deno.env.get('R_EMAIL_FROM_NAME') || '').trim();
+const SMTP_FROM_ADDR = (Deno.env.get('R_EMAIL_FROM') || '').trim() || SMTP_USER;
+const SMTP_REPLY_TO = (Deno.env.get('R_EMAIL_REPLY_TO') || '').trim() || SMTP_FROM_ADDR;
+const EDGE_FUNCTION_BASE = (Deno.env.get('R_SUPABASE_EDGE_FUNCTION_URL') || '').trim().replace(/\/+$/, '') || `${supabaseUrl.replace(/\/+$/, '')}/functions/v1`;
 // Worker tuning. The cron polls every 30 seconds; the worker must never add a
 // business delay of its own — a step's configured wait (wait_hours /
 // send_after_*) is the ONLY thing that schedules next_run_at into the future.
@@ -281,8 +281,7 @@ async function resumeCompletedEnrollments(sequenceIds) {
  *   - Any step with a real wait keeps its future due time untouched — a 1h+ or
  *     branch-parked enrollment is never blindly made Immediate.
  * No enrollments are deleted or recreated.
- */
-async function repairStaleImmediateEnrollments(sequenceIds) {
+ */ async function repairStaleImmediateEnrollments(sequenceIds) {
   if (!sequenceIds || sequenceIds.length === 0) return 0;
   const nowIso = new Date().toISOString();
   const { data: enrollments, error } = await supabase.from('sequence_enrollments').select('id, sequence_id, current_step_id, next_run_at').in('sequence_id', sequenceIds).eq('status', 'active').not('next_run_at', 'is', null).gt('next_run_at', nowIso);
@@ -439,7 +438,6 @@ async function loadStepBatchState(sequenceId, stepId) {
   }
   return data || null;
 }
-
 /** Ensure a step has its batch queue row (defensive — the API also creates rows on activation/config save). */ async function ensureStepBatchState(sequence, step) {
   const existing = await loadStepBatchState(sequence.id, step.id);
   if (existing) return existing;
@@ -458,7 +456,6 @@ async function loadStepBatchState(sequenceId, stepId) {
   }
   return loadStepBatchState(sequence.id, step.id);
 }
-
 /** Batch gate: { allowed } or { allowed:false, deferredTo } where deferredTo is the next batch window. */ async function stepBatchGate(sequence, step) {
   if (!sequence || !step || !sequence.batch_enabled) return {
     allowed: true
@@ -492,7 +489,6 @@ async function loadStepBatchState(sequenceId, stepId) {
     allowed: true
   };
 }
-
 /** Call AFTER a provider-confirmed send to record the batch slot (atomic, rolls into the next scheduled batch when full). */ async function recordStepBatchSend(sequence, step) {
   if (!sequence || !sequence.batch_enabled || !step) return;
   try {
@@ -514,15 +510,13 @@ async function loadStepBatchState(sequenceId, stepId) {
     logErr(`[BATCH] Failed to record step send for step ${step.id}: ${error.message}`);
   }
 }
-
 /**
  * End-of-tick pass: mark a step's batch queue COMPLETED once every enrollment
  * that was positioned on it has moved on (i.e. all eligible sends for the step
  * are delivered). Only steps that already STARTED are considered (a fresh
  * branch could still receive enrollments), and any later send clears
  * completed_at via the increment, so late branch arrivals stay consistent.
- */
-async function completeDrainedStepBatches(sequenceIds) {
+ */ async function completeDrainedStepBatches(sequenceIds) {
   for (const sequenceId of sequenceIds || []){
     try {
       const { data: states, error: stateError } = await supabase.from('sequence_step_batch_state').select('*').eq('sequence_id', sequenceId);
@@ -1313,8 +1307,7 @@ async function logBranchSnapshot(sequenceId) {
 /**
  * Short human label for a per-enrollment outcome so the logs show exactly what
  * happened (sent / completed / waiting-until / advanced-to / failed / …).
- */
-function outcomeLabel(result) {
+ */ function outcomeLabel(result) {
   if (!result) return 'done';
   if (result.sent) return 'sent';
   if (result.deferred) return `deferred-until-${result.deferredTo || 'next-batch'}`;
@@ -1326,29 +1319,25 @@ function outcomeLabel(result) {
   if (result.waiting) return `waiting-until-${result.scheduled_for || '?'}`;
   return 'processed';
 }
-
 /**
  * Claim one due enrollment atomically, then process its current step. Every
  * enrollment is handled INDEPENDENTLY — one recipient's send/advance never
  * blocks or marks another as pending. Logs the full lifecycle for each row:
  * enrollment id, contact id, current step, next_run_at, due-ness, claim
  * outcome, send outcome, resulting status and resulting next_run_at.
- */
-async function processDueEnrollmentLogged(enrollment, summary) {
+ */ async function processDueEnrollmentLogged(enrollment, summary) {
   const nowMs = Date.now();
   const contactId = enrollment.contact_id;
   const stepId = enrollment.current_step_id || null;
   const stepNumber = enrollment.current_step ?? '?';
   const nextRunAt = enrollment.next_run_at;
   const due = nextRunAt ? new Date(nextRunAt).getTime() <= nowMs : true;
-
   log(`[DUE] enrollment=${enrollment.id} sequence=${enrollment.sequence_id} contact=${contactId} step=${stepId || 'null'}/#${stepNumber} next_run_at=${nextRunAt || 'null'} due=${due}`);
   log(`[SEQUENCE SEND] enrollment_id=${enrollment.id}`);
   log(`[SEQUENCE SEND] step_id=${stepId || 'null'}`);
   log(`[SEQUENCE SEND] next_run_at=${nextRunAt || 'null'}`);
   log(`[SEQUENCE SEND] database_now=${new Date().toISOString()}`);
   log(`[SEQUENCE SEND] is_due=${due}`);
-
   let claimed = false;
   try {
     claimed = await claimEnrollment(enrollment.id);
@@ -1360,7 +1349,6 @@ async function processDueEnrollmentLogged(enrollment, summary) {
     summary.skipped++;
     return;
   }
-
   try {
     const result = await processEnrollmentChain(enrollment);
     let fresh = null;
@@ -1370,13 +1358,12 @@ async function processDueEnrollmentLogged(enrollment, summary) {
       logErr(`[STATE_READ_FAILED] enrollment=${enrollment.id} error=${error.message || String(error)}`);
     }
     summary.processed++;
-    log(`[DONE] enrollment=${enrollment.id} contact=${contactId} step=#${stepNumber} outcome=${outcomeLabel(result)} status=${(fresh && fresh.status) || 'unknown'} next_run_at=${(fresh && fresh.next_run_at) || 'null'}`);
+    log(`[DONE] enrollment=${enrollment.id} contact=${contactId} step=#${stepNumber} outcome=${outcomeLabel(result)} status=${fresh && fresh.status || 'unknown'} next_run_at=${fresh && fresh.next_run_at || 'null'}`);
   } catch (error) {
     summary.failed++;
     logErr(`[SEND_FAILED] enrollment=${enrollment.id} contact=${contactId} step=#${stepNumber} error=${error.message || String(error)}`);
   }
 }
-
 async function checkDueEnrollments(sequenceIdsOverride) {
   const summary = {
     revived: 0,
@@ -1399,7 +1386,6 @@ async function checkDueEnrollments(sequenceIdsOverride) {
   if (summary.repaired > 0) {
     log(`[SEQUENCE WORKER] repair — ${summary.repaired} immediate starting-step enrollment(s) made due now`);
   }
-
   // DRAIN LOOP — process EVERY due enrollment for this run, never a fixed
   // batch. getDueEnrollments() carries no limit and claimEnrollment() pushes
   // each claimed row's next_run_at atomically into the future, so a follow-up
@@ -1409,7 +1395,7 @@ async function checkDueEnrollments(sequenceIdsOverride) {
   // up whatever is left).
   const seenDue = new Set();
   const seenSequences = new Set();
-  while (true) {
+  while(true){
     if (Date.now() - start > TIME_BUDGET_MS) break;
     const due = await getDueEnrollments(sequenceIds);
     if (due.length === 0) break;
@@ -1437,11 +1423,9 @@ async function checkDueEnrollments(sequenceIdsOverride) {
     }
     if (progress === 0) break;
   }
-
   await completeDrainedStepBatches([
     ...seenSequences
   ]);
-
   log(`Summary — due=${summary.due} processed=${summary.processed} revived=${summary.revived} repaired=${summary.repaired} skipped=${summary.skipped} failed=${summary.failed}`);
   if (sequenceIdsOverride) {
     for (const sid of sequenceIds)await logBranchSnapshot(sid);

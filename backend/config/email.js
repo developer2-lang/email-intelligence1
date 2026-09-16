@@ -10,22 +10,22 @@
  *  - List-Unsubscribe defaults to a mailto: to the From address so recipients
  *    get a working unsubscribe path without an external landing page.
  */
-const fromName = (process.env.EMAIL_FROM_NAME || '').trim();
-const fromAddress = (process.env.EMAIL_FROM || '').trim() || (process.env.EMAIL_USER || '').trim();
+const fromName = (process.env.R_EMAIL_FROM_NAME || '').trim();
+const fromAddress = (process.env.R_EMAIL_FROM || '').trim() || (process.env.R_EMAIL_USER || '').trim();
 
 export default {
-  host: process.env.EMAIL_HOST || 'smtp.gmail.com',
-  port: parseInt(process.env.EMAIL_PORT, 10) || 587,
-  secure: process.env.EMAIL_SECURE === 'true',
+  host: process.env.R_EMAIL_HOST || 'smtp.gmail.com',
+  port: parseInt(process.env.R_EMAIL_PORT, 10) || 587,
+  secure: process.env.R_EMAIL_SECURE === 'true',
   auth: {
-    user: process.env.EMAIL_USER,
-    pass: process.env.EMAIL_PASSWORD,
+    user: process.env.R_EMAIL_USER,
+    pass: process.env.R_EMAIL_PASSWORD,
   },
   from: fromAddress && fromName
     ? `"${fromName.replace(/["\\]/g, '')}" <${fromAddress}>`
     : fromAddress,
-  replyTo: (process.env.EMAIL_REPLY_TO || '').trim() || fromAddress,
+  replyTo: (process.env.R_EMAIL_REPLY_TO || '').trim() || fromAddress,
   listUnsubscribe:
-    (process.env.EMAIL_UNSUBSCRIBE_MAILTO || '').trim() ||
+    (process.env.R_EMAIL_UNSUBSCRIBE_MAILTO || '').trim() ||
     (fromAddress ? `mailto:${fromAddress}?subject=Unsubscribe` : ''),
 };

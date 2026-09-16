@@ -5,8 +5,8 @@
  */
 import { createClient } from '@supabase/supabase-js';
 
-const SUPABASE_URL = process.env.SUPABASE_URL;
-const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY;
+const SUPABASE_URL = process.env.R_SUPABASE_URL;
+const SUPABASE_KEY = process.env.R_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY;
 
 const CAMPAIGNS_TABLE = 'campaigns';
 const CONTACTS_TABLE = 'contacts';
@@ -21,10 +21,10 @@ const SCHEDULE_TABLE = 'campaign_schedules';
   const missing = [];
   if (!SUPABASE_URL) missing.push('SUPABASE_URL');
   if (!SUPABASE_KEY) missing.push('SUPABASE_SERVICE_ROLE_KEY (or SUPABASE_ANON_KEY)');
-  if (!process.env.EMAIL_HOST) missing.push('EMAIL_HOST');
-  if (!process.env.EMAIL_PORT) missing.push('EMAIL_PORT');
-  if (!process.env.EMAIL_USER) missing.push('EMAIL_USER');
-  if (!process.env.EMAIL_PASSWORD) missing.push('EMAIL_PASSWORD');
+  if (!process.env.R_EMAIL_HOST) missing.push('R_EMAIL_HOST');
+  if (!process.env.R_EMAIL_PORT) missing.push('R_EMAIL_PORT');
+  if (!process.env.R_EMAIL_USER) missing.push('R_EMAIL_USER');
+  if (!process.env.R_EMAIL_PASSWORD) missing.push('R_EMAIL_PASSWORD');
   if (missing.length > 0) {
     console.error('═══════════════════════════════════════════════════════════');
     console.error('  FATAL: Missing required environment variables:');
@@ -35,9 +35,9 @@ const SCHEDULE_TABLE = 'campaign_schedules';
     console.log('[Env] All required environment variables are set');
     console.log(`[Env] SUPABASE_URL: ${SUPABASE_URL}`);
     console.log(`[Env] SUPABASE_KEY: ${SUPABASE_KEY.substring(0, 12)}...`);
-    console.log(`[Env] EMAIL_HOST: ${process.env.EMAIL_HOST}`);
-    console.log(`[Env] EMAIL_PORT: ${process.env.EMAIL_PORT}`);
-    console.log(`[Env] EMAIL_USER: ${process.env.EMAIL_USER}`);
+    console.log(`[Env] R_EMAIL_HOST: ${process.env.R_EMAIL_HOST}`);
+    console.log(`[Env] R_EMAIL_PORT: ${process.env.R_EMAIL_PORT}`);
+    console.log(`[Env] R_EMAIL_USER: ${process.env.R_EMAIL_USER}`);
   }
 })();
 

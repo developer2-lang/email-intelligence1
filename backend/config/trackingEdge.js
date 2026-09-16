@@ -17,8 +17,8 @@ const MODE = (process.env.TRACKING_MODE || 'legacy').trim().toLowerCase();
 export const isLegacy = MODE !== 'edge';
 export const isEdge = MODE === 'edge';
 
-const configuredBaseUrl = (process.env.SUPABASE_EDGE_FUNCTION_URL || '').trim().replace(/\/+$/, '');
-const derivedBaseUrl = `${(process.env.SUPABASE_URL || '').replace(/\/+$/, '')}/functions/v1`;
+const configuredBaseUrl = (process.env.R_SUPABASE_EDGE_FUNCTION_URL || '').trim().replace(/\/+$/, '');
+const derivedBaseUrl = `${(process.env.R_SUPABASE_URL || '').replace(/\/+$/, '')}/functions/v1`;
 
 export const edgeFunctionBaseUrl = configuredBaseUrl || derivedBaseUrl;
 

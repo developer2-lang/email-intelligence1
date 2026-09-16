@@ -21,6 +21,7 @@ const DEFAULT_KEYS: StoredApiKeys = { lusha: '', mailchimp: '' }
 function tabFromHash(): TabKey | null {
   const hash = window.location.hash.replace(/^#\/?/, '').trim()
   if (hash === 'template-editor') return 'template-editor'
+  if (hash === 'lead-search') return 'lead-search'
   return null
 }
 

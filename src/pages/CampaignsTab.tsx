@@ -881,6 +881,7 @@ const DELAY_OPTIONS = [
       html_content: bodyText || '',
       schedule_date: status === 'scheduled' ? (compDate || undefined) : undefined,
       schedule_time: status === 'scheduled' ? (compTime || undefined) : undefined,
+      scheduled_at: status === 'scheduled' && compDate && compTime ? `${compDate} ${compTime}` : undefined,
       template_name: selectedTemplate?.name || null,
       template_id: selectedTemplate?.id || null,
       schedule: includeSchedule

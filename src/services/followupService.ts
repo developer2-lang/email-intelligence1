@@ -634,6 +634,7 @@ async function createFollowupCampaignRecord(payload: CreateFollowupConfigPayload
     template_name: payload.template_name ? String(payload.template_name).trim() : null,
     schedule_date: null,
     schedule_time: null,
+    scheduled_at: null,
     status: 'draft',
     created_at: new Date().toISOString(),
     updated_at: new Date().toISOString(),
