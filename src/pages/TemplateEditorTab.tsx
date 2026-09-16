@@ -45,125 +45,6 @@ const DEFAULT_TEMPLATE_HTML = `<!DOCTYPE html>
 </body>
 </html>`;
 
-const IUVOA_TEMPLATE_HTML = `<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>IUVOA Template</title>
-</head>
-<body style="margin: 0; padding: 0; background-color: #F3F4F6;">
-  <table width="100%" cellpadding="0" cellspacing="0" role="presentation" style="background-color: #F3F4F6;">
-    <tr>
-      <td align="center" style="background-color: #F3F4F6; padding: 32px 16px;">
-        <table width="600" cellpadding="0" cellspacing="0" role="presentation" style="width: 600px; background-color: #FFFFFF; border-radius: 12px; overflow: hidden;">
-
-          <!-- BLOCK 1 — Header Banner -->
-          <tr>
-            <td align="center" style="background-color: #1e3a8a; padding: 32px 20px;">
-              <img
-                src="https://placehold.co/560x80/1e3a8a/ffffff?text=IUVOA&font=roboto"
-                alt="IUVOA Logo Banner"
-                width="560"
-                style="display: block; max-width: 100%; height: auto; border: 0;"
-              />
-            </td>
-          </tr>
-
-          <!-- BLOCK 2 — Image Placeholder -->
-          <tr>
-            <td align="center" style="background-color: #eef2ff; padding: 40px 20px;">
-              <img
-                src="https://placehold.co/560x280/eef2ff/64748b?text=Double-click+to+add+an+image&font=roboto"
-                alt="Image placeholder"
-                width="560"
-                style="display: block; max-width: 100%; height: auto; border: 0;"
-              />
-            </td>
-          </tr>
-
-          <!-- BLOCK 3 — Rich Text / Paragraph -->
-          <tr>
-            <td style="padding: 32px 40px;">
-              <p style="margin: 0; font-family: Arial, Helvetica, sans-serif; font-size: 15px; line-height: 1.65; color: #334155; text-align: left;">
-                Rich text block — type anything here. Placeholders like {{first_name}} are preserved.
-              </p>
-            </td>
-          </tr>
-
-          <!-- BLOCK 4 — Social Icons Row -->
-          <tr>
-            <td align="center" style="padding: 16px 20px 32px;">
-              <table cellpadding="0" cellspacing="0" role="presentation" style="margin: 0 auto;">
-                <tr>
-                  <td align="center" style="padding: 0 8px;">
-                    <a href="#" style="text-decoration: none;">
-                      <img
-                        src="https://placehold.co/40x40/E1306C/ffffff?text=Ig&font=roboto"
-                        alt="Instagram"
-                        width="40"
-                        height="40"
-                        style="display: block; border-radius: 50%; border: 0;"
-                      />
-                    </a>
-                  </td>
-                  <td align="center" style="padding: 0 8px;">
-                    <a href="#" style="text-decoration: none;">
-                      <img
-                        src="https://placehold.co/40x40/0A66C2/ffffff?text=in&font=roboto"
-                        alt="LinkedIn"
-                        width="40"
-                        height="40"
-                        style="display: block; border-radius: 50%; border: 0;"
-                      />
-                    </a>
-                  </td>
-                  <td align="center" style="padding: 0 8px;">
-                    <a href="#" style="text-decoration: none;">
-                      <img
-                        src="https://placehold.co/40x40/1877F2/ffffff?text=f&font=roboto"
-                        alt="Facebook"
-                        width="40"
-                        height="40"
-                        style="display: block; border-radius: 50%; border: 0;"
-                      />
-                    </a>
-                  </td>
-                  <td align="center" style="padding: 0 8px;">
-                    <a href="#" style="text-decoration: none;">
-                      <img
-                        src="https://placehold.co/40x40/FF0000/ffffff?text=YT&font=roboto"
-                        alt="YouTube"
-                        width="40"
-                        height="40"
-                        style="display: block; border-radius: 50%; border: 0;"
-                      />
-                    </a>
-                  </td>
-                </tr>
-              </table>
-            </td>
-          </tr>
-
-          <!-- BLOCK 5 — Footer -->
-          <tr>
-            <td align="center" style="background-color: #f3f4f6; padding: 28px 40px;">
-              <p style="margin: 0 0 8px; font-family: Arial, Helvetica, sans-serif; font-size: 14px; font-weight: bold; color: #1E293B; text-align: center;">
-                IUVOA Design Company
-              </p>
-              <p style="margin: 0; font-family: Arial, Helvetica, sans-serif; font-size: 12.5px; line-height: 1.55; color: #64748B; text-align: center;">
-                IUVOA · 504 Felix Towers, Lbs Road · Off No, Bhandup West · Mumbai, Maharashtra
-              </p>
-            </td>
-          </tr>
-
-        </table>
-      </td>
-    </tr>
-  </table>
-</body>
-</html>`;
-
 /**
  * Resolve the stored HTML for a template through the EXISTING template
  * architecture. The implementation lives in `services/templateResolve` so the
@@ -469,22 +350,6 @@ export default function TemplateEditorTab({ onToast, onNavigate }: TemplateEdito
     else proceed();
   };
 
-  const loadIuvoaTemplate = () => {
-    const proceed = () => {
-      const html = toEmailSafeHtml(IUVOA_TEMPLATE_HTML);
-      loadedHtmlRef.current = html;
-      setSelectedTemplate(null);
-      setHtmlContent(html);
-      setEditorKey((k) => k + 1);
-      setMode('visual');
-      setDirty(false);
-      setTemplateLoadError(null);
-      onToast('IUVOA template loaded.', 'info');
-    };
-    if (dirty) setUnsavedAction(() => proceed);
-    else proceed();
-  };
-
   const handleUploadTemplate = async (files: FileList | null) => {
     if (!files || files.length === 0) return;
     const file = files[0];
@@ -746,9 +611,6 @@ export default function TemplateEditorTab({ onToast, onNavigate }: TemplateEdito
         </button>
         <button type="button" style={toolButton} onClick={startNewTemplate}>
           + New Template
-        </button>
-        <button type="button" style={toolButton} onClick={loadIuvoaTemplate}>
-          IUVOA Template
         </button>
         <input
           ref={fileInputRef}
