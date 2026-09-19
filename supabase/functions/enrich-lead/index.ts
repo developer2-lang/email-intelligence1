@@ -61,11 +61,12 @@ export default {
       const APIFY_STAGE2_ACTOR_ID = Deno.env.get("APIFY_STAGE2_ACTOR_ID");
 
       // 3. Try plausible input schemas until the actor accepts one (200).
-      //    The exact key might be linkedin_url / linkedinUrls / urls / profileUrls.
+      //    vulnv/linkedin-email-finder expects { urls: [...] } — try it FIRST,
+      //    then fall back to the other shapes.
       const inputAttempts = [
+        { urls: [linkedinUrl] },
         { linkedin_url: linkedinUrl },
         { linkedinUrls: [linkedinUrl] },
-        { urls: [linkedinUrl] },
         { profileUrls: [linkedinUrl] },
       ];
 

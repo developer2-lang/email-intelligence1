@@ -1,5 +1,5 @@
 # Supabase CLI configuration (minimal — only what this project needs).
-project_id = "novreeapdwjnpzflyiey"
+project_id = "oscdtdlwdrwvjvteqcix"
 
 # The campaign-tracker Edge Function is an open-tracking pixel loaded by email
 # clients via <img> tags, which cannot send an Authorization header — so JWT

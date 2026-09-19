@@ -37,7 +37,7 @@ function extractRole(profile: any): string {
 }
 
 export default {
-  fetch: withSupabase({ auth: ["user", "publishable", "secret"] }, async (req, ctx) => {
+  fetch: withSupabase({ auth: "none" }, async (req) => {
     // CORS headers so your React app can call this function
     const corsHeaders = {
       "Access-Control-Allow-Origin": "*",
@@ -50,7 +50,8 @@ export default {
 
     try {
       // 1. Get the filters from the React form
-      const { filters } = await req.json();
+      const body = (await req.json()) ?? {};
+      const filters = body.filters ?? {};
       console.log("✅ Filters received:", filters);
 
       // 2. Read secrets from Supabase
@@ -98,30 +99,10 @@ export default {
         role: extractRole(profile),
       }));
 
-      // 7a. Resolve the caller's user id so rows can be attributed correctly.
-      console.log("👤 userId:", ctx.userClaims?.id);
-      let userId = ctx.userClaims?.id;
+      // 7a. Public endpoint — no JWT. Rows are written without a user id.
+      const userId = null;
 
-      // 7b. Fallback: verify the caller's Bearer token when userClaims is absent.
-      if (!userId) {
-        const authHeader = req.headers.get("authorization") || "";
-        const token = authHeader.replace(/^Bearer\s+/i, "").trim();
-        if (token) {
-          const anonClient = createClient(
-            Deno.env.get("SUPABASE_URL") ?? "",
-            Deno.env.get("SUPABASE_ANON_KEY") ?? ""
-          );
-          const { data: userData, error: userError } = await anonClient.auth.getUser(token);
-          if (!userError && userData?.user) {
-            userId = userData.user.id;
-            console.log("👤 userId via auth.getUser:", userId);
-          } else if (userError) {
-            console.warn("⚠️ auth.getUser failed:", userError.message);
-          }
-        }
-      }
-
-      // 7c. Persist results to public.leads (service role bypasses RLS).
+      // 7b. Persist results to public.leads (service role bypasses RLS).
       //     The upsert runs even when no user id is resolved (public app).
 const rows = profiles
           .filter((profile: any) => profile.linkedinUrl)

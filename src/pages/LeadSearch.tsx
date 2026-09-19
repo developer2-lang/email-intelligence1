@@ -44,6 +44,31 @@ const DROPDOWNS: { key: keyof Filters; label: string; options: { label: string; 
 
 const DEFAULT_FILTERS: Filters = { industry: '', designation: '', geography: '', role: '', companySize: '', maxItems: 5 }
 
+function companyFromDesignation(designation?: string): string | null {
+  if (!designation) return null
+
+  const candidates: string[] = []
+
+  // Prefer the explicit "@ Company" signal when present (e.g. "CEO @ Acme Corp | Investor")
+  const atParts = designation.split('@')
+  if (atParts.length > 1) {
+    const after = atParts[atParts.length - 1].split('|')[0].trim()
+    if (after) candidates.push(after)
+  }
+
+  // Otherwise take the LAST "|" segment (e.g. "Partner | GBS & GCC Advisory | Everest Group" -> "Everest Group")
+  const pipeSegments = designation.split('|').map((s) => s.trim()).filter(Boolean)
+  const lastSegment = pipeSegments[pipeSegments.length - 1]
+  if (lastSegment) candidates.push(lastSegment)
+
+  for (const candidate of candidates) {
+    if (candidate.length >= 2 && !candidate.includes('|') && !candidate.includes('@')) {
+      return candidate
+    }
+  }
+  return null
+}
+
 export default function LeadSearch() {
   const [filters, setFilters] = useState<Filters>(() => {
     const saved = localStorage.getItem('leadSearchFilters')
@@ -324,7 +349,7 @@ export default function LeadSearch() {
               {leads.map((lead, i) => (
                 <tr key={lead.id ?? lead.linkedinUrl ?? i}>
                   <td>{lead.full_name || '—'}</td>
-                  <td>{lead.company_name || '—'}</td>
+                  <td>{lead.company_name?.trim() || companyFromDesignation(lead.designation) || '—'}</td>
                   <td>{lead.designation || '—'}</td>
                   <td>{lead.email || '—'}</td>
                   <td>
