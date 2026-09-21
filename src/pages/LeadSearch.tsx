@@ -875,7 +875,7 @@ export default function LeadSearch() {
       setNotice('No leads to export')
       return
     }
-    const headers = ['Name', 'Company', 'Job Title', 'Designation', 'Email', 'Phone', 'LinkedIn', 'Industry', 'Geography', 'Role']
+    const headers = ['Name', 'Company', 'Job Title', 'Designation', 'Email', 'Phone', 'LinkedIn', 'Industry', 'Geography', 'Department']
     const rows = filteredLeads.map((lead) =>
       [
         lead.full_name,
@@ -914,7 +914,7 @@ export default function LeadSearch() {
       setNotice('No leads to export')
       return
     }
-    const headers = ['Name', 'Company', 'Job Title', 'Designation', 'Email', 'Phone', 'LinkedIn', 'Industry', 'Geography', 'Role']
+    const headers = ['Name', 'Company', 'Job Title', 'Designation', 'Email', 'Phone', 'LinkedIn', 'Industry', 'Geography', 'Department']
     const rows = filteredLeads.map((lead) => [
       lead.full_name ?? '',
       lead.company_name ?? '',
@@ -977,13 +977,13 @@ export default function LeadSearch() {
     if (f.industry) parts.push(`Industry=${f.industry}`)
     if (f.designation) parts.push(`Designation=${f.designation}`)
     if (f.geography) parts.push(`Geography=${f.geography}`)
-    if (f.role) parts.push(`Role=${f.role}`)
+    if (f.role) parts.push(`Department=${f.role}`)
     doc.text(parts.length ? `Filters: ${parts.join(', ')}` : 'Filters: None', 40, 74)
     doc.setFontSize(11)
     doc.setTextColor(0)
     doc.text(`${filteredLeads.length} lead${filteredLeads.length === 1 ? '' : 's'}`, 40, 90)
 
-    const headers = ['Name', 'Company', 'Job Title', 'Designation', 'Email', 'Phone', 'LinkedIn', 'Industry', 'Geography', 'Role']
+    const headers = ['Name', 'Company', 'Job Title', 'Designation', 'Email', 'Phone', 'LinkedIn', 'Industry', 'Geography', 'Department']
     const body = filteredLeads.map((lead) => [
       lead.full_name ?? '',
       lead.company_name ?? '',
@@ -1055,7 +1055,7 @@ export default function LeadSearch() {
     },
     {
       key: 'role',
-      label: 'Role',
+      label: 'Department',
       options: mergeUnique([ROLE_OPTIONS, dbOptions.role]),
       customOptions: customRoles,
       onAddCustom: addCustomRole,
@@ -1388,7 +1388,7 @@ export default function LeadSearch() {
           <table>
             <thead>
               <tr>
-                {['Name', 'Company', 'Job Title', 'Designation', 'Email', 'Phone', 'LinkedIn', 'Industry', 'Geography', 'Role', 'Action', 'Delete'].map((h) => (
+                {['Name', 'Company', 'Job Title', 'Email', 'Phone', 'LinkedIn', 'Industry', 'Geography', 'Department', 'Action', 'Delete'].map((h) => (
                   <th key={h}>{h}</th>
                 ))}
               </tr>
@@ -1399,7 +1399,6 @@ export default function LeadSearch() {
                   <td>{lead.full_name || '—'}</td>
                   <td>{lead.company_name?.trim() || companyFromDesignation(lead.designation) || '—'}</td>
                   <td>{lead.job_title || '—'}</td>
-                  <td>{cleanDesignation(lead.designation, lead.job_title, lead.company_name) || '—'}</td>
                   <td>{lead.email || '—'}</td>
                   <td>
                     {hasPhoneValue(lead.phone) ? (
