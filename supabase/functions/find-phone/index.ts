@@ -56,13 +56,13 @@ export default {
 
       console.log("📞 Calling Apify actor", APIFY_PHONE_ACTOR_ID, "for", linkedinUrl);
 
-      // 3. Call the actor with its expected input key: { profileUrl }
+      // 3. Call the actor with its expected input key: { linkedinUrl }
       const res = await fetch(
         `https://api.apify.com/v2/acts/${APIFY_PHONE_ACTOR_ID}/run-sync-get-dataset-items?token=${APIFY_TOKEN}`,
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ profileUrl: linkedinUrl }),
+          body: JSON.stringify({ linkedinUrl }),
         }
       );
 

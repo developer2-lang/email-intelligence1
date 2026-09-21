@@ -1,5 +1,6 @@
 import { withSupabase } from "@supabase/server";
 import { createClient } from "npm:@supabase/supabase-js@2";
+import { leadToContactRow, upsertContactMirrors } from "../_shared/contactMirror.ts";
 
 console.log("🔑 env check:", { url: !!Deno.env.get("SUPABASE_URL"), key: !!Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") });
 
@@ -25,37 +26,56 @@ function getUserId(req: Request): string | null {
   return null;
 }
 
-function extractEmailFromAbout(text: string): string {
-  if (!text) return "";
-  const match = text.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/);
-  return match ? match[0] : "";
-}
-
-function extractPhoneFromAbout(text: string): string {
-  if (!text) return "";
-  const match = text.match(/\+?[\d\s().-]{7,}/);
-  return match ? match[0].trim() : "";
-}
+// Stage 1 mappings against the profile scraper's actual response shape
+// (firstName/lastName, headline, currentPosition[], location, linkedinUrl).
+// email and phone are intentionally NOT mapped here — they come from Stage 2
+// (enrich-lead).
 
 function extractFullName(profile: any): string {
   return (
+    [profile.firstName, profile.lastName].filter(Boolean).join(" ") ||
     profile.fullName ||
     profile.name ||
-    [profile.firstName, profile.lastName].filter(Boolean).join(" ") ||
     ""
   );
 }
 
+function extractCurrentPosition(profile: any): any {
+  return Array.isArray(profile.currentPosition) ? profile.currentPosition[0] : null;
+}
+
 function extractCompany(profile: any): string {
-  return profile.companyName || profile.company || profile.currentCompany || "";
+  const current = extractCurrentPosition(profile);
+  return current?.companyName || profile.companyName || profile.company || profile.currentCompany || "";
 }
 
 function extractDesignation(profile: any): string {
   return profile.headline || profile.occupation || profile.title || profile.position || "";
 }
 
+// Dedicated current job title / current position field. Checks the field names
+// this actor family actually returns for the profile's current position, in
+// priority order (dedicated job-title fields first). Never generates a value.
+function extractJobTitle(profile: any): string {
+  const current = extractCurrentPosition(profile);
+  return (
+    current?.position ||
+    profile.jobTitle ||
+    profile.job_title ||
+    profile.currentJobTitle ||
+    profile.currentTitle ||
+    profile.position ||
+    profile.title ||
+    ((Array.isArray(profile.experience) && profile.experience[0]?.title) ? profile.experience[0].title : "") ||
+    ""
+  );
+}
+
+// role → currentPosition[0].position, falling back to headline. Following the
+// Stage-1 spec; distinct from designation thanks to the dedicated position field.
 function extractRole(profile: any): string {
-  return profile.role || extractDesignation(profile);
+  const current = extractCurrentPosition(profile);
+  return current?.position || profile.role || profile.headline || "";
 }
 
 function stripToNull(value: any): string | null {
@@ -64,20 +84,25 @@ function stripToNull(value: any): string | null {
   return s ? s : null;
 }
 
-function toLeadRow(profile: any, userId: string | null, searchQuery: string) {
-  return {
+function toLeadRow(profile: any, userId: string | null, searchQuery: string, industry: string) {
+  const jobTitle = stripToNull(extractJobTitle(profile));
+  const row: Record<string, any> = {
     user_id: userId,
-    email: stripToNull(profile.email || profile.emails?.[0] || extractEmailFromAbout(profile.about)),
-    phone: stripToNull(extractPhoneFromAbout(profile.about)),
-    linkedin_url: stripToNull(profile.profileUrl || profile.url || profile.linkedinUrl),
+    linkedin_url: stripToNull(profile.linkedinUrl || profile.profileUrl || profile.url),
     full_name: stripToNull(extractFullName(profile)),
     company_name: stripToNull(extractCompany(profile)),
     designation: stripToNull(extractDesignation(profile)),
     role: stripToNull(extractRole(profile)),
     headline: stripToNull(extractDesignation(profile)),
     location: stripToNull(profile.location?.linkedinText || profile.location),
+    geography: stripToNull(profile.location?.linkedinText || profile.location?.parsed?.country),
+    industry: industry || "",
     source_query: searchQuery,
   };
+  // Only write job_title when the scraper actually provided a current position —
+  // an omitted key on UPSERT keeps any previously saved value instead of nulling it.
+  if (jobTitle) row.job_title = jobTitle;
+  return row;
 }
 
 export default {
@@ -141,22 +166,22 @@ export default {
 
       // 7. Cleaned shape for the frontend (kept for compatibility).
       const cleanedArray = profiles
-        .filter((profile: any) => !!(profile.profileUrl || profile.url || profile.linkedinUrl))
+        .filter((profile: any) => !!(profile.linkedinUrl || profile.profileUrl || profile.url))
         .map((profile: any) => ({
-          email: profile.email || profile.emails?.[0] || extractEmailFromAbout(profile.about) || "",
-          phone: extractPhoneFromAbout(profile.about) || "",
-          linkedinUrl: profile.profileUrl || profile.url || profile.linkedinUrl || "",
+          linkedinUrl: profile.linkedinUrl || profile.profileUrl || profile.url || "",
           full_name: extractFullName(profile),
           company_name: extractCompany(profile),
+          job_title: extractJobTitle(profile),
           designation: extractDesignation(profile),
           role: extractRole(profile),
+          geography: profile.location?.linkedinText || profile.location?.parsed?.country || "",
         }));
 
       // 8. Rows to persist. user_id = authenticated user when a JWT is present,
       //     otherwise NULL (public app, no login required).
       const userId = getUserId(req);
       const rows = profiles
-        .map((profile: any) => toLeadRow(profile, userId, searchQuery))
+        .map((profile: any) => toLeadRow(profile, userId, searchQuery, filters.industry))
         .filter((row: any) => row.linkedin_url);
 
       let savedCount = 0;
@@ -188,6 +213,14 @@ export default {
           });
         }
         console.log("✅ Upserted leads. New rows:", savedCount, "/", rows.length);
+
+        // 8c. Mirror into contacts so Lead Search rows also appear on the
+        //     Contacts page under the "lead search" contact type.
+        const { error: mirrorError } = await upsertContactMirrors(
+          serviceClient,
+          rows.map(leadToContactRow)
+        );
+        if (mirrorError) console.error("❌ Contact mirror upsert error:", mirrorError);
       } else {
         console.log("⚠️ No profiles with a LinkedIn URL to persist.");
       }
@@ -203,7 +236,7 @@ export default {
         }),
         { headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
-    } catch (error) {
+    } catch (error: any) {
       console.error("❌ Error:", error.message);
       return new Response(JSON.stringify({ success: false, error: error.message }), {
         headers: { ...corsHeaders, "Content-Type": "application/json" },

@@ -1,5 +1,6 @@
 import { withSupabase } from "jsr:@supabase/server@^1";
 import { createClient } from "npm:@supabase/supabase-js@2";
+import { upsertContactMirrors } from "../_shared/contactMirror.ts";
 
 const EMAIL_REGEX = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/;
 
@@ -22,14 +23,26 @@ function extractEmail(item: any): string {
 
 function extractPhone(item: any): string {
   const candidates = [
+    item.mobile_number,
     item.phone,
-    item.Phone,
+    item.mobile,
+    item.mobilePhone,
     item.phoneNumber,
     item.phone_number,
+    item.telephone,
+    item.contactPhone,
     Array.isArray(item.phoneNumbers) ? item.phoneNumbers[0] : item.phoneNumbers,
+    Array.isArray(item.phones) ? item.phones[0] : item.phones,
   ];
   for (const c of candidates) {
     if (typeof c === "string" && c.trim()) return c.trim();
+  }
+  const nested = [item.data, item.profile, item.contact, item.result];
+  for (const n of nested) {
+    if (n && typeof n === "object" && !Array.isArray(n)) {
+      const deep = extractPhone(n);
+      if (deep) return deep;
+    }
   }
   return "";
 }
@@ -114,18 +127,14 @@ export default {
       console.log("✉️  email found:", email);
       console.log("📞 phone found:", phone);
 
-      // 6. Write the enriched values back to public.leads (service role bypasses RLS)
+      // 6. Stage 2 writes ONLY email + phone back to public.leads. All other
+      //    columns (name, company, job_title, designation, geography, role,
+      //    industry) are owned by Stage 1 (scrape-leads). UPSERT on
+      //    linkedin_url so an existing row keeps its Stage 1 values untouched.
       const designation =
         first.designation || first.headline || first.occupation || first.title || first.position || "";
-      const updatePayload: Record<string, any> = { email: email || null };
+      const updatePayload: Record<string, any> = { linkedin_url: linkedinUrl, email: email || null };
       if (phone) updatePayload.phone = phone;
-      if (first.name) updatePayload.full_name = first.name;
-      if (first.company) updatePayload.company_name = first.company;
-      if (designation) {
-        updatePayload.designation = designation;
-        updatePayload.headline = designation;
-      }
-      if (first.location) updatePayload.location = first.location;
 
       const serviceClient = createClient(
         Deno.env.get("SUPABASE_URL")!,
@@ -133,8 +142,7 @@ export default {
       );
       const { error: updateError } = await serviceClient
         .from("leads")
-        .update(updatePayload)
-        .eq("id", leadId);
+        .upsert(updatePayload, { onConflict: "linkedin_url" });
       if (updateError) {
         console.error("❌ Update error:", updateError);
         return new Response(
@@ -144,6 +152,13 @@ export default {
       }
       console.log("✅ Updated lead", leadId);
 
+      // 6b. Mirror email/phone into the matching contacts row (partial update,
+      //     only touches the provided columns).
+      const { error: mirrorError } = await upsertContactMirrors(serviceClient, [
+        { linkedin_url: linkedinUrl, email: email || null, phone: phone || null },
+      ]);
+      if (mirrorError) console.error("❌ Contact mirror update error:", mirrorError);
+
       // 7. Send the enriched values back to the React frontend
       return new Response(
         JSON.stringify({
@@ -151,9 +166,9 @@ export default {
           found: !!first.found,
           email,
           phone,
-          full_name: first.name || updatePayload.full_name || "",
-          company_name: first.company || updatePayload.company_name || "",
-          designation: designation || updatePayload.designation || "",
+          full_name: first.name || "",
+          company_name: first.company || "",
+          designation: designation || "",
         }),
         { headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );

@@ -19,6 +19,8 @@
     "dotenv": "^16.4.5",
     "express": "^5.2.1",
     "grapesjs": "^0.23.5",
+    "jspdf": "^4.2.1",
+    "jspdf-autotable": "^5.0.8",
     "node-cron": "^4.6.0",
     "nodemailer": "^9.0.3",
     "react": "^19.2.8",

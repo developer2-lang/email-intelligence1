@@ -381,7 +381,9 @@ export default function ContactsTab({
     }
 
     if (cTypeFilter !== 'all') {
-      result = result.filter(c => c.type === cTypeFilter);
+      result = result.filter(c =>
+        String(c.type || '').toLowerCase() === String(cTypeFilter).toLowerCase()
+      );
     }
 
     if (cCatFilter) {
@@ -678,7 +680,9 @@ export default function ContactsTab({
     }
     const tabs = [{ id: 'all', label: 'All Contacts', count: contacts.length }];
     contactTypes.forEach(ct => {
-      const count = contacts.filter(c => c.type === ct.name).length;
+      const count = contacts.filter(c =>
+        String(c.type || '').toLowerCase() === String(ct.name).toLowerCase()
+      ).length;
       tabs.push({ id: ct.name, label: ct.name, count });
     });
     return tabs;
@@ -890,6 +894,7 @@ export default function ContactsTab({
               <option value="Startup">Startup</option>
               <option value="International">International</option>
               <option value="Domestic">Domestic</option>
+              <option value="lead search">Lead Search</option>
             </select>
           </div>
         </div>
