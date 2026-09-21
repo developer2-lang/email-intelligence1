@@ -1,5 +1,16 @@
 import { useState, useEffect } from 'react'
 import { supabase } from '../supabase'
+import {
+  fetchIndustries,
+  fetchDesignations,
+  fetchGeographies,
+  fetchRoles,
+  fetchCompanySizes,
+  fetchNumberOfProfiles,
+  type FilterOption,
+  type ProfileCountOption,
+  type RoleOption,
+} from '../services/filterService'
 
 interface Lead {
   id: string
@@ -21,26 +32,7 @@ interface Filters {
   maxItems: number
 }
 
-const INDUSTRY_OPTIONS = ['Marketing', 'Finance', 'Healthcare', 'Manufacturing', 'Retail', 'Education']
-const DESIGNATION_OPTIONS = [
-  { label: 'General', value: 'General' },
-  { label: 'VP', value: 'VP' },
-  { label: 'Head', value: 'Head' },
-  { label: 'Director', value: 'Director' },
-  { label: 'Manager', value: 'Manager' },
-  { label: 'C-Level', value: 'CEO' },
-]
-const GEOGRAPHY_OPTIONS = ['India', 'USA', 'UK', 'UAE', 'Singapore', 'Australia']
-const ROLE_OPTIONS = ['Marketing', 'Sales', 'R&D', 'Engineering', 'HR', 'Finance']
-const COMPANY_SIZE_OPTIONS = ['1-10', '11-50', '51-200', '201-500', '501-1000', '1000+']
-
-const DROPDOWNS: { key: keyof Filters; label: string; options: { label: string; value: string }[] | string[] }[] = [
-  { key: 'industry', label: 'Industry', options: INDUSTRY_OPTIONS },
-  { key: 'designation', label: 'Designation', options: DESIGNATION_OPTIONS },
-  { key: 'geography', label: 'Geography', options: GEOGRAPHY_OPTIONS },
-  { key: 'role', label: 'Role', options: ROLE_OPTIONS },
-  { key: 'companySize', label: 'Company Size', options: COMPANY_SIZE_OPTIONS },
-]
+type DropdownOption = { id: string; label: string; value: string }
 
 const DEFAULT_FILTERS: Filters = { industry: '', designation: '', geography: '', role: '', companySize: '', maxItems: 5 }
 
@@ -69,6 +61,25 @@ function companyFromDesignation(designation?: string): string | null {
   return null
 }
 
+function hasPhoneValue(phone?: string): boolean {
+  if (!phone) return false
+  const normalized = phone.trim().toUpperCase()
+  return normalized !== '' && normalized !== 'EMPTY' && normalized !== 'NULL'
+}
+
+function leadFromRow(row: any): Lead {
+  return {
+    id: row.id,
+    email: row.email,
+    phone: row.phone,
+    linkedinUrl: row.linkedin_url,
+    full_name: row.full_name,
+    company_name: row.company_name,
+    designation: row.designation,
+    role: row.role,
+  }
+}
+
 export default function LeadSearch() {
   const [filters, setFilters] = useState<Filters>(() => {
     const saved = localStorage.getItem('leadSearchFilters')
@@ -77,14 +88,54 @@ export default function LeadSearch() {
   const [leads, setLeads] = useState<Lead[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [notice, setNotice] = useState<string | null>(null)
   const [searched, setSearched] = useState(false)
   const [demoMode, setDemoMode] = useState(true)
   const [enriching, setEnriching] = useState<Set<string>>(new Set())
+  const [fetchingPhoneId, setFetchingPhoneId] = useState<string | null>(null)
+  const [deletingId, setDeletingId] = useState<string | null>(null)
   const [rowErrors, setRowErrors] = useState<Record<string, string>>({})
+
+  const [industries, setIndustries] = useState<FilterOption[]>([])
+  const [designations, setDesignations] = useState<FilterOption[]>([])
+  const [geographies, setGeographies] = useState<FilterOption[]>([])
+  const [roles, setRoles] = useState<RoleOption[]>([])
+  const [companySizes, setCompanySizes] = useState<FilterOption[]>([])
+  const [profileCounts, setProfileCounts] = useState<ProfileCountOption[]>([])
+  const [filterMetaLoading, setFilterMetaLoading] = useState(true)
+  const [filterMetaError, setFilterMetaError] = useState<string | null>(null)
 
   useEffect(() => {
     localStorage.setItem('leadSearchFilters', JSON.stringify(filters))
   }, [filters])
+
+  useEffect(() => {
+    let cancelled = false
+    ;(async () => {
+      const [ind, des, geo, rol, cs, np] = await Promise.all([
+        fetchIndustries(),
+        fetchDesignations(),
+        fetchGeographies(),
+        fetchRoles(),
+        fetchCompanySizes(),
+        fetchNumberOfProfiles(),
+      ])
+      if (cancelled) return
+      setIndustries(ind.data)
+      setDesignations(des.data)
+      setGeographies(geo.data)
+      setRoles(rol.data)
+      setCompanySizes(cs.data)
+      setProfileCounts(np.data)
+      setFilterMetaError(
+        [ind, des, geo, rol, cs, np].map((r) => r.error).filter(Boolean).join('; ') || null,
+      )
+      setFilterMetaLoading(false)
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [])
 
   useEffect(() => {
     ;(async () => {
@@ -94,18 +145,7 @@ export default function LeadSearch() {
         .order('created_at', { ascending: false })
         .limit(100)
       if (!error) {
-        setLeads(
-          (data ?? []).map((row) => ({
-            id: row.id,
-            email: row.email,
-            phone: row.phone,
-            linkedinUrl: row.linkedin_url,
-            full_name: row.full_name,
-            company_name: row.company_name,
-            designation: row.designation,
-            role: row.role,
-          })),
-        )
+        setLeads((data ?? []).map(leadFromRow))
       }
     })()
   }, [])
@@ -117,13 +157,34 @@ export default function LeadSearch() {
   const handleSearch = async () => {
     setLoading(true)
     setError(null)
+    setNotice(null)
     setSearched(true)
     try {
       const { data, error } = await supabase.functions.invoke('scrape-leads', {
         body: { filters },
       })
       if (error) throw error
-      setLeads(data.data ?? [])
+      if (!data?.success) throw new Error(data?.error || 'Search failed')
+
+      // Always reflect what's actually in the DB — re-fetch after the Edge
+      // Function persists the Apify results.
+      const { data: dbLeads, error: fetchError } = await supabase
+        .from('leads')
+        .select('*')
+        .order('created_at', { ascending: false })
+      if (fetchError) throw fetchError
+      const freshLeads = (dbLeads ?? []).map(leadFromRow)
+      setLeads(freshLeads)
+
+      const saved = Number(data.savedCount) || 0
+      const found = Number(data.found) || 0
+      if (found === 0) {
+        setNotice('No leads found for these filters')
+      } else if (saved > 0) {
+        setNotice(`${saved} new lead${saved === 1 ? '' : 's'} saved`)
+      } else {
+        setNotice('Search complete')
+      }
     } catch (e: any) {
       setError(e?.message || 'Search failed')
     } finally {
@@ -180,6 +241,57 @@ export default function LeadSearch() {
 
   const hasFilters = Object.values(filters).some((v) => v !== '')
 
+  const filterSets: { key: keyof Filters; label: string; options: DropdownOption[] }[] = [
+    { key: 'industry', label: 'Industry', options: industries },
+    { key: 'designation', label: 'Designation', options: designations },
+    { key: 'geography', label: 'Geography', options: geographies },
+    { key: 'role', label: 'Role', options: roles },
+    { key: 'companySize', label: 'Company Size', options: companySizes },
+  ]
+
+  const handleFindPhone = async (leadId: string, linkedinUrl: string) => {
+    if (fetchingPhoneId) return // prevent concurrent fetches
+    setFetchingPhoneId(leadId)
+
+    try {
+      const { data, error } = await supabase.functions.invoke('find-phone', {
+        body: { leadId, linkedinUrl },
+      })
+
+      if (error || !data?.success) {
+        alert(data?.error || error?.message || 'Failed to fetch phone')
+        return
+      }
+
+      // Update local state so the row immediately shows the phone number
+      setLeads((prev) =>
+        prev.map((l) => (l.id === leadId ? { ...l, phone: data.phone } : l)),
+      )
+    } catch (err) {
+      alert(err instanceof Error ? err.message : 'Failed to fetch phone')
+    } finally {
+      setFetchingPhoneId(null)
+    }
+  }
+
+  const handleDelete = async (leadId: string) => {
+    if (!leadId) return
+    if (!window.confirm('Delete this lead? This cannot be undone.')) return
+    setDeletingId(leadId)
+    try {
+      const { error } = await supabase
+        .from('leads')
+        .delete()
+        .eq('id', leadId)
+      if (error) throw error
+      setLeads((prev) => prev.filter((l) => l.id !== leadId))
+    } catch (e: any) {
+      alert(e?.message || 'Failed to delete lead')
+    } finally {
+      setDeletingId(null)
+    }
+  }
+
   return (
     <div className="page active">
       {error && (
@@ -194,6 +306,22 @@ export default function LeadSearch() {
           }}
         >
           {error}
+        </div>
+      )}
+
+      {notice && (
+        <div
+          style={{
+            background: '#eff6ff',
+            border: '1px solid #bfdbfe',
+            color: '#1d4ed8',
+            padding: '10px 14px',
+            borderRadius: 'var(--r)',
+            marginBottom: 16,
+            fontSize: '12.5px',
+          }}
+        >
+          {notice}
         </div>
       )}
 
@@ -258,7 +386,7 @@ export default function LeadSearch() {
             gap: '14px',
           }}
         >
-          {DROPDOWNS.map((field) => (
+          {filterSets.map((field) => (
             <div className="form-group" key={field.key} style={{ marginBottom: 0 }}>
               <label>{field.label}</label>
               <select
@@ -267,15 +395,11 @@ export default function LeadSearch() {
                 onChange={(e) => handleSelect(field.key, e.target.value)}
               >
                 <option value="">All {field.label}</option>
-                {field.options.map((opt) => {
-                  const label = typeof opt === 'string' ? opt : opt.label
-                  const value = typeof opt === 'string' ? opt : opt.value
-                  return (
-                    <option key={label} value={value}>
-                      {label}
-                    </option>
-                  )
-                })}
+                {field.options.map((opt) => (
+                  <option key={opt.id} value={opt.value}>
+                    {opt.label}
+                  </option>
+                ))}
               </select>
             </div>
           ))}
@@ -288,15 +412,26 @@ export default function LeadSearch() {
                 setFilters({ ...filters, maxItems: Number(e.target.value) })
               }
             >
-              {[2, 3, 5, 10, 20, 50].map((n) => (
-                <option key={n} value={n}>
-                  {n}
+              {profileCounts.map((n) => (
+                <option key={n.id} value={n.value}>
+                  {n.label}
                 </option>
               ))}
             </select>
           </div>
         </div>
       </div>
+
+      {filterMetaLoading && (
+        <div style={{ fontSize: '12px', color: 'var(--text4)', marginBottom: '10px' }}>
+          Loading filter options…
+        </div>
+      )}
+      {filterMetaError && (
+        <div style={{ fontSize: '12px', color: '#b91c1c', marginBottom: '10px' }}>
+          ⚠️ {filterMetaError}
+        </div>
+      )}
 
       {/* ─── Action Area ─── */}
       <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '18px' }}>
@@ -340,7 +475,7 @@ export default function LeadSearch() {
           <table>
             <thead>
               <tr>
-                {['Name', 'Company', 'Designation', 'Email', 'LinkedIn', 'Actions'].map((h) => (
+                {['Name', 'Company', 'Designation', 'Email', 'Phone', 'LinkedIn', 'Actions'].map((h) => (
                   <th key={h}>{h}</th>
                 ))}
               </tr>
@@ -352,6 +487,31 @@ export default function LeadSearch() {
                   <td>{lead.company_name?.trim() || companyFromDesignation(lead.designation) || '—'}</td>
                   <td>{lead.designation || '—'}</td>
                   <td>{lead.email || '—'}</td>
+                  <td>
+                    {hasPhoneValue(lead.phone) ? (
+                      <span style={{ fontSize: '12.5px' }}>{lead.phone}</span>
+                    ) : fetchingPhoneId === lead.id ? (
+                      <button
+                        className="btn btn-secondary"
+                        disabled
+                        style={{ fontSize: '12.5px', padding: '4px 12px', opacity: 0.6 }}
+                      >
+                        Fetching...
+                      </button>
+                    ) : (
+                      <button
+                        className="btn btn-secondary"
+                        onClick={() =>
+                          lead.linkedinUrl
+                            ? void handleFindPhone(lead.id, lead.linkedinUrl)
+                            : alert('No LinkedIn profile for this lead')
+                        }
+                        style={{ fontSize: '12.5px', padding: '4px 12px' }}
+                      >
+                        Find Phone
+                      </button>
+                    )}
+                  </td>
                   <td>
                     {lead.linkedinUrl ? (
                       <a
@@ -378,7 +538,21 @@ export default function LeadSearch() {
                       onClick={() => void handleEnrichLead(lead)}
                       style={{ fontSize: '12.5px', padding: '4px 12px' }}
                     >
-                      {enriching.has(lead.id) ? '…' : lead.email ? 'Re-fetch' : 'Find Email'}
+                      {enriching.has(lead.id) ? '…' : 'Find Email'}
+                    </button>
+                    <button
+                      className="btn btn-secondary"
+                      disabled={deletingId === lead.id || !lead.id}
+                      onClick={() => void handleDelete(lead.id)}
+                      style={{
+                        fontSize: '12.5px',
+                        padding: '4px 12px',
+                        color: '#dc2626',
+                        borderColor: '#fca5a5',
+                        marginLeft: 6,
+                      }}
+                    >
+                      {deletingId === lead.id ? 'Deleting...' : 'Delete'}
                     </button>
                   </td>
                 </tr>
@@ -389,7 +563,9 @@ export default function LeadSearch() {
           <div className="empty-state" style={{ padding: '44px 28px' }}>
             <div className="empty-icon">🔍</div>
             <div className="empty-title">No leads found</div>
-            <div className="empty-sub">Use the filters above to start your search.</div>
+            <div className="empty-sub">
+              {searched && notice ? notice : 'Use the filters above to start your search.'}
+            </div>
           </div>
         )}
       </div>
