@@ -13,6 +13,8 @@ import SettingsTab from '../pages/SettingsTab'
 import TemplateEditorTab from '../pages/TemplateEditorTab'
 import TemplatesPage from '../pages/TemplatesPage'
 import LeadSearch from '../pages/LeadSearch'
+import LeadDatabase from '../pages/LeadDatabase'
+import WeeklyQueue from '../pages/WeeklyQueue'
 
 export interface AppRoutesProps {
   activeTab: TabKey
@@ -163,6 +165,12 @@ export default function AppRoutes(props: AppRoutesProps) {
 
     case 'lead-search':
       return <LeadSearch />
+
+    case 'lead-database':
+      return <LeadDatabase onToast={props.onToast} />
+
+    case 'weekly-queue':
+      return <WeeklyQueue onToast={props.onToast} />
 
     default:
       return null

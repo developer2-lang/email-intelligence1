@@ -133,7 +133,14 @@ export default {
       //    linkedin_url so an existing row keeps its Stage 1 values untouched.
       const designation =
         first.designation || first.headline || first.occupation || first.title || first.position || "";
-      const updatePayload: Record<string, any> = { linkedin_url: linkedinUrl, email: email || null };
+      const updatePayload: Record<string, any> = {
+        linkedin_url: linkedinUrl,
+        email: email || null,
+        // Persist the "attempted" flag so the Lead Search UI keeps showing
+        // "Not Found" after a refresh — email enrichment was attempted, even
+        // when it returned no email.
+        email_attempted: true,
+      };
       if (phone) updatePayload.phone = phone;
 
       const serviceClient = createClient(

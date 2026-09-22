@@ -494,7 +494,48 @@ function setCompStyle(comp: Component | null, prop: string, value: string): void
     style[prop] = String(value);
   }
   comp.setStyle(style);
+  ensureAnchorButtonBox(comp, prop, value);
 }
+
+/**
+ * An <a> styled like a button (background, padding, border or radius) must be a
+ * block box, not `inline`. Inline boxes discard vertical padding when the
+ * browser computes their bounding rect, so GrapesJS's resize handles end up
+ * clamped around the text line box and sit in the middle of the visually
+ * padded button. Promoting the anchor to `inline-block` (and `border-box`) makes
+ * the measured box include the padding, so the blue resize outline and the top /
+ * bottom / left / right handles wrap the actual button shape.
+ *
+ * Only style writes through the Properties panel land here; structural helpers
+ * that manage `display` themselves (e.g. Button "Full Width" → `block`) are
+ * untouched because this never overrides an explicit `display` value.
+ */
+function ensureAnchorButtonBox(comp: Component | null, prop: string, value: string): void {
+  if (!comp) return;
+  if (String(comp.get('tagName') || '').toLowerCase() !== 'a') return;
+  if (String(value ?? '') === '') return;
+  if (!ANCHOR_BUTTON_BOX_PROPS.has(prop)) return;
+  const style = { ...(comp.getStyle() || {}) };
+  if (!style['display']) style['display'] = 'inline-block';
+  style['box-sizing'] = 'border-box';
+  comp.setStyle(style);
+}
+
+/** Style properties whose presence on an <a> makes it a "button-like" box. */
+const ANCHOR_BUTTON_BOX_PROPS = new Set([
+  'background',
+  'background-color',
+  'padding',
+  'padding-top',
+  'padding-right',
+  'padding-bottom',
+  'padding-left',
+  'border',
+  'border-width',
+  'border-style',
+  'border-color',
+  'border-radius',
+]);
 
 function setCompAttr(comp: Component, name: string, value: string): void {
   if (value === '' || value == null) {
@@ -2842,7 +2883,7 @@ function PropertiesPanel({ editor, component, tick, onError }: PropertiesPanelPr
              max={72}
            />
          </Field>
-         <Field label="Text Color">
+         <Field label="Link Text Color">
            <ColorInput
              value={getStyle('color')}
              onChange={(v) => {
@@ -2852,7 +2893,77 @@ function PropertiesPanel({ editor, component, tick, onError }: PropertiesPanelPr
                  }
                }
              }}
-             onReset={() => setStyle('color', '#2563EB')}
+             onReset={() => setStyle('color', '')}
+           />
+         </Field>
+         <Field label="Link Background Color">
+           <ColorInput
+             value={getStyle('background-color')}
+             onChange={setBackgroundColor}
+             onReset={() => setStyle('background-color', '')}
+           />
+         </Field>
+         <Field label="Border Radius">
+           <NumberInput
+             value={pxToNum(getStyle('border-radius'))}
+             onChange={(v) => setStyle('border-radius', v ? `${parseFloat(v) || 0}px` : '')}
+             min={0}
+             max={100}
+           />
+         </Field>
+         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px' }}>
+           <Field label="Padding (Vertical)">
+             <NumberInput
+               value={pxToNum(getStyle('padding-top'))}
+               onChange={(v) => {
+                 const n = parseFloat(v);
+                 const val = Number.isFinite(n) && n > 0 ? `${n}px` : '';
+                 setStyle('padding-top', val);
+                 setStyle('padding-bottom', val);
+               }}
+               min={0}
+               max={200}
+             />
+           </Field>
+           <Field label="Padding (Horizontal)">
+             <NumberInput
+               value={pxToNum(getStyle('padding-left'))}
+               onChange={(v) => {
+                 const n = parseFloat(v);
+                 const val = Number.isFinite(n) && n > 0 ? `${n}px` : '';
+                 setStyle('padding-left', val);
+                 setStyle('padding-right', val);
+               }}
+               min={0}
+               max={200}
+             />
+           </Field>
+         </div>
+         <Field label="Border Width">
+           <NumberInput
+             value={pxToNum(getStyle('border-width'))}
+             onChange={(v) => {
+               const n = parseFloat(v);
+               const w = Number.isFinite(n) && n > 0 ? `${n}px` : '';
+               setStyle('border-width', w);
+               setStyle('border-style', w ? getStyle('border-style') || 'solid' : '');
+             }}
+             min={0}
+             max={40}
+           />
+         </Field>
+         <Field label="Border Style">
+           <SelectInput
+             value={getStyle('border-style') || 'none'}
+             onChange={(v) => setStyle('border-style', v === 'none' ? '' : v)}
+             options={['none', 'solid', 'dashed']}
+           />
+         </Field>
+         <Field label="Border Color">
+           <ColorInput
+             value={getStyle('border-color')}
+             onChange={(v) => setStyle('border-color', v)}
+             onReset={() => setStyle('border-color', '')}
            />
          </Field>
           <Field label="Underline">

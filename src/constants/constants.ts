@@ -15,6 +15,8 @@ export const NAV_META: { [key: string]: { title: string; sub: string } } = {
   settings:   { title: 'Settings & APIs',       sub: 'Connect Lusha, Mailchimp and other tools' },
   'contact-types': { title: 'Contact Types',    sub: 'Manage contact type definitions' },
   'lead-search': { title: 'Lead Search', sub: 'Find B2B leads by filters' },
+  'lead-database': { title: 'Lead Database', sub: 'Browse and manage every saved lead' },
+  'weekly-queue': { title: 'Weekly Queue', sub: 'One welcome email per new contact, every Monday' },
 };
 
 export const AV_COLORS = ['#2563EB','#10B981','#F59E0B','#8B5CF6','#EF4444','#0891B2','#7C3AED'];

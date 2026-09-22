@@ -84,7 +84,7 @@ function stripToNull(value: any): string | null {
   return s ? s : null;
 }
 
-function toLeadRow(profile: any, userId: string | null, searchQuery: string, industry: string) {
+function toLeadRow(profile: any, userId: string | null, searchQuery: string, industry: string, roleFilter: string) {
   const jobTitle = stripToNull(extractJobTitle(profile));
   const row: Record<string, any> = {
     user_id: userId,
@@ -92,7 +92,7 @@ function toLeadRow(profile: any, userId: string | null, searchQuery: string, ind
     full_name: stripToNull(extractFullName(profile)),
     company_name: stripToNull(extractCompany(profile)),
     designation: stripToNull(extractDesignation(profile)),
-    role: stripToNull(extractRole(profile)),
+    role: roleFilter || "",
     headline: stripToNull(extractDesignation(profile)),
     location: stripToNull(profile.location?.linkedinText || profile.location),
     geography: stripToNull(profile.location?.linkedinText || profile.location?.parsed?.country),
@@ -181,7 +181,7 @@ export default {
       //     otherwise NULL (public app, no login required).
       const userId = getUserId(req);
       const rows = profiles
-        .map((profile: any) => toLeadRow(profile, userId, searchQuery, filters.industry))
+        .map((profile: any) => toLeadRow(profile, userId, searchQuery, filters.industry, filters.role))
         .filter((row: any) => row.linkedin_url);
 
       let savedCount = 0;

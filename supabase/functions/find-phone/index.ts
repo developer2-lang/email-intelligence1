@@ -81,12 +81,25 @@ export default {
       const phone = extractPhone(first);
       console.log("📞 phone found:", phone);
 
+      // Service client (bypasses RLS) for writing back to public.leads.
+      const serviceClient = createClient(
+        Deno.env.get("SUPABASE_URL")!,
+        Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
+      );
+
       if (!phone) {
         const message = String(first?.message || "");
         const noMobile =
           first?.success === false ||
           /not found/i.test(message) ||
           /no mobile/i.test(message);
+        // Persist the "attempted" flag so the Lead Search UI keeps showing
+        // "Not Found" after a refresh instead of re-offering "Find Phone".
+        const { error: attemptedError } = await serviceClient
+          .from("leads")
+          .update({ phone_attempted: true })
+          .eq("id", leadId);
+        if (attemptedError) console.error("❌ Attempted-flag update error:", attemptedError);
         return new Response(
           JSON.stringify({
             success: false,
@@ -98,14 +111,10 @@ export default {
         );
       }
 
-      // 5. Write the phone back to public.leads (service role bypasses RLS)
-      const serviceClient = createClient(
-        Deno.env.get("SUPABASE_URL")!,
-        Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
-      );
+      // 5. Write the phone (and the attempted flag) back to public.leads
       const { error: updateError } = await serviceClient
         .from("leads")
-        .update({ phone })
+        .update({ phone, phone_attempted: true })
         .eq("id", leadId);
       if (updateError) {
         console.error("❌ Update error:", updateError);

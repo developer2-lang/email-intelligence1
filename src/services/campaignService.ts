@@ -1214,7 +1214,61 @@ async function extractFunctionError(error: unknown): Promise<string> {
  * envelope shape the backend returned (campaign_id + status).
  */
 export async function sendCampaign(payload: CampaignLaunchPayload): Promise<CampaignLaunchResult> {
-  const { data, error } = await supabase.functions.invoke('send-campaign', { body: payload })
+  // Build exactly the body the `send-campaign` Edge Function validates
+  // (CampaignPayload in supabase/functions/send-campaign/index.ts):
+  //   required: campaign_name, subject_line (or subject), from_name,
+  //             audience_segment, html_content
+  // Every field is coerced to its backend type here, arrays are guaranteed to
+  // be arrays, and `undefined` keys are omitted (JSON.stringify drops them, but
+  // constructing the body explicitly keeps the outgoing JSON in the exact
+  // schema the function checks — a missing/duplicated/renamed field can't slip
+  // through and surface as an opaque 400 from the edge function).
+  const requestBody: Record<string, any> = {
+    id: payload.id ? String(payload.id) : null,
+    campaign_name: String(payload.campaign_name ?? '').trim(),
+    subject_line: String(payload.subject_line ?? '').trim(),
+    from_name: String(payload.from_name ?? '').trim(),
+    audience_segment: String(payload.audience_segment && String(payload.audience_segment).trim() ? payload.audience_segment : 'All Contacts').trim(),
+    campaign_type: String(payload.campaign_type || 'Campaign').trim(),
+    html_content: String(payload.html_content ?? ''),
+    template_name: payload.template_name ? String(payload.template_name).trim() : null,
+    attachments: Array.isArray(payload.attachments) ? payload.attachments : [],
+    selected_contact_ids: Array.isArray(payload.selected_contact_ids)
+      ? payload.selected_contact_ids.map((id) => String(id))
+      : [],
+  }
+
+  if (payload.schedule_date) requestBody.schedule_date = String(payload.schedule_date).trim()
+  if (payload.schedule_time) requestBody.schedule_time = String(payload.schedule_time).trim()
+  if (payload.schedule) requestBody.schedule = payload.schedule
+
+  const sendInBatches = payload.send_in_batches === true
+  requestBody.send_in_batches = sendInBatches
+  if (sendInBatches) {
+    requestBody.batch_size = Number(payload.batch_size) > 0 ? Number(payload.batch_size) : 30
+    requestBody.first_batch_delay_hours = Number.isFinite(Number(payload.first_batch_delay_hours))
+      ? Number(payload.first_batch_delay_hours)
+      : 2
+    requestBody.subsequent_batch_delay_hours = Number.isFinite(Number(payload.subsequent_batch_delay_hours))
+      ? Number(payload.subsequent_batch_delay_hours)
+      : 1
+  }
+
+  // Fail fast with a clear message BEFORE hitting the edge function — the
+  // backend would reject the exact same payload with a 400.
+  const missing: string[] = []
+  if (!requestBody.campaign_name) missing.push('campaign_name')
+  if (!requestBody.subject_line) missing.push('subject_line')
+  if (!requestBody.from_name) missing.push('from_name')
+  if (!requestBody.audience_segment) missing.push('audience_segment')
+  if (!String(requestBody.html_content).trim()) missing.push('html_content')
+  if (missing.length > 0) {
+    throw new Error(`Missing required fields: ${missing.join(', ')}`)
+  }
+
+  console.log('[sendCampaign] Sending payload:', requestBody)
+
+  const { data, error } = await supabase.functions.invoke('send-campaign', { body: requestBody })
   if (error) {
     throw new Error(await extractFunctionError(error))
   }

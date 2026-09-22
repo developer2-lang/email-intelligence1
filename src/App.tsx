@@ -22,6 +22,8 @@ function tabFromHash(): TabKey | null {
   const hash = window.location.hash.replace(/^#\/?/, '').trim()
   if (hash === 'template-editor') return 'template-editor'
   if (hash === 'lead-search') return 'lead-search'
+  if (hash === 'lead-database') return 'lead-database'
+  if (hash === 'weekly-queue') return 'weekly-queue'
   return null
 }
 
@@ -142,8 +144,8 @@ export default function App() {
   // ─── NAVIGATION ───
   const onNavigate = useCallback((tab: TabKey) => {
     setActiveTab(tab)
-    if (tab === 'template-editor') {
-      window.location.hash = '/template-editor'
+    if (tab === 'template-editor' || tab === 'lead-database' || tab === 'weekly-queue') {
+      window.location.hash = `/${tab}`
     } else if (window.location.hash) {
       window.location.hash = ''
     }

@@ -22,6 +22,8 @@ interface Lead {
   role?: string
   industry?: string
   geography?: string
+  phone_attempted?: boolean
+  email_attempted?: boolean
 }
 
 interface Filters {
@@ -235,6 +237,8 @@ function leadFromRow(row: any): Lead {
     role: row.role || '',
     industry: row.industry,
     geography: row.geography,
+    phone_attempted: row.phone_attempted === true,
+    email_attempted: row.email_attempted === true,
   }
 }
 
@@ -835,6 +839,8 @@ export default function LeadSearch() {
                 full_name: data.full_name || l.full_name,
                 company_name: data.company_name || l.company_name,
                 designation: data.designation || l.designation,
+                email_attempted: true,
+                phone_attempted: hasPhoneValue(data?.phone) ? l.phone_attempted : true,
               }
             : l,
         ),
@@ -1077,13 +1083,25 @@ export default function LeadSearch() {
       })
 
       if (error || !data?.success) {
+        // Flag the row locally (the backend also persists it) so the cell shows
+        // "Not Found" — matching the refresh-persisted state.
+        setLeads((prev) =>
+          prev.map((l) => (l.id === leadId ? { ...l, phone_attempted: true } : l)),
+        )
         alert(data?.error || error?.message || 'Failed to fetch phone')
+        return
+      }
+
+      if (!hasPhoneValue(data.phone)) {
+        setLeads((prev) =>
+          prev.map((l) => (l.id === leadId ? { ...l, phone_attempted: true } : l)),
+        )
         return
       }
 
       // Update local state so the row immediately shows the phone number
       setLeads((prev) =>
-        prev.map((l) => (l.id === leadId ? { ...l, phone: data.phone } : l)),
+        prev.map((l) => (l.id === leadId ? { ...l, phone: data.phone, phone_attempted: true } : l)),
       )
     } catch (err) {
       alert(err instanceof Error ? err.message : 'Failed to fetch phone')
@@ -1399,16 +1417,28 @@ export default function LeadSearch() {
                   <td>{lead.full_name || '—'}</td>
                   <td>{lead.company_name?.trim() || companyFromDesignation(lead.designation) || '—'}</td>
                   <td>{lead.job_title || '—'}</td>
-                  <td>{lead.email || '—'}</td>
+                  <td>
+                    {lead.email ? (
+                      <span style={{ fontSize: '12.5px' }}>{lead.email}</span>
+                    ) : enriching.has(lead.id) ? (
+                      <span style={{ fontSize: '12.5px', opacity: 0.6 }}>Fetching...</span>
+                    ) : lead.email_attempted === true ? (
+                      <span style={{ fontSize: '12.5px', color: '#9ca3af', fontStyle: 'italic' }}>Not Found</span>
+                    ) : (
+                      '—'
+                    )}
+                  </td>
                   <td>
                     {hasPhoneValue(lead.phone) ? (
                       <span style={{ fontSize: '12.5px' }}>{lead.phone}</span>
                     ) : fetchingPhoneId === lead.id ? (
                       <span style={{ fontSize: '12.5px', opacity: 0.6 }}>Fetching...</span>
+                    ) : lead.phone_attempted === true ? (
+                      <span style={{ fontSize: '12.5px', color: '#9ca3af', fontStyle: 'italic' }}>Not Found</span>
                     ) : (
                       <button
                         className="btn"
-                        disabled={fetchingPhoneId === lead.id || !lead.id}
+                        disabled={!lead.id}
                         onClick={() =>
                           lead.linkedinUrl
                             ? void handleFindPhone(lead.id, lead.linkedinUrl)

@@ -5,9 +5,9 @@ import type { TabKey } from '../types'
 const NAV_SECTIONS: { label: string; tabs: TabKey[] }[] = [
   { label: 'Overview', tabs: ['dashboard', 'analytics'] },
   { label: 'Outreach', tabs: ['contacts', 'contact-types', 'campaigns', 'followups'] },
-  { label: 'Lead Gen', tabs: ['lead-search'] },
+  { label: 'Lead Generation', tabs: ['lead-search', 'lead-database'] },
   { label: 'Templates', tabs: ['template-editor', 'template-library'] },
-  { label: 'Automation', tabs: ['sequences', 'sequence-builder'] },
+  { label: 'Automation', tabs: ['sequences', 'sequence-builder', 'weekly-queue'] },
   { label: 'Settings', tabs: ['settings'] },
 ]
 
@@ -114,6 +114,19 @@ const NAV_ICONS: Record<TabKey, ReactNode> = {
       <line x1="21" y1="21" x2="16.65" y2="16.65" />
     </>
   ),
+  'lead-database': (
+    <>
+      <ellipse cx="12" cy="5" rx="9" ry="3" />
+      <path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3" />
+      <path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5" />
+    </>
+  ),
+  'weekly-queue': (
+    <>
+      <circle cx="12" cy="12" r="9" />
+      <polyline points="12 7 12 12 15.5 14" />
+    </>
+  ),
 }
 
 interface SidebarProps {
@@ -169,7 +182,7 @@ export default function Sidebar({ activeTab, onNavigate, prefFrom }: SidebarProp
                 <span className="side-icon">
                   <Icon>{NAV_ICONS[tab]}</Icon>
                 </span>
-                <span className="side-label">{NAV_META[tab].title}</span>
+                <span className="side-label">{tab === 'lead-search' ? 'Lead Generation' : NAV_META[tab].title}</span>
               </button>
             ))}
           </div>

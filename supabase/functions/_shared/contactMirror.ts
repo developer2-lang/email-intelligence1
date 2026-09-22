@@ -45,6 +45,28 @@ export async function upsertContactMirrors(
 ): Promise<{ error: any }> {
   const list = rows.filter((r) => cleanStr(r.linkedin_url));
   if (list.length === 0) return { error: null };
+
+  // contacts.email is now unique (lower(trim(email)), partial). A row whose
+  // linkedin_url is brand new but whose email already belongs to another
+  // contact raises 23505 on the batched upsert. Fall back to per-row upserts
+  // and skip just the colliding rows, so the rest of the batch still syncs and
+  // the underlying lead save never fails.
+  if (list.length === 1) {
+    const { error } = await client.from("contacts").upsert(list, { onConflict: "linkedin_url" });
+    if (error && error.code === "23505") return { error: null };
+    return { error };
+  }
+
   const { error } = await client.from("contacts").upsert(list, { onConflict: "linkedin_url" });
-  return { error };
+  if (!error || error.code !== "23505") return { error };
+
+  for (const row of list) {
+    const { error: rowErr } = await client
+      .from("contacts")
+      .upsert([row], { onConflict: "linkedin_url" });
+    if (!rowErr) continue;
+    if (rowErr.code === "23505") continue;
+    return { error: rowErr };
+  }
+  return { error: null };
 }
