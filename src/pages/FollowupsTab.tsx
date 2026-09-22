@@ -31,7 +31,7 @@ import {
   sendSelectedFollowups,
   fetchPendingFollowups,
   sendPendingFollowup,
-  triggerNotOpenedFollowupSend,
+  triggerFollowupSend,
 } from '../services/followupService'
 import { supabase } from '../supabase'
 import type {
@@ -797,25 +797,32 @@ const DELAY_OPTIONS = [
         'success',
       )
 
-      // NOT_OPENED follow-ups have no natural "open" event, so nothing in the
-      // existing pipeline can ever advance them past the draft record that
-      // creation just wrote. Continue straight into the existing sending/queue
-      // pipeline (identical recipients to the Campaigns ActivityModal → "Not
-      // Opened" tab): batched → queued for the scheduled-campaign-runner;
-      // otherwise sent now via the send-followup Edge Function. Skipped when a
-      // future campaign schedule was configured (delivered by the scheduler).
-      if (followupAudience === 'not_opened' && followupCampaignId && !enableSchedule) {
-        const triggered = await triggerNotOpenedFollowupSend({
+      // A follow-up has no natural "send" event the moment it is created:
+      // without this, clicking Send in the composer leaves the follow-up
+      // campaign stuck at status='draft' with nothing ever delivered — openers
+      // only queue pending rows on the Pending tab (sync_pending) and never
+      // auto-send, and non-openers can never open the original campaign to
+      // trigger anything. So, after creation, continue straight into the
+      // existing sending/queue pipeline for the SELECTED audience (identical
+      // recipients to the Campaigns ActivityModal → opened / "Not Opened" tab):
+      // batched → queued for the scheduled-campaign-runner; otherwise sent now
+      // via the send-followup Edge Function. Skipped when the follow-up was
+      // created inactive or a future campaign schedule was configured
+      // (delivered by the scheduler at its scheduled time).
+      if (isActive && followupCampaignId && !enableSchedule) {
+        const triggered = await triggerFollowupSend({
           originalCampaignId: result.original_campaign_id,
           followupCampaignId,
+          audience: followupAudience,
           sendInBatches,
           batchSize,
           firstBatchDelayHours: batchDelayHours,
           subsequentBatchDelayHours: batchDelayHours,
         })
+        const audienceLabel = followupAudience === 'not_opened' ? 'Not-opened' : 'Opened'
         if (triggered.mode === 'queued') {
           onToast(
-            `Not-opened follow-up created and queued — ${triggered.queued_recipient_count} recipient(s), starting now. ` +
+            `${audienceLabel} follow-up created and queued — ${triggered.queued_recipient_count} recipient(s), starting now. ` +
               `Next batch at ${formatDateTime(triggered.next_batch_at)}.`,
             'success',
           )
@@ -825,12 +832,12 @@ const DELAY_OPTIONS = [
           if (triggered.skipped > 0) parts.push(`${triggered.skipped} skipped`)
           if (triggered.failed > 0) parts.push(`${triggered.failed} failed`)
           onToast(
-            `Not-opened follow-up created and sent to ${triggered.sent} recipient(s)${parts.length > 0 ? ` (${parts.join(', ')})` : ''}.`,
+            `${audienceLabel} follow-up created and sent to ${triggered.sent} recipient(s)${parts.length > 0 ? ` (${parts.join(', ')})` : ''}.`,
             'success',
           )
         } else {
           onToast(
-            'Follow-up created, but no not-opened recipients were found to send to.',
+            'Follow-up created, but no eligible recipients were found to send to.',
             'success',
           )
         }

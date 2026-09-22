@@ -35,18 +35,34 @@
  */ import { createClient } from 'npm:@supabase/supabase-js@2';
 import { personalizeTemplate } from '../_shared/personalization.ts';
 import { toEmailSafeHtml } from '../_shared/email-render.ts';
-const supabaseUrl = Deno.env.get('SUPABASE_URL');
-const supabaseKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') || Deno.env.get('SUPABASE_ANON_KEY');
-const supabase = createClient(supabaseUrl, supabaseKey);
-// ─── Configuration (env) ───────────────────────────────────────────────────
-const SMTP_HOST = (Deno.env.get('SMTP_HOST') || 'smtp.gmail.com').trim();
-const SMTP_PORT = parseInt(Deno.env.get('SMTP_PORT') || '465', 10);
-const SMTP_USER = (Deno.env.get('SMTP_USER') || '').trim();
-const SMTP_PASSWORD = Deno.env.get('SMTP_PASSWORD') || '';
-const SMTP_FROM_NAME = (Deno.env.get('SMTP_FROM_NAME') || '').trim();
-const SMTP_FROM_ADDR = (Deno.env.get('SMTP_FROM') || '').trim() || SMTP_USER;
-const SMTP_REPLY_TO = (Deno.env.get('SMTP_REPLY_TO') || '').trim() || SMTP_FROM_ADDR;
-const EDGE_FUNCTION_BASE = (Deno.env.get('EDGE_FUNCTION_URL') || '').trim().replace(/\/+$/, '') || `${supabaseUrl.replace(/\/+$/, '')}/functions/v1`;
+
+// ─── Boot-time guard — log clearly if required secrets are absent ─────────
+// Secrets in this project use the R_ prefix (R_SUPABASE_URL, R_SERVICE_ROLE_KEY,
+// etc.). Reading the wrong name returns undefined, which makes createClient()
+// throw a TypeError at module scope → "booted → shutdown, no logs" pattern.
+let supabase: ReturnType<typeof createClient>;
+const supabaseUrl = Deno.env.get('R_SUPABASE_URL') ?? '';
+const supabaseKey = (Deno.env.get('R_SERVICE_ROLE_KEY') || Deno.env.get('R_SUPABASE_ANON_KEY')) ?? '';
+try {
+  if (!supabaseUrl) throw new Error('[SendFollowup] FATAL: R_SUPABASE_URL secret is not set — add it in Supabase Dashboard → Edge Functions → Secrets');
+  if (!supabaseKey) throw new Error('[SendFollowup] FATAL: R_SERVICE_ROLE_KEY (and R_SUPABASE_ANON_KEY) secrets are not set');
+  supabase = createClient(supabaseUrl, supabaseKey);
+  console.log('[SendFollowup] Boot OK — Supabase client initialised, URL prefix:', supabaseUrl.slice(0, 30));
+} catch (bootErr) {
+  console.error('[SendFollowup] BOOT ERROR:', bootErr instanceof Error ? bootErr.message : String(bootErr));
+  throw bootErr; // let Deno report the unhandled error
+}
+
+// ─── Configuration (env) — all secrets use the R_ prefix ──────────────────
+const SMTP_HOST = (Deno.env.get('R_EMAIL_HOST') || 'smtp.gmail.com').trim();
+const SMTP_PORT = parseInt(Deno.env.get('R_EMAIL_PORT') || '465', 10);
+const SMTP_USER = (Deno.env.get('R_EMAIL_USER') || '').trim();
+const SMTP_PASSWORD = Deno.env.get('R_EMAIL_PASSWORD') || '';
+const SMTP_FROM_NAME = (Deno.env.get('R_EMAIL_FROM_NAME') || '').trim();
+const SMTP_FROM_ADDR = (Deno.env.get('R_EMAIL_FROM') || '').trim() || SMTP_USER;
+const SMTP_REPLY_TO = (Deno.env.get('R_EMAIL_REPLY_TO') || '').trim() || SMTP_FROM_ADDR;
+// Guard against supabaseUrl being empty (already caught above, but be safe)
+const EDGE_FUNCTION_BASE = (Deno.env.get('R_SUPABASE_EDGE_FUNCTION_URL') || '').trim().replace(/\/+$/, '') || `${supabaseUrl.replace(/\/+$/, '')}/functions/v1`;
 const TRIGGER_TYPE = 'opened';
 function log(...args) {
   console.log('[SendFollowup]', ...args);
@@ -77,10 +93,11 @@ function respond(status, body) {
 }
 // ─── Auth guard (same as send-campaign) ────────────────────────────────────
 const ANON_KEYS = (()=>{
-  const keys = new Set();
-  const runtimeKey = Deno.env.get('SUPABASE_ANON_KEY')?.trim();
+  const keys = new Set<string>();
+  // Accept the R_-prefixed anon key (primary) and the legacy / dedicated key
+  const runtimeKey = (Deno.env.get('R_SUPABASE_ANON_KEY') || Deno.env.get('SUPABASE_ANON_KEY'))?.trim();
   if (runtimeKey) keys.add(runtimeKey);
-  const explicitKey = Deno.env.get('SEND_FOLLOWUP_ANON_KEY')?.trim();
+  const explicitKey = (Deno.env.get('SEND_FOLLOWUP_ANON_KEY') || Deno.env.get('R_SUPABASE_ANON_KEY'))?.trim();
   if (explicitKey) keys.add(explicitKey);
   return keys;
 })();
@@ -1085,66 +1102,92 @@ async function handleSyncPending() {
   };
 }
 // ─── Main entry ────────────────────────────────────────────────────────────
-Deno.serve(async (req)=>{
-  if (req.method === 'OPTIONS') {
-    return new Response(null, {
-      status: 204,
-      headers: corsHeaders()
-    });
-  }
-  if (req.method !== 'POST') {
-    return respond(405, {
-      success: false,
-      error: 'Method not allowed'
-    });
-  }
-  if (!isAuthorized(req)) {
-    logErr('Unauthorized — missing/invalid Supabase JWT or project key');
-    return respond(401, {
-      success: false,
-      error: 'Unauthorized: send a valid Supabase JWT or the project anon/publishable key'
-    });
-  }
-  let payload;
+Deno.serve(async (req) => {
+  // ── Outermost safety net: log any crash before the runtime exits ─────────
   try {
-    payload = await req.json();
-  } catch  {
-    return respond(400, {
-      success: false,
-      error: 'Invalid JSON body'
-    });
-  }
-  const action = payload && payload.action;
-  try {
-    if (action === 'send_selected') {
-      const results = await handleSendSelected(payload);
-      return respond(200, {
-        success: true,
-        data: results
+    // Log every inbound request so we can confirm the handler is reached
+    console.log('[SendFollowup] Request received:', req.method, new URL(req.url).pathname);
+
+    if (req.method === 'OPTIONS') {
+      return new Response(null, { status: 204, headers: corsHeaders() });
+    }
+    if (req.method !== 'POST') {
+      return respond(405, { success: false, error: 'Method not allowed' });
+    }
+    if (!isAuthorized(req)) {
+      logErr('Unauthorized — missing/invalid Supabase JWT or project key');
+      logErr('Hint: check that SUPABASE_ANON_KEY secret is set and that the frontend sends apikey / Authorization header');
+      return respond(401, {
+        success: false,
+        error: 'Unauthorized: send a valid Supabase JWT or the project anon/publishable key',
       });
     }
-    if (action === 'send_pending') {
-      const pendingId = payload.pending_id ? String(payload.pending_id) : '';
-      if (!pendingId) throw new Error('pending_id is required');
-      const data = await handleSendPending(pendingId);
-      return respond(200, {
-        success: true,
-        data
-      });
+
+    let payload;
+    try {
+      payload = await req.json();
+    } catch {
+      return respond(400, { success: false, error: 'Invalid JSON body' });
     }
-    if (action === 'sync_pending') {
-      const data = await handleSyncPending();
-      return respond(200, {
-        success: true,
-        data
-      });
+
+    const action = payload && payload.action;
+    log(`Action: ${String(action || '(none)')}`);
+
+    // ── check_env — diagnostic: returns which R_-prefixed secrets are set ───
+    if (action === 'check_env') {
+      const envReport = {
+        // R_-prefixed names (what this project actually uses)
+        hasR_SupabaseUrl:        !!Deno.env.get('R_SUPABASE_URL'),
+        hasR_ServiceRoleKey:     !!Deno.env.get('R_SERVICE_ROLE_KEY'),
+        hasR_AnonKey:            !!Deno.env.get('R_SUPABASE_ANON_KEY'),
+        hasR_EmailHost:          !!Deno.env.get('R_EMAIL_HOST'),
+        hasR_EmailPort:          !!Deno.env.get('R_EMAIL_PORT'),
+        hasR_EmailUser:          !!Deno.env.get('R_EMAIL_USER'),
+        hasR_EmailPassword:      !!Deno.env.get('R_EMAIL_PASSWORD'),
+        hasR_EmailFrom:          !!Deno.env.get('R_EMAIL_FROM'),
+        hasR_EmailFromName:      !!Deno.env.get('R_EMAIL_FROM_NAME'),
+        hasR_EmailReplyTo:       !!Deno.env.get('R_EMAIL_REPLY_TO'),
+        hasR_EdgeFunctionUrl:    !!Deno.env.get('R_SUPABASE_EDGE_FUNCTION_URL'),
+        // derived / resolved values (no secret values exposed)
+        smtpPortValue:           Deno.env.get('R_EMAIL_PORT') || '(not set — defaults to 465)',
+        smtpHostValue:           Deno.env.get('R_EMAIL_HOST') || '(not set — defaults to smtp.gmail.com)',
+        supabaseUrlPrefix:       supabaseUrl ? supabaseUrl.slice(0, 30) + '…' : '(not set)',
+        edgeFunctionBase:        EDGE_FUNCTION_BASE.slice(0, 60) + '…',
+      };
+      log('check_env result:', JSON.stringify(envReport));
+      return respond(200, { success: true, data: envReport });
     }
-    throw new Error(`Unknown action: ${String(action || '')}`);
-  } catch (error) {
-    logErr(`Send follow-up failed: ${error.message}`);
-    return respond(400, {
-      success: false,
-      error: error.message
-    });
+
+    try {
+      if (action === 'send_selected') {
+        const results = await handleSendSelected(payload);
+        return respond(200, { success: true, data: results });
+      }
+      if (action === 'send_pending') {
+        const pendingId = payload.pending_id ? String(payload.pending_id) : '';
+        if (!pendingId) throw new Error('pending_id is required');
+        const data = await handleSendPending(pendingId);
+        return respond(200, { success: true, data });
+      }
+      if (action === 'sync_pending') {
+        const data = await handleSyncPending();
+        return respond(200, { success: true, data });
+      }
+      throw new Error(`Unknown action: ${String(action || '')}`);
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      const stack = error instanceof Error ? (error.stack ?? '') : '';
+      logErr(`Send follow-up failed [action=${action}]: ${msg}`);
+      if (stack) logErr('Stack:', stack);
+      return respond(400, { success: false, error: msg });
+    }
+  } catch (fatal) {
+    // This block catches errors thrown by isAuthorized, req.json(), or any
+    // other top-level handler code that bypasses the inner try/catch.
+    const msg = fatal instanceof Error ? fatal.message : String(fatal);
+    const stack = fatal instanceof Error ? (fatal.stack ?? '') : '';
+    console.error('[SendFollowup] FATAL handler error:', msg);
+    if (stack) console.error('[SendFollowup] Stack:', stack);
+    return respond(500, { success: false, error: 'Internal server error: ' + msg });
   }
 });

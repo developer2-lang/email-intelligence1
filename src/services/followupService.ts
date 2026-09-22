@@ -1406,53 +1406,62 @@ async function sendPendingFollowup(id: string): Promise<{ id: string; status: st
   return body.data || { id, status: 'sent' }
 }
 
-export interface NotOpenedFollowupTriggerParams {
+export interface FollowupSendTriggerParams {
   originalCampaignId: string
   followupCampaignId: string
+  audience?: FollowupAudience
   sendInBatches: boolean
   batchSize: number
   firstBatchDelayHours: number
   subsequentBatchDelayHours: number
 }
 
-export type NotOpenedFollowupTriggerResult =
+export type FollowupSendTriggerResult =
   | { mode: 'queued'; queued_recipient_count: number; next_batch_at: string }
   | { mode: 'sent'; sent: number; skipped: number; failed: number; results: SendSelectedFollowupResult[] }
   | { mode: 'none'; recipient_count: number }
 
 /**
- * Continue a NOT_OPENED follow-up into the existing sending/queue pipeline
- * immediately after its config is created.
+ * Continue a follow-up into the existing sending/queue pipeline immediately
+ * after its config is created, for EITHER audience (opened or not_opened).
  *
- * Non-openers never open the original campaign, so the open-event triggers
- * (automatic mode + sync_pending reconciliation) can never fire for them. This
- * is the ONLY path that advances a not-opened follow-up past its initial draft
- * record: it selects the exact recipients the Campaigns ActivityModal → "Not
- * Opened" tab shows (opened IS NOT TRUE AND clicked IS NOT TRUE, already-sent
- * contacts excluded) and hands them to the existing pipeline:
+ * Creating a follow-up writes its draft `campaigns` row; without this step the
+ * campaign would sit at status='draft' forever: openers only materialize
+ * pending rows on the Pending tab (sync_pending) but are never sent
+ * automatically, and non-openers never open the original campaign so the
+ * open-event triggers can never fire for them. This is the ONLY path that
+ * advances a newly-created follow-up past its initial draft record: it selects
+ * the exact recipients the Campaigns ActivityModal → opened / "Not Opened" tab
+ * shows (openers = opened=true; non-openers = opened IS NOT TRUE AND clicked IS
+ * NOT TRUE; already-sent contacts excluded) and hands them to the existing
+ * pipeline:
  *
  *   - Batched:   the follow-up campaign is queued as 'scheduled' so the
  *                scheduled-campaign-runner Edge Function drains it in the
  *                configured batches (it already resolves trigger_type and
- *                filters non-openers server-side).
+ *                filters openers/non-openers server-side).
  *   - Non-batch: sent now via sendSelectedFollowups (the send-followup Edge
- *                Function, which is already not-opened-audience aware).
+ *                Function, which already re-derives the stored audience
+ *                server-side from trigger_type).
  *
- * Existing opened behavior is untouched: this is called ONLY for not_opened.
+ * Existing scheduled behavior is untouched: callers skip this when a calendar
+ * schedule is configured (delivered by the scheduler).
  */
-async function triggerNotOpenedFollowupSend(
-  params: NotOpenedFollowupTriggerParams
-): Promise<NotOpenedFollowupTriggerResult> {
+async function triggerFollowupSend(
+  params: FollowupSendTriggerParams
+): Promise<FollowupSendTriggerResult> {
   const originalId = params.originalCampaignId ? String(params.originalCampaignId) : ''
   if (!originalId) throw new Error('original_campaign_id is required')
   const followupCampaignId = params.followupCampaignId ? String(params.followupCampaignId) : ''
   if (!followupCampaignId) throw new Error('follow-up campaign is required')
+  const audience: FollowupAudience = params.audience === 'not_opened' ? 'not_opened' : 'opened'
 
-  // Same recipients the Campaigns "eye icon → Not Opened" tab shows.
+  // Same recipients the Campaigns "eye icon" audience tabs show — for the
+  // audience the user actually selected in the composer.
   const recipients =
     originalId === 'all'
-      ? await fetchOpenedContactsForAll(followupCampaignId, 'not_opened')
-      : await fetchOpenedContacts(originalId, followupCampaignId, 'not_opened')
+      ? await fetchOpenedContactsForAll(followupCampaignId, audience)
+      : await fetchOpenedContacts(originalId, followupCampaignId, audience)
 
   const recipientIds = recipients
     .map((r) => String(r.contact_id || ''))
@@ -1528,5 +1537,5 @@ export {
   sendSelectedFollowups,
   fetchPendingFollowups,
   sendPendingFollowup,
-  triggerNotOpenedFollowupSend,
+  triggerFollowupSend,
 }
