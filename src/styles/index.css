@@ -4697,3 +4697,32 @@ button.tab.active {
   }
 }
 
+/* ─── Lead Database: per-column table filters ────────────────────────────── */
+.ct-filter-row th {
+  padding: 4px 10px 8px;
+  vertical-align: top;
+}
+
+.ct-filter-ctl {
+  width: 100%;
+  min-width: 0;
+  font-size: 12px;
+  padding: 4px 6px;
+}
+
+.ct-filter-dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin-left: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+  vertical-align: middle;
+}
+
+.ct-clear-filters {
+  white-space: nowrap;
+  padding: 7px 12px;
+  font-size: 12.5px;
+}
+

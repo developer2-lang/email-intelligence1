@@ -56,8 +56,8 @@
  *   SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY          — auto-injected by Supabase
  *   SMTP_HOST, SMTP_PORT (465), SMTP_USER, SMTP_PASSWORD,
  *   SMTP_FROM, SMTP_FROM_NAME, SMTP_REPLY_TO         — supabase secrets set
- *   CRON_SECRET                                      — shared secret sent by the
- *                                                     cron job via x-cron-secret
+ *   R_CRON_SECRET (falls back to legacy CRON_SECRET) — shared secret sent by
+ *                                                     the cron job via x-cron-secret
  *   TRACKING_BASE_URL                                — optional; when set, the
  *                                                     legacy click/open rewrite is
  *                                                     also embedded (same as normal
@@ -71,7 +71,9 @@ const supabaseUrl = Deno.env.get('R_SUPABASE_URL');
 const supabaseKey = Deno.env.get('R_SERVICE_ROLE_KEY') || Deno.env.get('SUPABASE_ANON_KEY');
 const supabase = createClient(supabaseUrl, supabaseKey);
 // ─── Configuration (env) ───────────────────────────────────────────────────
-const CRON_SECRET = (Deno.env.get('CRON_SECRET') || '').trim();
+// Prefer the R_-prefixed secret (this project's convention); fall back to the
+// legacy CRON_SECRET name so the deployed cron keeps working mid-transition.
+const CRON_SECRET = (Deno.env.get('R_CRON_SECRET') || Deno.env.get('CRON_SECRET') || '').trim();
 const SMTP_HOST = (Deno.env.get('R_EMAIL_HOST') || 'smtp.gmail.com').trim();
 const SMTP_PORT = parseInt(Deno.env.get('R_EMAIL_PORT') || '465', 10);
 const SMTP_USER = (Deno.env.get('R_EMAIL_USER') || '').trim();
@@ -1368,9 +1370,13 @@ async function processCampaign(campaignId) {
 // ─── Main entry ────────────────────────────────────────────────────────────
 Deno.serve(async (req)=>{
   const start = Date.now();
-  const secret = req.headers.get('x-cron-secret') || '';
-  if (!CRON_SECRET || secret !== CRON_SECRET) {
+  // Robust header check: tolerate trailing whitespace, log a clear hint, and
+  // reject unless a secret is actually set (an env var that is set-but-empty
+  // must fail closed, never pass).
+  const secret = (req.headers.get('x-cron-secret') || '').trim();
+  if (!CRON_SECRET || !secret || secret !== CRON_SECRET) {
     logErr('Unauthorized — missing/invalid x-cron-secret header');
+    logErr(`Hint: set R_CRON_SECRET (or CRON_SECRET) to exactly the value the cron job sends in the x-cron-secret header`);
     return new Response(JSON.stringify({
       success: false,
       error: 'Unauthorized'

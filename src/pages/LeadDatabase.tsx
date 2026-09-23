@@ -98,6 +98,22 @@ function emailValid(email: string): boolean {
 
 const PAGE_SIZE_OPTIONS = [25, 50, 100];
 
+// Sentinel value for "(None)" options in the per-column dropdown filters. The
+// empty string means "All <column>" (filter cleared), so null/empty rows get
+// their own distinct option value.
+const NONE = '__none__';
+
+function filterOptions(rows: LeadRow[], pick: (l: LeadRow) => string | null): string[] {
+  return Array.from(new Set(rows.map((l) => (pick(l) || '').trim()))).sort((a, b) =>
+    a.localeCompare(b),
+  );
+}
+
+function matchColumn(column: string | null, filter: string): boolean {
+  const val = (column || '').trim();
+  return filter === NONE ? val === '' : val === filter;
+}
+
 // ─── MAIN COMPONENT ──────────────────────────────────────────────────────────
 export default function LeadDatabase({ onToast }: LeadDatabaseProps) {
   const [leads, setLeads] = useState<LeadRow[]>([]);
@@ -107,6 +123,14 @@ export default function LeadDatabase({ onToast }: LeadDatabaseProps) {
   const [searchVal, setSearchVal] = useState('');
   const [industryFilter, setIndustryFilter] = useState('');
   const [geographyFilter, setGeographyFilter] = useState('');
+
+  // Per-column filters (shared state keeps the toolbar Industry/Geography
+  // selects and the per-column dropdowns in sync).
+  const [nameFilter, setNameFilter] = useState('');
+  const [emailFilter, setEmailFilter] = useState('');
+  const [phoneFilter, setPhoneFilter] = useState('');
+  const [companyFilter, setCompanyFilter] = useState('');
+  const [designationFilter, setDesignationFilter] = useState('');
 
   const [sortKey, setSortKey] = useState<SortKey>('created_at');
   const [sortDir, setSortDir] = useState<1 | -1>(-1);
@@ -160,22 +184,22 @@ export default function LeadDatabase({ onToast }: LeadDatabaseProps) {
 
   // ─── FILTER OPTIONS (derived from loaded rows) ───
   const industryOptions = useMemo(
-    () =>
-      Array.from(
-        new Set(leads.map((l) => (l.industry || '').trim()).filter(Boolean)),
-      ).sort(),
+    () => filterOptions(leads, (l) => l.industry),
     [leads],
   );
 
   const geographyOptions = useMemo(
-    () =>
-      Array.from(
-        new Set(
-          leads
-            .map((l) => (l.geography || l.location || '').trim())
-            .filter(Boolean),
-        ),
-      ).sort(),
+    () => filterOptions(leads, (l) => l.geography || l.location),
+    [leads],
+  );
+
+  const companyOptions = useMemo(
+    () => filterOptions(leads, (l) => l.company_name),
+    [leads],
+  );
+
+  const designationOptions = useMemo(
+    () => filterOptions(leads, (l) => l.designation),
     [leads],
   );
 
@@ -193,13 +217,37 @@ export default function LeadDatabase({ onToast }: LeadDatabaseProps) {
       });
     }
 
+    if (nameFilter) {
+      result = result.filter((l) =>
+        (l.full_name || '').toLowerCase().includes(nameFilter.toLowerCase()),
+      );
+    }
+
+    if (emailFilter) {
+      result = result.filter((l) =>
+        (l.email || '').toLowerCase().includes(emailFilter.toLowerCase()),
+      );
+    }
+
+    if (phoneFilter) {
+      result = result.filter((l) => (l.phone || '').includes(phoneFilter));
+    }
+
+    if (companyFilter) {
+      result = result.filter((l) => matchColumn(l.company_name, companyFilter));
+    }
+
+    if (designationFilter) {
+      result = result.filter((l) => matchColumn(l.designation, designationFilter));
+    }
+
     if (industryFilter) {
-      result = result.filter((l) => (l.industry || '').trim() === industryFilter);
+      result = result.filter((l) => matchColumn(l.industry, industryFilter));
     }
 
     if (geographyFilter) {
-      result = result.filter(
-        (l) => (l.geography || l.location || '').trim() === geographyFilter,
+      result = result.filter((l) =>
+        matchColumn(l.geography || l.location, geographyFilter),
       );
     }
 
@@ -212,7 +260,7 @@ export default function LeadDatabase({ onToast }: LeadDatabaseProps) {
     });
 
     return result;
-  }, [leads, searchVal, industryFilter, geographyFilter, sortKey, sortDir]);
+  }, [leads, searchVal, nameFilter, emailFilter, phoneFilter, companyFilter, designationFilter, industryFilter, geographyFilter, sortKey, sortDir]);
 
   const totalPages = Math.ceil(filteredLeads.length / pageSize) || 1;
   const safePage = Math.min(page, totalPages);
@@ -237,6 +285,37 @@ export default function LeadDatabase({ onToast }: LeadDatabaseProps) {
     sortKey === key ? (
       <span className="ct-sort-arrow">{sortDir === 1 ? '↑' : '↓'}</span>
     ) : null;
+
+  // Distinct-value options for a column dropdown: every value plus a single
+  // "(None)" option for null/empty rows (uses the NONE sentinel so clearing
+  // with the "All …" option keeps value '').
+  const renderFilterOptions = (opts: string[]) =>
+    opts.map((opt) => (
+      <option key={opt === '' ? NONE : opt} value={opt === '' ? NONE : opt}>
+        {opt === '' ? '(None)' : opt}
+      </option>
+    ));
+
+  const activeFilterCount = [
+    nameFilter,
+    emailFilter,
+    phoneFilter,
+    companyFilter,
+    designationFilter,
+    industryFilter,
+    geographyFilter,
+  ].filter(Boolean).length;
+
+  const clearAllFilters = () => {
+    setNameFilter('');
+    setEmailFilter('');
+    setPhoneFilter('');
+    setCompanyFilter('');
+    setDesignationFilter('');
+    setIndustryFilter('');
+    setGeographyFilter('');
+    setPage(1);
+  };
 
   // ─── EDIT MODAL OPENER ───
   const openEdit = (lead: LeadRow) => {
@@ -369,6 +448,11 @@ export default function LeadDatabase({ onToast }: LeadDatabaseProps) {
             <div className="ct-record-count">{filteredLeads.length} records</div>
           </div>
           <div className="ct-toolbar-right">
+            {activeFilterCount > 0 && (
+              <button className="btn btn-ghost ct-clear-filters" onClick={clearAllFilters}>
+                Clear all filters ({activeFilterCount})
+              </button>
+            )}
             <div className="ct-search">
               <span className="ct-search-ic">
                 <SearchIcon size={15} />
@@ -392,11 +476,7 @@ export default function LeadDatabase({ onToast }: LeadDatabaseProps) {
               }}
             >
               <option value="">All Industries</option>
-              {industryOptions.map((opt) => (
-                <option key={opt} value={opt}>
-                  {opt}
-                </option>
-              ))}
+              {renderFilterOptions(industryOptions)}
             </select>
             <select
               className="ct-select"
@@ -407,11 +487,7 @@ export default function LeadDatabase({ onToast }: LeadDatabaseProps) {
               }}
             >
               <option value="">All Geographies</option>
-              {geographyOptions.map((opt) => (
-                <option key={opt} value={opt}>
-                  {opt}
-                </option>
-              ))}
+              {renderFilterOptions(geographyOptions)}
             </select>
           </div>
         </div>
@@ -423,22 +499,126 @@ export default function LeadDatabase({ onToast }: LeadDatabaseProps) {
               <tr>
                 <th className="ct-sortable" onClick={() => handleSort('full_name')}>
                   Name {sortArrow('full_name')}
+                  {nameFilter && <span className="ct-filter-dot" />}
                 </th>
-                <th>Email</th>
-                <th>Phone</th>
+                <th>
+                  Email{emailFilter && <span className="ct-filter-dot" />}
+                </th>
+                <th>
+                  Phone{phoneFilter && <span className="ct-filter-dot" />}
+                </th>
                 <th className="ct-sortable" onClick={() => handleSort('company_name')}>
                   Company {sortArrow('company_name')}
+                  {companyFilter && <span className="ct-filter-dot" />}
                 </th>
-                <th>Designation</th>
+                <th>
+                  Designation{designationFilter && <span className="ct-filter-dot" />}
+                </th>
                 <th className="ct-sortable" onClick={() => handleSort('industry')}>
                   Industry {sortArrow('industry')}
+                  {industryFilter && <span className="ct-filter-dot" />}
                 </th>
-                <th>Geography</th>
+                <th>
+                  Geography{geographyFilter && <span className="ct-filter-dot" />}
+                </th>
                 <th>LinkedIn</th>
                 <th className="ct-sortable" onClick={() => handleSort('created_at')}>
                   Created {sortArrow('created_at')}
                 </th>
                 <th style={{ textAlign: 'right', width: 116 }}>Actions</th>
+              </tr>
+              <tr className="ct-filter-row">
+                <th>
+                  <input
+                    type="search"
+                    className="ct-select ct-filter-ctl"
+                    placeholder="Filter name"
+                    value={nameFilter}
+                    onChange={(e) => {
+                      setNameFilter(e.target.value);
+                      setPage(1);
+                    }}
+                  />
+                </th>
+                <th>
+                  <input
+                    type="search"
+                    className="ct-select ct-filter-ctl"
+                    placeholder="Filter email"
+                    value={emailFilter}
+                    onChange={(e) => {
+                      setEmailFilter(e.target.value);
+                      setPage(1);
+                    }}
+                  />
+                </th>
+                <th>
+                  <input
+                    type="search"
+                    className="ct-select ct-filter-ctl"
+                    placeholder="Filter phone"
+                    value={phoneFilter}
+                    onChange={(e) => {
+                      setPhoneFilter(e.target.value);
+                      setPage(1);
+                    }}
+                  />
+                </th>
+                <th>
+                  <select
+                    className="ct-select ct-filter-ctl"
+                    value={companyFilter}
+                    onChange={(e) => {
+                      setCompanyFilter(e.target.value);
+                      setPage(1);
+                    }}
+                  >
+                    <option value="">All Companies</option>
+                    {renderFilterOptions(companyOptions)}
+                  </select>
+                </th>
+                <th>
+                  <select
+                    className="ct-select ct-filter-ctl"
+                    value={designationFilter}
+                    onChange={(e) => {
+                      setDesignationFilter(e.target.value);
+                      setPage(1);
+                    }}
+                  >
+                    <option value="">All Designations</option>
+                    {renderFilterOptions(designationOptions)}
+                  </select>
+                </th>
+                <th>
+                  <select
+                    className="ct-select ct-filter-ctl"
+                    value={industryFilter}
+                    onChange={(e) => {
+                      setIndustryFilter(e.target.value);
+                      setPage(1);
+                    }}
+                  >
+                    <option value="">All Industries</option>
+                    {renderFilterOptions(industryOptions)}
+                  </select>
+                </th>
+                <th>
+                  <select
+                    className="ct-select ct-filter-ctl"
+                    value={geographyFilter}
+                    onChange={(e) => {
+                      setGeographyFilter(e.target.value);
+                      setPage(1);
+                    }}
+                  >
+                    <option value="">All Geographies</option>
+                    {renderFilterOptions(geographyOptions)}
+                  </select>
+                </th>
+                <th />
+                <th />
+                <th />
               </tr>
             </thead>
             <tbody>

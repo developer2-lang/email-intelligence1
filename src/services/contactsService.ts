@@ -50,6 +50,15 @@ export async function fetchContacts(): Promise<{ data: Contact[]; error: string 
   }
 }
 
+export async function fetchAllContactEmails(): Promise<Set<string>> {
+  const { data } = await supabase.from(TABLE).select('email')
+  return new Set(
+    ((data as { email: string | null }[] | null) ?? [])
+      .map(c => (c.email || '').toLowerCase().trim())
+      .filter(Boolean)
+  )
+}
+
 export async function insertContact(input: ContactInput): Promise<{ data: Contact | null; error: string | null }> {
   try {
     const { data, error } = await supabase.from(TABLE).insert(toInsertRow(input)).select('*')
@@ -91,7 +100,10 @@ export async function deleteContacts(ids: string[]): Promise<{ error: string | n
 
 export async function insertContacts(inputs: ContactInput[]): Promise<{ error: string | null }> {
   try {
-    const { error } = await supabase.from(TABLE).insert(inputs.map(toInsertRow))
+    const { error } = await supabase.from(TABLE).upsert(inputs.map(toInsertRow), {
+      onConflict: 'email',
+      ignoreDuplicates: true,
+    })
     return { error: error?.message ?? null }
   } catch (err) {
     return { error: err instanceof Error ? err.message : 'Failed to import contacts' }

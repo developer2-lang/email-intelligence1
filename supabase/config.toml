@@ -27,6 +27,16 @@ verify_jwt = false
 [functions.scheduled-campaign-runner]
 verify_jwt = false
 
+# The process-weekly-queue Edge Function is invoked by the pg_cron job
+# `weekly-new-contact-email` (see supabase/weekly-queue-setup.sql) via
+# net.http_post with an x-cron-secret header — NOT with a user JWT — so JWT
+# verification is disabled. The function authenticates the call by comparing
+# x-cron-secret against the R_CRON_SECRET env secret instead.
+# Equivalent deploy command:
+#   supabase functions deploy process-weekly-queue --no-verify-jwt
+[functions.process-weekly-queue]
+verify_jwt = false
+
 # The sequence-runner Edge Function is the automatic sequence worker. It is
 # invoked (a) by a Supabase pg_cron job (see supabase/sequence-runner-setup.sql)
 # via net.http_post with an x-cron-secret header, and (b) by the React app via

@@ -569,31 +569,46 @@ async function persistFollowupSchedule(
   followupCampaignId: string,
   schedule?: CampaignScheduleInput | null
 ): Promise<void> {
-  // Clear any previous schedule + revert status for unscheduled follow-ups.
-  const { error: deleteError } = await supabase
-    .from(SCHEDULE_TABLE)
-    .delete()
-    .eq('campaign_id', followupCampaignId)
-  if (deleteError && deleteError.code !== '42P01') {
-    throw new Error(`Failed to clear previous follow-up schedule: ${deleteError.message}`)
-  }
-
   const scheduled =
     !!schedule && ['one_time', 'weekly', 'monthly'].includes(schedule.schedule_type)
+
+  // Persist the schedule row BEFORE flipping the campaign status. The status is
+  // what the scheduled-campaign-runner watches, and its isCampaignDue gate only
+  // delivers a follow-up that actually has a campaign_schedules row (or legacy
+  // schedule_date). A follow-up left status='scheduled' with a failed schedule
+  // insert has no due-time signal and is silently skipped on every cron tick,
+  // so the status must only become 'scheduled' once the row is guaranteed.
+  if (scheduled) {
+    const { error: deleteError } = await supabase
+      .from(SCHEDULE_TABLE)
+      .delete()
+      .eq('campaign_id', followupCampaignId)
+    if (deleteError && deleteError.code !== '42P01') {
+      throw new Error(`Failed to clear previous follow-up schedule: ${deleteError.message}`)
+    }
+
+    const row = buildScheduleRow(schedule)
+    const { error } = await supabase
+      .from(SCHEDULE_TABLE)
+      .insert({ campaign_id: followupCampaignId, ...row })
+    if (error) throw new Error(`Failed to save follow-up schedule: ${error.message}`)
+  } else {
+    // Unscheduled follow-up: drop any old schedule row first so a stale row can
+    // never make it eligible to fire, then downgrade the status below.
+    const { error: deleteError } = await supabase
+      .from(SCHEDULE_TABLE)
+      .delete()
+      .eq('campaign_id', followupCampaignId)
+    if (deleteError && deleteError.code !== '42P01') {
+      throw new Error(`Failed to clear previous follow-up schedule: ${deleteError.message}`)
+    }
+  }
 
   const { error: statusError } = await supabase
     .from('campaigns')
     .update({ status: scheduled ? 'scheduled' : 'draft', updated_at: new Date().toISOString() })
     .eq('id', followupCampaignId)
   if (statusError) throw new Error(`Failed to update follow-up campaign status: ${statusError.message}`)
-
-  if (!scheduled) return
-
-  const row = buildScheduleRow(schedule)
-  const { error } = await supabase
-    .from(SCHEDULE_TABLE)
-    .insert({ campaign_id: followupCampaignId, ...row })
-  if (error) throw new Error(`Failed to save follow-up schedule: ${error.message}`)
 }
 
 async function campaignExists(campaignId: string): Promise<boolean> {

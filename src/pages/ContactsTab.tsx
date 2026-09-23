@@ -3,6 +3,7 @@ import { AV_COLORS } from '../constants/constants';
 import type { Contact, ContactInput } from '../types/contact';
 import {
   fetchContacts,
+  fetchAllContactEmails,
   insertContact,
   updateContact,
   deleteContact,
@@ -12,6 +13,41 @@ import {
 } from '../services/contactsService';
 import { fetchContactTypes, createContactType } from '../services/contactTypesService';
 import type { ContactType } from '../services/contactTypesService';
+
+interface ImportRow {
+  [key: string]: unknown;
+}
+
+const EMAIL_EMPTY_SENTINELS = new Set([
+  'na', 'n/a', '-', '—', 'nil', 'none', 'null', 'unknown', 'blank', 'undefined', 'not available',
+]);
+const GENERIC_ORG_EMAILS = new Set(['crm@iuova.in']);
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+function pickRowValue(row: ImportRow, keys: string[]): string {
+  const byLower = new Map(Object.keys(row).map(k => [k.trim().toLowerCase(), k]));
+  for (const k of keys) {
+    const src = byLower.get(k.trim().toLowerCase());
+    if (src === undefined) continue;
+    const v = row[src];
+    if (v === undefined || v === null) continue;
+    const s = String(v).trim();
+    if (s) return s;
+  }
+  return '';
+}
+
+function normalizeEmail(raw: string): string {
+  const s = raw
+    .trim()
+    .toLowerCase()
+    .replace(/^mailto:/i, '')
+    .replace(/^[,;]+|[,;]+$/g, '');
+  if (!s || EMAIL_EMPTY_SENTINELS.has(s)) return '';
+  if (GENERIC_ORG_EMAILS.has(s)) return '';
+  if (!EMAIL_RE.test(s)) return '';
+  return s;
+}
 
 // Standardized icon components for sleek UI
 const iconProps = {
@@ -301,12 +337,13 @@ export default function ContactsTab({
   const [uploadFileName, setUploadFileName] = useState('');
   const [uploadBuffer, setUploadBuffer] = useState<any[]>([]);
   const [isDragging, setIsDragging] = useState(false);
+  const [importType, setImportType] = useState('New Lead');
 
   // ─── DRAG & DROP FOR CONTACT TYPE TABS ───
   const [dragOverTabId, setDragOverTabId] = useState<string | null>(null);
   const [draggedContactId, setDraggedContactId] = useState<string | null>(null);
 
-  const C_PER_PAGE = 15;
+  const C_PER_PAGE = 50;
 
   // ─── LOAD CONTACTS FROM SUPABASE ───
   const refreshContacts = useCallback(async () => {
@@ -775,28 +812,40 @@ export default function ContactsTab({
   const confirmImport = async () => {
     if (uploadBuffer.length === 0) return;
 
-    const existingEmails = new Set(contacts.map(c => c.email.toLowerCase().trim()));
+    const existingEmails = await fetchAllContactEmails();
     const toInsert: ContactInput[] = [];
     let added = 0;
     let skipped = 0;
 
-    uploadBuffer.forEach((row: any) => {
-      const email = (row['Email'] || row['email'] || '').trim().toLowerCase();
-      if (!email) { skipped++; return; }
-      if (existingEmails.has(email)) { skipped++; return; }
+    uploadBuffer.forEach((row: ImportRow) => {
+      const e1 = normalizeEmail(pickRowValue(row, ['Work Email ID 1', 'Email ID 1']));
+      const e2 = normalizeEmail(pickRowValue(row, ['Work Email ID 2', 'Email ID 2']));
+      const emails: string[] = [];
+      if (e1 || e2) {
+        if (e1) emails.push(e1);
+        if (e2 && e2 !== e1) emails.push(e2);
+      } else {
+        const alt = normalizeEmail(pickRowValue(row, ['Email', 'Email address']));
+        if (alt) emails.push(alt);
+      }
+      if (emails.length === 0) { skipped++; return; }
 
-      toInsert.push({
-        full_name: row['Name'] || row['name'] || '',
-        email,
-        company: row['Company'] || row['company'] || '',
-        designation: row['Designation'] || row['designation'] || '',
-        industry: row['Industry'] || row['industry'] || '',
-        city: row['City'] || row['city'] || '',
-        contact_type: row['Contact Type'] || row['contact_type'] || 'New Lead',
-        company_category: row['Category'] || row['company_category'] || 'Domestic',
-        notes: row['Notes'] || row['notes'] || '',
+      const base: Omit<ContactInput, 'email'> = {
+        full_name: pickRowValue(row, ['Name', 'Client Name', 'Full Name']),
+        company: pickRowValue(row, ['Company', 'Company Name']),
+        designation: pickRowValue(row, ['Designation', 'Role', 'Title']),
+        industry: pickRowValue(row, ['Industry']),
+        city: pickRowValue(row, ['City']),
+        contact_type: importType,
+        company_category: pickRowValue(row, ['Company Category', 'Category']) || 'Domestic',
+        notes: pickRowValue(row, ['Notes']),
+      };
+
+      emails.forEach(email => {
+        if (existingEmails.has(email)) { skipped++; return; }
+        toInsert.push({ ...base, email });
+        added++;
       });
-      added++;
     });
 
     if (toInsert.length > 0) {
@@ -1318,6 +1367,21 @@ export default function ContactsTab({
                 className="hidden"
                 onChange={handleFileSelect}
               />
+
+              <div style={{ marginTop: 16 }}>
+                <div className="ct-record-count" style={{ textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: 8 }}>
+                  Assign Contact Type
+                </div>
+                <select
+                  className="ct-select"
+                  value={importType}
+                  onChange={(e) => setImportType(e.target.value)}
+                >
+                  {typeTabs.filter(t => t.id !== 'all').map(tab => (
+                    <option key={tab.id} value={tab.id}>{tab.label}</option>
+                  ))}
+                </select>
+              </div>
 
               <div style={{ marginTop: 16 }}>
                 <div className="ct-record-count" style={{ textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: 8 }}>
