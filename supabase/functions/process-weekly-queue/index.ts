@@ -1,9 +1,10 @@
 /**
  * process-weekly-queue — Supabase Edge Function (weekly new-contact emails).
  *
- * Triggered by a pg_cron job every THURSDAY at 02:30 UTC (= 08:00 AM IST) via
- * supabase/weekly-queue-setup.sql (job name weekly-new-contact-email,
- * schedule '30 2 * * 4'). It drains `public.weekly_email_queue` —
+ * Triggered by a pg_cron job every THURSDAY, every 30 minutes, 02:00–18:00 UTC
+ * (= 07:30 AM–11:30 PM IST), via supabase/weekly-queue-setup.sql (job name
+ * weekly-new-contact-email, schedule '* /30 2-18 * * 4'). It drains
+ * `public.weekly_email_queue` —
  * the rows snapshotted by the `contacts` INSERT trigger
  * (20260927000000_weekly_new_contact_automation.sql) — and emails each NEW
  * contact exactly ONCE through Gmail SMTP.
@@ -53,7 +54,7 @@ const WELCOME_SUBJECT = (Deno.env.get('WELCOME_SUBJECT') || '').trim();
 
 // Pacing / budget. Keep well under the ~150s Edge wall-clock limit.
 const EMAIL_DELAY_MS = Math.max(0, parseInt(Deno.env.get('EMAIL_DELAY_MS') || '200', 10));
-const MAX_EMAILS_PER_RUN = Math.max(1, parseInt(Deno.env.get('MAX_EMAILS_PER_RUN') || '150', 10));
+const MAX_EMAILS_PER_RUN = Math.max(1, parseInt(Deno.env.get('MAX_EMAILS_PER_RUN') || '30', 10));
 const TIME_BUDGET_MS = Math.max(1000, parseInt(Deno.env.get('TIME_BUDGET_MS') || '120000', 10));
 
 // A contact stuck in 'sending' for this long was left by a crashed run.

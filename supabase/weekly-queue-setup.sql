@@ -7,7 +7,8 @@
 --   1) Enables pg_net (HTTP requests from Postgres) and supabase_vault
 --      (encrypted secrets) if they are not already enabled.
 --   2) Creates / replaces the pg_cron job `weekly-new-contact-email` that
---      fires every THURSDAY at 02:30 UTC (= 08:00 AM IST) and POSTs to the
+--      fires every THURSDAY, every 30 minutes, 02:00–18:00 UTC
+--      (= 07:30 AM–11:30 PM IST) and POSTs to the
 --      `process-weekly-queue` Edge Function. That function emails every NEW
 --      contact queued by the contacts INSERT trigger (see migration
 --      20260927000000_weekly_new_contact_automation.sql).
@@ -50,7 +51,8 @@ create extension if not exists supabase_vault;
 --    script unschedules the previous job first, then schedules a fresh one
 --    under the SAME name the live project already uses (job 49,
 --    `weekly-new-contact-email`). Never create a second weekly job.
---    Schedule: '30 2 * * 4' = Thursday 02:30 UTC = Thursday 08:00 AM IST.
+--    Schedule: '*/30 2-18 * * 4' = Thursday, every 30 min, 02:00–18:00 UTC
+--    (= 07:30 AM–11:30 PM IST), up to 30 emails per fire.
 do $$
 begin
   if exists (select 1 from cron.job where jobname = 'weekly-new-contact-email') then
@@ -59,7 +61,7 @@ begin
 
   perform cron.schedule(
     'weekly-new-contact-email',
-    '30 2 * * 4', -- Thursday 02:30 UTC (= 08:00 AM IST)
+    '*/30 2-18 * * 4', -- Thursday, every 30 min, 02:00–18:00 UTC (= 07:30 AM–11:30 PM IST)
     $cron$
     select
       net.http_post(
