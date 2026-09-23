@@ -1,8 +1,9 @@
 /**
  * process-weekly-queue — Supabase Edge Function (weekly new-contact emails).
  *
- * Triggered by a pg_cron job every MONDAY at 03:30 UTC (= 09:00 AM IST) via
- * supabase/weekly-queue-setup.sql. It drains `public.weekly_email_queue` —
+ * Triggered by a pg_cron job every WEDNESDAY at 08:30 UTC (= 02:00 PM IST) via
+ * supabase/weekly-queue-setup.sql (job name weekly-new-contact-email,
+ * schedule '30 8 * * 3'). It drains `public.weekly_email_queue` —
  * the rows snapshotted by the `contacts` INSERT trigger
  * (20260927000000_weekly_new_contact_automation.sql) — and emails each NEW
  * contact exactly ONCE through Gmail SMTP.
@@ -41,7 +42,12 @@ const supabaseKey =
 const supabase = createClient(supabaseUrl, supabaseKey);
 
 // ─── Configuration (env) ───────────────────────────────────────────────────
-const CRON_SECRET = (Deno.env.get('CRON_SECRET') || '').trim();
+// Prefer the R_-prefixed secret (this project's convention — R_CRON_SECRET is
+// set on the Edge Function); fall back to the legacy CRON_SECRET name so the
+// function keeps working if a deploy predates the rename. The cron job sends
+// this same value in the x-cron-secret header (read from the Supabase Vault
+// secret `weekly_cron_secret` at run time), so the two must match exactly.
+const CRON_SECRET = (Deno.env.get('R_CRON_SECRET') || Deno.env.get('CRON_SECRET') || '').trim();
 const WELCOME_TEMPLATE_ID = (Deno.env.get('WELCOME_TEMPLATE_ID') || '').trim();
 const WELCOME_SUBJECT = (Deno.env.get('WELCOME_SUBJECT') || '').trim();
 
@@ -459,9 +465,14 @@ function dateBudgetExceeded(start: number): boolean {
 // ─── Main entry ────────────────────────────────────────────────────────────
 Deno.serve(async (req) => {
   const start = Date.now();
-  const secret = req.headers.get('x-cron-secret') || '';
-  if (!CRON_SECRET || secret !== CRON_SECRET) {
+  // Robust header check: tolerate trailing whitespace, log a clear hint, and
+  // reject unless a secret is actually set (a set-but-empty env var must fail
+  // closed, never pass). The caller — job 41 `weekly-new-contact-email` via
+  // pg_net — must send exactly this value in x-cron-secret.
+  const secret = (req.headers.get('x-cron-secret') || '').trim();
+  if (!CRON_SECRET || !secret || secret !== CRON_SECRET) {
     logErr('Unauthorized — missing/invalid x-cron-secret header');
+    logErr('Hint: set R_CRON_SECRET (or CRON_SECRET) to exactly the value the cron job sends in the x-cron-secret header');
     return new Response(JSON.stringify({ success: false, error: 'Unauthorized' }), {
       status: 401,
       headers: { 'Content-Type': 'application/json' },
