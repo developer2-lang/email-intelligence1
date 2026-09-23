@@ -21,6 +21,9 @@
  *   - Retries: a failed send backs off 10 min → 1 h → 24 h, then 'failed'.
  *   - 'skipped' = undeliverable email or the contact row no longer exists —
  *     never emailed, never retried.
+ *   - Per-email tracking: the HTML embeds the email-open-tracker pixel and
+ *     rewrites links through click-tracker; opens/clicks are stored on this
+ *     queue row's opened_at/clicked_at (first open/click only).
  *
  * TEMPLATE RESOLUTION (the email body + subject), in order:
  *   1. WELCOME_TEMPLATE_ID secret → that templates row (Storage file, else
@@ -41,6 +44,12 @@ const supabaseUrl = Deno.env.get('R_SUPABASE_URL')!;
 const supabaseKey =
   Deno.env.get('R_SERVICE_ROLE_KEY') || Deno.env.get('SUPABASE_ANON_KEY')!;
 const supabase = createClient(supabaseUrl, supabaseKey);
+
+// Supabase edge-function base URL used to build the open-pixel / click-redirect
+// URLs (same convention as send-campaign / sequence-runner).
+const EDGE_FUNCTION_BASE =
+  (Deno.env.get('R_SUPABASE_EDGE_FUNCTION_URL') || '').trim().replace(/\/+$/, '') ||
+  `${supabaseUrl.replace(/\/+$/, '')}/functions/v1`;
 
 // ─── Configuration (env) ───────────────────────────────────────────────────
 // Prefer the R_-prefixed secret (this project's convention — R_CRON_SECRET is
@@ -165,6 +174,49 @@ function wrapHtmlDocument(html: string): string {
     '</body>',
     '</html>',
   ].join('\n');
+}
+
+// ─── Per-email open/click tracking (mirrors send-campaign) ─────────────────
+// Rewrites every clickable external URL to the click-tracker Edge Function,
+// which records the FIRST click on this weekly_email_queue row
+// (queue_id -> clicked_at) and 302-redirects to the destination. mailto:,
+// #anchors, relative URLs and URLs in non-href attributes (e.g. <img src>)
+// are left untouched, so the open pixel keeps working.
+function rewriteLinksForTracking(html: string, queueId: string): string {
+  const clickUrl = (url: string) =>
+    `${EDGE_FUNCTION_BASE}/click-tracker?source=weekly&queue_id=${encodeURIComponent(queueId)}&url=${encodeURIComponent(url)}`;
+  const HREF_RE = /(\bhref\s*=\s*)(["'])(https?:\/\/[^"'\s>]+)(["'])/gi;
+  const TOKEN_RE = /(<[^>]*>)|(https?:\/\/[^\s<>"']+)/gi;
+
+  return String(html || '').replace(TOKEN_RE, (match, tag: string, bareUrl: string) => {
+    if (tag) {
+      return tag.replace(HREF_RE, (m, p: string, q: string, url: string, q2: string) => {
+        if (url.includes('/click-tracker')) return m;
+        return `${p}${q}${clickUrl(url)}${q2}`;
+      });
+    }
+    const clean = bareUrl.replace(/[.,;:!?)\]}$]*$/, '');
+    if (!/^https?:\/\//i.test(clean)) return match;
+    const punct = bareUrl.slice(clean.length);
+    return `<a href="${clickUrl(clean)}">${clean}</a>${punct}`;
+  });
+}
+
+/** Always-reachable open pixel handled by the email-open-tracker function. */
+function appendWeeklyOpenPixel(html: string, queueId: string, contactEmail: string): string {
+  const params = new URLSearchParams({
+    action: 'track',
+    source: 'weekly',
+    queue_id: queueId,
+    contact_email: contactEmail,
+  });
+  const pixelUrl = `${EDGE_FUNCTION_BASE}/email-open-tracker?${params.toString()}`;
+  const pixel =
+    `<img src="${pixelUrl}" ` +
+    `width="1" height="1" border="0" alt="" style="display:block;border:0;width:1px;height:1px;max-width:1px;max-height:1px;" />`;
+  return /<\/body>/i.test(html)
+    ? html.replace(/<\/body>/i, `${pixel}\n</body>`)
+    : `${html}\n${pixel}`;
 }
 
 // ─── Recipient validation (same rules as send-campaign) ────────────────────
@@ -356,7 +408,10 @@ async function sendOne(
     const decoded = decodeHtmlEntities(personalizeTemplate(bodyTemplate, contact, to));
     const personalizedHtml = hasHtmlTags(decoded) ? decoded : plainTextToHtml(decoded);
     const plainText = stripHtml(personalizedHtml);
-    const html = wrapHtmlDocument(toEmailSafeHtml(personalizedHtml));
+    // Per-email tracking: rewrite links for click tracking and embed the open
+    // pixel, both keyed on this queue row's id (first open/click only).
+    const tracked = rewriteLinksForTracking(personalizedHtml, row.id);
+    const html = wrapHtmlDocument(toEmailSafeHtml(appendWeeklyOpenPixel(tracked, row.id, to)));
     const subject = personalizeTemplate(subjectTemplate, contact, to);
 
     log(`Sending → ${to}`);

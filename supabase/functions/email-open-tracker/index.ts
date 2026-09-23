@@ -5,22 +5,27 @@
  * Endpoint (loaded by email clients via <img>, so no Authorization header):
  *   GET {EDGE_FUNCTION_BASE}/email-open-tracker
  *         ?action=track&email_log_id=<uuid>&contact_email=<email>[&tracking_id=<uuid>]
+ *   (weekly welcome emails:
+ *         ?action=track&source=weekly&queue_id=<uuid>&contact_email=<email>)
  *   (legacy: ?action=track&campaign_id=<uuid>&contact_email=<email>[&tracking_id=<uuid>])
  *
  * On a track request it:
  *   1. marks the contact `email_opened = true`,
- *   2. marks the matching `email_logs` row `opened = true, opened_at = now()`
- *      — EXACTLY one row when `email_log_id` is present (sequence emails carry
- *      their email_log id; no campaign record is involved), otherwise the
- *      unique `tracking_id`, otherwise the (campaign, email) pair (legacy
- *      fallback),
- *   3. syncs the linked `sequence_step_logs` flags so the Logs API / any direct
+ *   2. for SEQUENCE/campaign emails marks the matching `email_logs` row
+ *      `opened = true, opened_at = now()` — EXACTLY one row when
+ *      `email_log_id` is present (sequence emails carry their email_log id; no
+ *      campaign record is involved), otherwise the unique `tracking_id`,
+ *      otherwise the (campaign, email) pair (legacy fallback),
+ *   3. for WEEKLY welcome emails (`source=weekly&queue_id`) marks the
+ *      `weekly_email_queue` row `opened_at = now()` on the FIRST open only
+ *      (additive — campaign/sequence behavior is unchanged),
+ *   4. syncs the linked `sequence_step_logs` flags so the Logs API / any direct
  *      read mirrors the authoritative email_log open,
- *   4. advances the recipient's enrollment onto the step's 'OPENED' child
+ *   5. advances the recipient's enrollment onto the step's 'OPENED' child
  *      IMMEDIATELY (port of backend sequenceWorker.handleStepOpened) so the
  *      OPENED branch does not wait for the next cron tick — idempotent,
  *      best-effort, never throws,
- *   5. always returns a transparent 1x1 GIF so no broken-image icon shows.
+ *   6. always returns a transparent 1x1 GIF so no broken-image icon shows.
  *
  * Anti-bot grace period: default 0 = DISABLED (Gmail/Outlook image proxies
  * fetch each pixel exactly once, seconds after delivery, and serve the cached
@@ -65,6 +70,22 @@ async function updateContact(email) {
     return;
   }
   log('Contact Updated —', contact.id, email);
+}
+/** Weekly queue: record the FIRST open of a weekly welcome email on its queue row. */
+async function updateWeeklyQueueOpen(queueId: string): Promise<void> {
+  const { error } = await supabase
+    .from('weekly_email_queue')
+    .update({ opened_at: new Date().toISOString() })
+    .eq('id', queueId)
+    .is('opened_at', null);
+  if (error) {
+    log('Weekly Queue Open Updated — FAILED', `queue_id=${queueId}`, `code=${error.code}`, error.message);
+    if (String(error.code).startsWith('PGRST') || /column .* does not exist/i.test(error.message ?? '')) {
+      log('Hint: run migration 20260929000000_weekly_queue_tracking_columns.sql (adds weekly_email_queue.opened_at/clicked_at)');
+    }
+    return;
+  }
+  log('Weekly Queue Open Updated —', `queue_id=${queueId}`);
 }
 async function findEmailLog(campaignId, email, trackingId) {
   let find;
@@ -196,24 +217,33 @@ Deno.serve(async (req)=>{
     });
   }
   const action = url.searchParams.get('action');
+  const source = url.searchParams.get('source');
+  const queueId = url.searchParams.get('queue_id');
   const campaignId = url.searchParams.get('campaign_id');
   const contactEmail = url.searchParams.get('contact_email');
   const trackingId = url.searchParams.get('tracking_id');
   const emailLogId = url.searchParams.get('email_log_id');
   log('Pixel Requested —', url.toString());
-  if (action === 'track' && contactEmail && (emailLogId || campaignId)) {
-    const row = emailLogId ? await getEmailLogById(emailLogId) : await findEmailLog(campaignId, contactEmail, trackingId);
-    if (row && isAutoOpen(row.sent_at)) {
-      log('Open IGNORED — pixel auto-loaded by provider/scanner too soon after send', `log_id=${row.id}`);
-    } else {
+  if (action === 'track' && contactEmail && (source === 'weekly' || emailLogId || campaignId)) {
+    if (source === 'weekly' && queueId) {
+      // Weekly welcome email: record the first open on the queue row itself.
+      // The contact-level email_opened flag is kept in sync too (additive).
       await updateContact(contactEmail);
-      if (row) {
-        await updateEmailLog(row);
-        await advanceOpenedBranch(row.id);
+      await updateWeeklyQueueOpen(queueId);
+    } else {
+      const row = emailLogId ? await getEmailLogById(emailLogId) : await findEmailLog(campaignId, contactEmail, trackingId);
+      if (row && isAutoOpen(row.sent_at)) {
+        log('Open IGNORED — pixel auto-loaded by provider/scanner too soon after send', `log_id=${row.id}`);
+      } else {
+        await updateContact(contactEmail);
+        if (row) {
+          await updateEmailLog(row);
+          await advanceOpenedBranch(row.id);
+        }
       }
     }
   } else {
-    log('Skipped — expected ?action=track&email_log_id=<uuid>&contact_email=<email> (or legacy ?action=track&campaign_id=<uuid>&contact_email=<email>)');
+    log('Skipped — expected ?action=track&email_log_id=<uuid>&contact_email=<email> (or weekly ?action=track&source=weekly&queue_id=<uuid>&contact_email=<email>, legacy ?action=track&campaign_id=<uuid>&contact_email=<email>)');
   }
   return new Response(GIF_BODY, {
     status: 200,

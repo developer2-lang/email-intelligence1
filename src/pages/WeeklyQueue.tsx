@@ -64,6 +64,8 @@ interface QueueRow {
   queued_at: string | null;
   attempted_at: string | null;
   sent_at: string | null;
+  opened_at: string | null;
+  clicked_at: string | null;
   next_retry_at: string | null;
   error_message: string | null;
   created_at: string | null;
@@ -111,6 +113,36 @@ function fmtDateTime(value?: string | null): string {
     minute: '2-digit',
   });
 }
+
+const TrackBadge = ({
+  label,
+  active,
+  bg,
+  color,
+  detail,
+}: {
+  label: string;
+  active: boolean;
+  bg: string;
+  color: string;
+  detail?: string | null;
+}) => (
+  <span
+    title={active && detail ? `${label} ${fmtDateTime(detail)}` : undefined}
+    style={{
+      display: 'inline-block',
+      padding: '3px 10px',
+      borderRadius: 999,
+      background: active ? bg : '#F1F5F9',
+      color: active ? color : '#94A3B8',
+      fontSize: 11.5,
+      fontWeight: 600,
+      whiteSpace: 'nowrap',
+    }}
+  >
+    {active ? label : '—'}
+  </span>
+);
 
 const PAGE_SIZE_OPTIONS = [25, 50, 100];
 
@@ -285,6 +317,8 @@ export default function WeeklyQueue({ onToast }: WeeklyQueueProps) {
       { label: 'Queued', value: fmtDateTime(r.queued_at) },
       { label: 'Attempted', value: fmtDateTime(r.attempted_at) },
       { label: 'Sent', value: fmtDateTime(r.sent_at) },
+      { label: 'Opened', value: fmtDateTime(r.opened_at) },
+      { label: 'Clicked', value: fmtDateTime(r.clicked_at) },
       { label: 'Next Retry', value: fmtDateTime(r.next_retry_at) },
       { label: 'Attempts', value: String(r.attempts) },
       { label: 'Error', value: r.error_message || '—' },
@@ -402,7 +436,7 @@ export default function WeeklyQueue({ onToast }: WeeklyQueueProps) {
 
         {/* ─── QUEUE TABLE ─── */}
         <div className="ct-table-wrap">
-          <table className="ct-table" style={{ minWidth: 1120 }}>
+          <table className="ct-table" style={{ minWidth: 1310 }}>
             <thead>
               <tr>
                 <th>Name</th>
@@ -412,6 +446,8 @@ export default function WeeklyQueue({ onToast }: WeeklyQueueProps) {
                 <th>Status</th>
                 <th>Queued</th>
                 <th>Sent</th>
+                <th>Opened</th>
+                <th>Clicked</th>
                 <th>Scheduled For</th>
                 <th style={{ textAlign: 'center', width: 80 }}>Attempts</th>
                 <th style={{ textAlign: 'right', width: 116 }}>Actions</th>
@@ -420,7 +456,7 @@ export default function WeeklyQueue({ onToast }: WeeklyQueueProps) {
             <tbody>
               {loading ? (
                 <tr>
-                  <td colSpan={10}>
+                  <td colSpan={12}>
                     <div className="empty-state">
                       <div style={{ display: 'inline-flex', alignItems: 'center', gap: 10 }}>
                         <span className="spinner"></span>
@@ -431,7 +467,7 @@ export default function WeeklyQueue({ onToast }: WeeklyQueueProps) {
                 </tr>
               ) : paginatedRows.length === 0 ? (
                 <tr>
-                  <td colSpan={10}>
+                  <td colSpan={12}>
                     <div className="empty-state">
                       <div className="empty-icon">📬</div>
                       <div className="empty-title">No queued contacts</div>
@@ -491,6 +527,24 @@ export default function WeeklyQueue({ onToast }: WeeklyQueueProps) {
                       </td>
                       <td>
                         <div className="ct-desig">{fmtDate(r.sent_at)}</div>
+                      </td>
+                      <td>
+                        <TrackBadge
+                          label="Opened"
+                          active={!!r.opened_at}
+                          bg="#D1FAE5"
+                          color="#065F46"
+                          detail={r.opened_at}
+                        />
+                      </td>
+                      <td>
+                        <TrackBadge
+                          label="Clicked"
+                          active={!!r.clicked_at}
+                          bg="#DBEAFE"
+                          color="#1D4ED8"
+                          detail={r.clicked_at}
+                        />
                       </td>
                       <td>
                         {r.status === 'sent' && r.sent_at ? (
