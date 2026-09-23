@@ -1,9 +1,9 @@
 /**
  * process-weekly-queue — Supabase Edge Function (weekly new-contact emails).
  *
- * Triggered by a pg_cron job every WEDNESDAY at 08:30 UTC (= 02:00 PM IST) via
+ * Triggered by a pg_cron job every THURSDAY at 02:30 UTC (= 08:00 AM IST) via
  * supabase/weekly-queue-setup.sql (job name weekly-new-contact-email,
- * schedule '30 8 * * 3'). It drains `public.weekly_email_queue` —
+ * schedule '30 2 * * 4'). It drains `public.weekly_email_queue` —
  * the rows snapshotted by the `contacts` INSERT trigger
  * (20260927000000_weekly_new_contact_automation.sql) — and emails each NEW
  * contact exactly ONCE through Gmail SMTP.
@@ -467,7 +467,7 @@ Deno.serve(async (req) => {
   const start = Date.now();
   // Robust header check: tolerate trailing whitespace, log a clear hint, and
   // reject unless a secret is actually set (a set-but-empty env var must fail
-  // closed, never pass). The caller — job 41 `weekly-new-contact-email` via
+  // closed, never pass). The caller — job 49 `weekly-new-contact-email` via
   // pg_net — must send exactly this value in x-cron-secret.
   const secret = (req.headers.get('x-cron-secret') || '').trim();
   if (!CRON_SECRET || !secret || secret !== CRON_SECRET) {

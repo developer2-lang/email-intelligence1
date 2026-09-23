@@ -300,8 +300,8 @@ export default function WeeklyQueue({ onToast }: WeeklyQueueProps) {
         <div>
           <div className="contacts-title">Weekly Queue</div>
           <div className="contacts-sub">
-            New contacts are queued automatically and receive one welcome email every Wednesday at
-            2:00 PM IST.
+            New contacts are queued automatically and receive one welcome email every Thursday at
+            8:00 AM IST.
           </div>
         </div>
         <div className="ct-toolbar-right" style={{ marginTop: 0 }}>

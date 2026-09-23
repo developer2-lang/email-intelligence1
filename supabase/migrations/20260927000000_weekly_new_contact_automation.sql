@@ -2,7 +2,7 @@
 -- Weekly auto-email for NEW contacts (one-time welcome send)
 -- ============================================================================
 -- Sends ONE welcoming email to every NEW contact, automatically, once per
--- week, every Wednesday at 2:00 PM IST (= 08:30 UTC). The full flow is split
+-- week, every Thursday at 8:00 AM IST (= 02:30 UTC). The full flow is split
 -- across three pieces:
 --
 --   1. THIS migration — `public.weekly_email_queue` table + an AFTER INSERT
@@ -14,7 +14,7 @@
 --   2. `supabase/functions/process-weekly-queue/index.ts` — Edge Function
 --      that drains the pending queue via Gmail SMTP.
 --   3. `supabase/weekly-queue-setup.sql` — pg_cron job `weekly-new-contact-email`,
---      Wednesday 08:30 UTC (= 02:00 PM IST), that calls that function every Wednesday.
+--      Thursday 02:30 UTC (= 08:00 AM IST), that calls that function every Thursday.
 --
 -- Guarantees:
 --   * UNIQUE(contact_id) → one queue row per contact. A contact is never
