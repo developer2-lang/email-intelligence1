@@ -1,6 +1,12 @@
 import { useState, useMemo, useCallback, useEffect } from 'react';
 import { AV_COLORS } from '../constants/constants';
 import { supabase } from '../supabase';
+import SearchableSelect from '../components/SearchableSelect';
+import {
+  fetchCustomFilterOptions,
+  removeCustomFilterOption,
+} from '../services/customFilterOptionsService';
+
 
 // ─── ICONS (match the Contacts page icon system) ─────────────────────────────
 const iconProps = {
@@ -114,6 +120,15 @@ function matchColumn(column: string | null, filter: string): boolean {
   return filter === NONE ? val === '' : val === filter;
 }
 
+// Build {value,label} options for a searchable select from distinct column
+// values, preserving the "(None)" sentinel for empty/null rows.
+function toSelectOptions(opts: string[]): { value: string; label: string }[] {
+  return [
+    ...opts.filter((o) => o !== '').map((o) => ({ value: o, label: o })),
+    ...(opts.includes('') ? [{ value: NONE, label: '(None)' }] : []),
+  ];
+}
+
 // ─── MAIN COMPONENT ──────────────────────────────────────────────────────────
 export default function LeadDatabase({ onToast }: LeadDatabaseProps) {
   const [leads, setLeads] = useState<LeadRow[]>([]);
@@ -131,12 +146,13 @@ export default function LeadDatabase({ onToast }: LeadDatabaseProps) {
   const [phoneFilter, setPhoneFilter] = useState('');
   const [companyFilter, setCompanyFilter] = useState('');
   const [designationFilter, setDesignationFilter] = useState('');
+  const [customDesignations, setCustomDesignations] = useState<string[]>([]);
 
   const [sortKey, setSortKey] = useState<SortKey>('created_at');
   const [sortDir, setSortDir] = useState<1 | -1>(-1);
 
   const [page, setPage] = useState(1);
-  const [pageSize, setPageSize] = useState(25);
+  const [pageSize, setPageSize] = useState(50);
 
   const [viewLead, setViewLead] = useState<LeadRow | null>(null);
   const [editLead, setEditLead] = useState<LeadRow | null>(null);
@@ -182,6 +198,32 @@ export default function LeadDatabase({ onToast }: LeadDatabaseProps) {
     return () => window.clearTimeout(timer);
   }, [fetchLeads]);
 
+  // Load the user's saved custom designations (persisted in Supabase) so they
+  // survive a page refresh and show up in the Designation dropdown.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const { data, error } = await fetchCustomFilterOptions(['designation']);
+      if (cancelled) return;
+      if (error) {
+        onToast(`Could not load saved custom designations: ${error}`, 'error');
+        return;
+      }
+      const saved = data.designation ?? [];
+      if (saved.length === 0) return;
+      setCustomDesignations((prev) => {
+        const merged = [...prev];
+        for (const s of saved) {
+          if (!merged.some((x) => x.toLowerCase() === s.toLowerCase())) merged.push(s);
+        }
+        return merged;
+      });
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [onToast]);
+
   // ─── FILTER OPTIONS (derived from loaded rows) ───
   const industryOptions = useMemo(
     () => filterOptions(leads, (l) => l.industry),
@@ -198,10 +240,49 @@ export default function LeadDatabase({ onToast }: LeadDatabaseProps) {
     [leads],
   );
 
-  const designationOptions = useMemo(
-    () => filterOptions(leads, (l) => l.designation),
-    [leads],
+  // Derive unique designations from the loaded leads (already fetched in the
+  // table) rather than from the public.designations lookup table.
+  const designationOptions = useMemo(() => {
+    const unique = Array.from(
+      new Set(
+        leads
+          .map((l) => l.designation)
+          .filter((d): d is string => !!d && d.trim() !== ''),
+      ),
+    ).sort();
+
+    return [
+      { value: '', label: 'All Designations' },
+      ...unique.map((d) => ({ value: d, label: d })),
+    ];
+  }, [leads]);
+
+  const companySelectOptions = useMemo(
+    () => toSelectOptions(companyOptions),
+    [companyOptions],
   );
+
+  const industrySelectOptions = useMemo(
+    () => toSelectOptions(industryOptions),
+    [industryOptions],
+  );
+
+  const geographySelectOptions = useMemo(
+    () => toSelectOptions(geographyOptions),
+    [geographyOptions],
+  );
+
+  // The Designation dropdown mirrors the exact designation strings stored on the
+  // leads rows. User-added custom designations are rendered separately via
+  // customOptions so they keep their remove (×) affordance.
+  const designationSelectOptions = designationOptions;
+
+  const removeCustomDesignation = (value: string) => {
+    setCustomDesignations((prev) => prev.filter((x) => x !== value));
+    void removeCustomFilterOption('designation', value).then((res) => {
+      if (res.error) onToast(`Could not remove "${value}": ${res.error}`, 'error');
+    });
+  };
 
   // ─── FILTERED + SORTED ROWS ───
   const filteredLeads = useMemo(() => {
@@ -285,16 +366,6 @@ export default function LeadDatabase({ onToast }: LeadDatabaseProps) {
     sortKey === key ? (
       <span className="ct-sort-arrow">{sortDir === 1 ? '↑' : '↓'}</span>
     ) : null;
-
-  // Distinct-value options for a column dropdown: every value plus a single
-  // "(None)" option for null/empty rows (uses the NONE sentinel so clearing
-  // with the "All …" option keeps value '').
-  const renderFilterOptions = (opts: string[]) =>
-    opts.map((opt) => (
-      <option key={opt === '' ? NONE : opt} value={opt === '' ? NONE : opt}>
-        {opt === '' ? '(None)' : opt}
-      </option>
-    ));
 
   const activeFilterCount = [
     nameFilter,
@@ -467,28 +538,28 @@ export default function LeadDatabase({ onToast }: LeadDatabaseProps) {
                 placeholder="Search name, email, company..."
               />
             </div>
-            <select
-              className="ct-select"
-              value={industryFilter}
-              onChange={(e) => {
-                setIndustryFilter(e.target.value);
-                setPage(1);
-              }}
-            >
-              <option value="">All Industries</option>
-              {renderFilterOptions(industryOptions)}
-            </select>
-            <select
-              className="ct-select"
-              value={geographyFilter}
-              onChange={(e) => {
-                setGeographyFilter(e.target.value);
-                setPage(1);
-              }}
-            >
-              <option value="">All Geographies</option>
-              {renderFilterOptions(geographyOptions)}
-            </select>
+            <div style={{ minWidth: 178 }}>
+              <SearchableSelect
+                value={industryFilter}
+                options={industrySelectOptions}
+                onChange={(value) => {
+                  setIndustryFilter(value);
+                  setPage(1);
+                }}
+                placeholder="All Industries"
+              />
+            </div>
+            <div style={{ minWidth: 178 }}>
+              <SearchableSelect
+                value={geographyFilter}
+                options={geographySelectOptions}
+                onChange={(value) => {
+                  setGeographyFilter(value);
+                  setPage(1);
+                }}
+                placeholder="All Geographies"
+              />
+            </div>
           </div>
         </div>
 
@@ -540,81 +611,53 @@ export default function LeadDatabase({ onToast }: LeadDatabaseProps) {
                     }}
                   />
                 </th>
+                <th />
+                <th />
                 <th>
-                  <input
-                    type="search"
-                    className="ct-select ct-filter-ctl"
-                    placeholder="Filter email"
-                    value={emailFilter}
-                    onChange={(e) => {
-                      setEmailFilter(e.target.value);
-                      setPage(1);
-                    }}
-                  />
-                </th>
-                <th>
-                  <input
-                    type="search"
-                    className="ct-select ct-filter-ctl"
-                    placeholder="Filter phone"
-                    value={phoneFilter}
-                    onChange={(e) => {
-                      setPhoneFilter(e.target.value);
-                      setPage(1);
-                    }}
-                  />
-                </th>
-                <th>
-                  <select
-                    className="ct-select ct-filter-ctl"
+                  <SearchableSelect
                     value={companyFilter}
-                    onChange={(e) => {
-                      setCompanyFilter(e.target.value);
+                    options={companySelectOptions}
+                    onChange={(value) => {
+                      setCompanyFilter(value);
                       setPage(1);
                     }}
-                  >
-                    <option value="">All Companies</option>
-                    {renderFilterOptions(companyOptions)}
-                  </select>
+                    placeholder="All Companies"
+                  />
                 </th>
                 <th>
-                  <select
-                    className="ct-select ct-filter-ctl"
+                  <SearchableSelect
                     value={designationFilter}
-                    onChange={(e) => {
-                      setDesignationFilter(e.target.value);
+                    options={designationSelectOptions}
+                    customOptions={customDesignations}
+                    onRemoveCustom={removeCustomDesignation}
+                    onChange={(value) => {
+                      setDesignationFilter(value);
                       setPage(1);
                     }}
-                  >
-                    <option value="">All Designations</option>
-                    {renderFilterOptions(designationOptions)}
-                  </select>
+                    placeholder="All Designations"
+                  />
                 </th>
                 <th>
-                  <select
-                    className="ct-select ct-filter-ctl"
+                  <SearchableSelect
                     value={industryFilter}
-                    onChange={(e) => {
-                      setIndustryFilter(e.target.value);
+                    options={industrySelectOptions}
+                    onChange={(value) => {
+                      setIndustryFilter(value);
                       setPage(1);
                     }}
-                  >
-                    <option value="">All Industries</option>
-                    {renderFilterOptions(industryOptions)}
-                  </select>
+                    placeholder="All Industries"
+                  />
                 </th>
                 <th>
-                  <select
-                    className="ct-select ct-filter-ctl"
+                  <SearchableSelect
                     value={geographyFilter}
-                    onChange={(e) => {
-                      setGeographyFilter(e.target.value);
+                    options={geographySelectOptions}
+                    onChange={(value) => {
+                      setGeographyFilter(value);
                       setPage(1);
                     }}
-                  >
-                    <option value="">All Geographies</option>
-                    {renderFilterOptions(geographyOptions)}
-                  </select>
+                    placeholder="All Geographies"
+                  />
                 </th>
                 <th />
                 <th />

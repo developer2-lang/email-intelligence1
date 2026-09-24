@@ -133,6 +133,8 @@ interface SidebarProps {
   activeTab: TabKey
   onNavigate: (tab: TabKey) => void
   prefFrom?: string
+  userEmail?: string
+  onSignOut?: () => void
 }
 
 function displayName(prefFrom?: string): string {
@@ -151,8 +153,23 @@ function getInitials(name: string): string {
     .join('')
 }
 
-export default function Sidebar({ activeTab, onNavigate, prefFrom }: SidebarProps) {
+function userNameFromEmail(email?: string): string {
+  if (!email) return 'User'
+  const local = email.split('@')[0]
+  return local
+    .split(/[._-]+/)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(' ')
+}
+
+export default function Sidebar({ activeTab, onNavigate, prefFrom, userEmail, onSignOut }: SidebarProps) {
   const userName = displayName(prefFrom)
+  const initials = userEmail ? getInitials(userNameFromEmail(userEmail)) : getInitials(userName)
+
+  const handleSignOut = () => {
+    onSignOut?.()
+  }
 
   return (
     <aside className="sidebar" id="app-sidebar">
@@ -190,11 +207,35 @@ export default function Sidebar({ activeTab, onNavigate, prefFrom }: SidebarProp
       </nav>
 
       <div className="side-user">
-        <div className="side-avatar">{getInitials(userName)}</div>
+        <div className="side-avatar">{initials}</div>
         <div className="side-user-info">
-          <div className="side-user-name">{userName}</div>
-          <div className="side-user-role">BD Manager</div>
+          <div className="side-user-name">{userEmail ? userNameFromEmail(userEmail) : userName}</div>
+          <div className="side-user-role">{userEmail ?? 'BD Manager'}</div>
         </div>
+        {onSignOut && (
+          <button
+            type="button"
+            className="btn-icon side-signout"
+            onClick={handleSignOut}
+            title="Sign out"
+            aria-label="Sign out"
+          >
+            <svg
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.8"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              width="15"
+              height="15"
+            >
+              <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
+              <polyline points="16 17 21 12 16 7" />
+              <line x1="21" y1="12" x2="9" y2="12" />
+            </svg>
+          </button>
+        )}
       </div>
 
       <div className="side-foot">IUOVA · Outreach OS · v1.0</div>

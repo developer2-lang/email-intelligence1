@@ -1,14 +1,24 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect } from 'react'
 import * as XLSX from 'xlsx'
 import jsPDF from 'jspdf'
 import autoTable from 'jspdf-autotable'
 import { supabase } from '../supabase'
 import {
   fetchCompanySizes,
+  fetchDepartments,
+  fetchDesignations,
+  fetchGeographies,
+  fetchIndustries,
   fetchNumberOfProfiles,
   type FilterOption,
   type ProfileCountOption,
 } from '../services/filterService'
+import {
+  addCustomFilterOption,
+  fetchCustomFilterOptions,
+  removeCustomFilterOption,
+} from '../services/customFilterOptionsService'
+import SearchableSelect from '../components/SearchableSelect'
 
 interface Lead {
   id: string
@@ -36,104 +46,6 @@ interface Filters {
 }
 
 const DEFAULT_FILTERS: Filters = { industry: '', designation: '', geography: '', role: '', companySize: '', maxItems: 5 }
-
-const INDUSTRY_OPTIONS = [
-  'Information Technology',
-  'Software Development',
-  'Artificial Intelligence',
-  'Cybersecurity',
-  'Cloud Computing',
-  'Telecommunications',
-  'Finance',
-  'Banking',
-  'Insurance',
-  'Real Estate',
-  'Accounting',
-  'Management Consulting',
-  'Human Resources',
-  'Healthcare',
-  'Pharmaceuticals',
-  'Biotechnology',
-  'Medical Devices',
-  'Manufacturing',
-  'Retail',
-  'E-commerce',
-  'Education',
-  'Media',
-  'Entertainment',
-  'Hospitality',
-  'Logistics',
-  'Automotive',
-  'Energy',
-  'Utilities',
-  'Construction',
-  'Agriculture',
-  'Legal Services',
-  'Marketing',
-  'Advertising',
-]
-
-const DESIGNATION_OPTIONS = [
-  'CEO',
-  'CTO',
-  'CFO',
-  'COO',
-  'Founder',
-  'Co-Founder',
-  'President',
-  'VP',
-  'Director',
-  'Head',
-  'General Manager',
-  'Senior Manager',
-  'Manager',
-  'Lead',
-  'Engineer',
-  'Developer',
-  'Analyst',
-  'Consultant',
-  'Specialist',
-  'Executive',
-]
-
-const GEOGRAPHY_OPTIONS = [
-  'India',
-  'USA',
-  'UK',
-  'Canada',
-  'Australia',
-  'Singapore',
-  'UAE',
-  'Germany',
-  'France',
-  'Japan',
-  'China',
-  'Brazil',
-  'South Africa',
-  'Netherlands',
-  'Switzerland',
-  'Dubai',
-]
-
-const ROLE_OPTIONS = [
-  'Engineering',
-  'Sales',
-  'Marketing',
-  'Product',
-  'Design',
-  'Finance',
-  'Operations',
-  'Human Resources',
-  'Legal',
-  'IT',
-  'Customer Success',
-  'Business Development',
-  'Research',
-  'Data',
-  'Consulting',
-]
-
-type ComboboxKey = 'industry' | 'designation' | 'geography' | 'role'
 
 function mergeUnique(lists: string[][]): string[] {
   const seen = new Set<string>()
@@ -253,296 +165,6 @@ function loadCustomValues(key: string): string[] {
   }
 }
 
-function Combobox({
-  label,
-  value,
-  options,
-  customOptions,
-  placeholder,
-  onSelect,
-  onAddCustom,
-  onRemoveCustom,
-}: {
-  label: string
-  value: string
-  options: string[]
-  customOptions: string[]
-  placeholder: string
-  onSelect: (value: string) => void
-  onAddCustom: (value: string) => void
-  onRemoveCustom: (value: string) => void
-}) {
-  const [open, setOpen] = useState(false)
-  const [draft, setDraft] = useState(value)
-  const [editing, setEditing] = useState(false)
-  const [adding, setAdding] = useState(false)
-  const [addText, setAddText] = useState('')
-  const [hovered, setHovered] = useState<string | null>(null)
-  const rootRef = useRef<HTMLDivElement>(null)
-
-  const display = editing ? draft : value
-
-  useEffect(() => {
-    if (!open) return
-    const handleOutside = (e: MouseEvent) => {
-      if (rootRef.current && !rootRef.current.contains(e.target as Node)) {
-        setEditing(false)
-        setOpen(false)
-        setAdding(false)
-        setAddText('')
-        setHovered(null)
-      }
-    }
-    document.addEventListener('mousedown', handleOutside)
-    return () => document.removeEventListener('mousedown', handleOutside)
-  }, [open])
-
-  const choose = (v: string) => {
-    onSelect(v)
-    setDraft(v)
-    setEditing(false)
-    setOpen(false)
-    setAdding(false)
-    setAddText('')
-    setHovered(null)
-  }
-
-  const confirmAdd = () => {
-    const t = addText.trim()
-    if (!t) return
-    onAddCustom(t)
-    choose(t)
-  }
-
-  const confirmAddWith = (t: string) => {
-    if (!t) return
-    onAddCustom(t)
-    choose(t)
-  }
-
-  const query = editing ? draft.trim().toLowerCase() : ''
-  const seen = new Set<string>()
-  const rows: { label: string; value: string; custom: boolean }[] = [
-    { label: placeholder, value: '', custom: false },
-    ...options.map((o) => ({ label: o, value: o, custom: false })),
-    ...customOptions.map((o) => ({ label: o, value: o, custom: true })),
-  ].filter((r) => {
-    const key = r.label.trim().toLowerCase()
-    if (seen.has(key)) return false
-    seen.add(key)
-    return true
-  })
-  const filtered = rows.filter((r) => r.label.toLowerCase().includes(query))
-
-  return (
-    <div className="form-group" style={{ marginBottom: 0, position: 'relative' }} ref={rootRef}>
-      <label>{label}</label>
-      <div style={{ position: 'relative' }}>
-        <input
-          type="text"
-          value={display}
-          placeholder={placeholder}
-          role="combobox"
-          aria-expanded={open}
-          aria-autocomplete="list"
-          autoComplete="off"
-          style={{ paddingRight: 32 }}
-          onChange={(e) => {
-            setDraft(e.target.value)
-            setEditing(true)
-            setOpen(true)
-          }}
-          onClick={() => setOpen(true)}
-          onKeyDown={(e) => {
-            if (e.key === 'Escape') {
-              e.preventDefault()
-              setEditing(false)
-              setOpen(false)
-              setAdding(false)
-              setAddText('')
-              setHovered(null)
-              e.currentTarget.blur()
-            } else if (e.key === 'Enter') {
-              e.preventDefault()
-              choose(display.trim())
-            }
-          }}
-        />
-        <span
-          onClick={() => setOpen((v) => !v)}
-          style={{
-            position: 'absolute',
-            right: 10,
-            top: '50%',
-            transform: 'translateY(-50%)',
-            fontSize: 11,
-            lineHeight: 1,
-            color: 'var(--text4)',
-            cursor: 'pointer',
-            userSelect: 'none',
-            zIndex: 2,
-          }}
-        >
-          ▾
-        </span>
-      </div>
-      {open && (
-        <div
-          role="listbox"
-          style={{
-            position: 'absolute',
-            top: '100%',
-            left: 0,
-            right: 0,
-            zIndex: 40,
-            marginTop: 4,
-            maxHeight: 240,
-            overflowY: 'auto',
-            background: '#fff',
-            border: '1px solid var(--border2)',
-            borderRadius: 8,
-            boxShadow: '0 6px 16px rgba(15, 23, 42, 0.12)',
-          }}
-        >
-          {filtered.length > 0 ? (
-            filtered.map((r) => {
-              const active = hovered === r.label || r.value === value
-              return (
-                <div
-                  key={r.label}
-                  role="option"
-                  aria-selected={r.value === value}
-                  onMouseDown={(e) => {
-                    e.preventDefault()
-                    choose(r.value)
-                  }}
-                  onMouseEnter={() => setHovered(r.label)}
-                  onMouseLeave={() => setHovered((h) => (h === r.label ? null : h))}
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'space-between',
-                    padding: '7px 12px',
-                    fontSize: '12.5px',
-                    cursor: 'pointer',
-                    background: active ? 'var(--accent)' : 'transparent',
-                    color: active ? '#fff' : 'var(--text1)',
-                  }}
-                >
-                  <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                    {r.label}
-                  </span>
-                  {r.custom && (
-                    <span
-                      title={`Remove ${r.label}`}
-                      onMouseDown={(e) => {
-                        e.preventDefault()
-                        e.stopPropagation()
-                      }}
-                      onClick={(e) => {
-                        e.stopPropagation()
-                        onRemoveCustom(r.label)
-                        setHovered(null)
-                      }}
-                      style={{
-                        marginLeft: 8,
-                        fontSize: 15,
-                        lineHeight: 1,
-                        padding: '0 3px',
-                        cursor: 'pointer',
-                        color: active ? '#fff' : 'var(--text4)',
-                        opacity: hovered === r.label ? 1 : 0,
-                      }}
-                    >
-                      ×
-                    </span>
-                  )}
-                </div>
-              )
-            })
-          ) : editing && query.trim() ? (
-            <div
-              onMouseDown={(e) => e.preventDefault()}
-              onClick={() => confirmAddWith(draft.trim())}
-              style={{
-                padding: '8px 12px',
-                fontSize: '12.5px',
-                color: 'var(--accent)',
-                cursor: 'pointer',
-                userSelect: 'none',
-              }}
-            >
-              + Add Custom {label} '{draft.trim()}'
-            </div>
-          ) : (
-            <div style={{ padding: '8px 12px', fontSize: '12.5px', color: 'var(--text4)' }}>
-              No options match
-            </div>
-          )}
-          <div style={{ borderTop: '1px solid var(--border2)' }}>
-            {adding ? (
-              <div style={{ display: 'flex', gap: 6, alignItems: 'center', padding: 8 }}>
-                <input
-                  type="text"
-                  value={addText}
-                  placeholder={`Custom ${label}…`}
-                  autoFocus
-                  onChange={(e) => setAddText(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') {
-                      e.preventDefault()
-                      confirmAdd()
-                    } else if (e.key === 'Escape') {
-                      e.preventDefault()
-                      setAdding(false)
-                      setAddText('')
-                    }
-                  }}
-                  style={{
-                    flex: 1,
-                    minWidth: 0,
-                    padding: '7px 10px',
-                    border: '1px solid var(--border2)',
-                    borderRadius: 6,
-                    fontSize: '12.5px',
-                    color: 'var(--text1)',
-                    background: 'var(--surface)',
-                    outline: 'none',
-                  }}
-                />
-                <button
-                  className="btn btn-primary"
-                  onClick={confirmAdd}
-                  style={{ padding: '7px 12px', fontSize: '12.5px', flexShrink: 0 }}
-                >
-                  Add
-                </button>
-              </div>
-            ) : (
-              <div
-                onMouseDown={(e) => e.preventDefault()}
-                onClick={() => {
-                  setAddText(editing ? draft : '')
-                  setAdding(true)
-                }}
-                style={{
-                  padding: '8px 12px',
-                  fontSize: '12.5px',
-                  color: 'var(--accent)',
-                  cursor: 'pointer',
-                  userSelect: 'none',
-                }}
-              >
-                + Add Custom {label}
-              </div>
-            )}
-          </div>
-        </div>
-      )}
-    </div>
-  )
-}
-
 export default function LeadSearch() {
   const [filters, setFilters] = useState<Filters>(() => {
     const saved = localStorage.getItem('leadSearchFilters')
@@ -557,7 +179,7 @@ export default function LeadSearch() {
   const [enriching, setEnriching] = useState<Set<string>>(new Set())
   const [deletingId, setDeletingId] = useState<string | null>(null)
   const [fetchingPhoneId, setFetchingPhoneId] = useState<string | null>(null)
-  const [rowErrors, setRowErrors] = useState<Record<string, string>>({})
+  const [, setRowErrors] = useState<Record<string, string>>({})
   const [tableSearch, setTableSearch] = useState('')
 
   const [companySizes, setCompanySizes] = useState<FilterOption[]>([])
@@ -565,16 +187,15 @@ export default function LeadSearch() {
   const [filterMetaLoading, setFilterMetaLoading] = useState(true)
   const [filterMetaError, setFilterMetaError] = useState<string | null>(null)
 
+  const [industryOptions, setIndustryOptions] = useState<string[]>([])
+  const [designationOptions, setDesignationOptions] = useState<string[]>([])
+  const [geographyOptions, setGeographyOptions] = useState<string[]>([])
+  const [departmentOptions, setDepartmentOptions] = useState<string[]>([])
+
   const [customIndustries, setCustomIndustries] = useState<string[]>(() => loadCustomValues('custom_industries'))
   const [customDesignations, setCustomDesignations] = useState<string[]>(() => loadCustomValues('custom_designations'))
   const [customGeographies, setCustomGeographies] = useState<string[]>(() => loadCustomValues('custom_geographies'))
-  const [customRoles, setCustomRoles] = useState<string[]>(() => loadCustomValues('custom_roles'))
-  const [dbOptions, setDbOptions] = useState<Record<ComboboxKey, string[]>>({
-    industry: [],
-    designation: [],
-    geography: [],
-    role: [],
-  })
+  const [customRoles, setCustomRoles] = useState<string[]>([])
 
   useEffect(() => {
     localStorage.setItem('leadSearchFilters', JSON.stringify(filters))
@@ -592,18 +213,33 @@ export default function LeadSearch() {
     localStorage.setItem('custom_geographies', JSON.stringify(customGeographies))
   }, [customGeographies])
 
-  useEffect(() => {
-    localStorage.setItem('custom_roles', JSON.stringify(customRoles))
-  }, [customRoles])
-
+  // Load every filter dropdown from its master table on mount so the options
+  // always reflect the database (single source of truth), never hardcoded
+  // lists. Geography labels can appear under multiple values ("India" vs
+  // "india") so they are de-duplicated; the 'all' sentinel row is skipped.
   useEffect(() => {
     let cancelled = false
     ;(async () => {
-      const [cs, np] = await Promise.all([fetchCompanySizes(), fetchNumberOfProfiles()])
+      const [ind, des, geo, dept, cs, np] = await Promise.all([
+        fetchIndustries(),
+        fetchDesignations(),
+        fetchGeographies(),
+        fetchDepartments(),
+        fetchCompanySizes(),
+        fetchNumberOfProfiles(),
+      ])
       if (cancelled) return
+      setIndustryOptions(ind.data.map((o) => o.label))
+      setDesignationOptions(des.data.map((o) => o.label))
+      setGeographyOptions(
+        mergeUnique([geo.data.filter((o) => o.value !== 'all').map((o) => o.label)]),
+      )
+      setDepartmentOptions(dept.data.map((o) => o.label))
       setCompanySizes(cs.data)
       setProfileCounts(np.data)
-      setFilterMetaError([cs, np].map((r) => r.error).filter(Boolean).join('; ') || null)
+      setFilterMetaError(
+        [ind, des, geo, dept, cs, np].map((r) => r.error).filter(Boolean).join('; ') || null,
+      )
       setFilterMetaLoading(false)
     })()
     return () => {
@@ -612,6 +248,32 @@ export default function LeadSearch() {
   }, [])
 
   useEffect(() => {
+    let cancelled = false
+    ;(async () => {
+      const { data, error } = await fetchCustomFilterOptions(['designation'])
+      if (cancelled) return
+      if (error) {
+        // Not a user-facing failure — the custom-options table may not be
+        // migrated yet, in which case we just fall back to localStorage.
+        console.error(`[LeadSearch] Could not load saved custom options: ${error}`)
+        return
+      }
+      const saved = data.designation ?? []
+      if (saved.length === 0) return
+      setCustomDesignations((prev) => {
+        const merged = [...prev]
+        for (const s of saved) {
+          if (!merged.some((x) => x.toLowerCase() === s.toLowerCase())) merged.push(s)
+        }
+        return merged
+      })
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+useEffect(() => {
     ;(async () => {
       const { data, error } = await supabase
         .from('leads')
@@ -624,91 +286,6 @@ export default function LeadSearch() {
     })()
   }, [])
 
-  // Load filter values from the master tables on mount so the comboboxes can
-  // offer them as selectable options (merged with presets). Falls back to
-  // values already present in the leads table when a master table is missing.
-  useEffect(() => {
-    let cancelled = false
-
-    const masterTables: Record<ComboboxKey, string> = {
-      industry: 'industries',
-      designation: 'designations',
-      geography: 'geographies',
-      role: 'roles',
-    }
-
-    const collectKey = (rows: Array<Record<string, unknown>>, key: string): string[] => {
-      const seen = new Set<string>()
-      const out: string[] = []
-      for (const row of rows) {
-        const raw = typeof row[key] === 'string' ? (row[key] as string).trim() : ''
-        const k = raw.toLowerCase()
-        if (raw && !seen.has(k)) {
-          seen.add(k)
-          out.push(raw)
-        }
-      }
-      return out
-    }
-
-    // Probe the table with progressively simpler query shapes so it works no
-    // matter which columns actually exist (is_active / sort_order may be absent):
-    //   1. active + sort_order → 2. active only → 3. sort_order only → 4. labels only.
-    // Preferred = active + sorted rows; if that succeeds but returns zero rows
-    // (e.g. everything inactive) we keep trying so every existing label surfaces.
-    const fetchMasterLabels = async (table: string): Promise<string[]> => {
-      const variants = [
-        { active: true, ordered: true },
-        { active: true, ordered: false },
-        { active: false, ordered: true },
-        { active: false, ordered: false },
-      ]
-      let lastValid: string[] | null = null
-      for (const variant of variants) {
-        let q = supabase.from(table).select('label')
-        if (variant.active) q = q.eq('is_active', true)
-        if (variant.ordered) q = q.order('sort_order', { ascending: true })
-        const { data, error } = await q
-        if (error) continue
-        const labels = collectKey((data as Array<Record<string, unknown>>) ?? [], 'label')
-        if (labels.length > 0) return labels
-        if (lastValid === null) lastValid = labels
-      }
-      return lastValid ?? []
-    }
-
-    const fetchLeadsFallback = async (key: ComboboxKey): Promise<string[]> => {
-      const { data, error } = await supabase.from('leads').select(key)
-      if (error || !data) return []
-      return collectKey(data as Array<Record<string, unknown>>, key)
-    }
-
-    ;(async () => {
-      const keys = Object.keys(masterTables) as ComboboxKey[]
-      const results = await Promise.all(
-        keys.map(async (key) => {
-          const master = await fetchMasterLabels(masterTables[key])
-          const labels = master.length ? master : await fetchLeadsFallback(key)
-          return [key, labels] as const
-        }),
-      )
-      if (cancelled) return
-      const next: Record<ComboboxKey, string[]> = {
-        industry: [],
-        designation: [],
-        geography: [],
-        role: [],
-      }
-      for (const [key, labels] of results) next[key] = labels
-      console.info('[LeadSearch] loaded filter options:', next)
-      setDbOptions(next)
-    })()
-
-    return () => {
-      cancelled = true
-    }
-  }, [])
-
   const handleSelect = (key: keyof Filters, value: string) => {
     setFilters((prev) => ({ ...prev, [key]: value }))
   }
@@ -718,7 +295,7 @@ export default function LeadSearch() {
     if (!v) return
     setCustomIndustries((prev) =>
       prev.some((x) => x.toLowerCase() === v.toLowerCase()) ||
-      INDUSTRY_OPTIONS.some((x) => x.toLowerCase() === v.toLowerCase())
+      industryOptions.some((x) => x.toLowerCase() === v.toLowerCase())
         ? prev
         : [...prev, v],
     )
@@ -730,15 +307,22 @@ export default function LeadSearch() {
   const addCustomDesignation = (value: string) => {
     const v = value.trim()
     if (!v) return
+    const exists =
+      customDesignations.some((x) => x.toLowerCase() === v.toLowerCase()) ||
+      designationOptions.some((x) => x.toLowerCase() === v.toLowerCase())
+    if (exists) return
     setCustomDesignations((prev) =>
-      prev.some((x) => x.toLowerCase() === v.toLowerCase()) ||
-      DESIGNATION_OPTIONS.some((x) => x.toLowerCase() === v.toLowerCase())
-        ? prev
-        : [...prev, v],
+      prev.some((x) => x.toLowerCase() === v.toLowerCase()) ? prev : [...prev, v],
     )
+    void addCustomFilterOption('designation', v).then((res) => {
+      setNotice(res.error ? `Could not save "${v}": ${res.error}` : `Saved "${v}" as a custom option`)
+    })
   }
   const removeCustomDesignation = (value: string) => {
     setCustomDesignations((prev) => prev.filter((x) => x !== value))
+    void removeCustomFilterOption('designation', value).then((res) => {
+      if (res.error) setNotice(`Could not remove "${value}": ${res.error}`)
+    })
   }
 
   const addCustomGeography = (value: string) => {
@@ -746,7 +330,7 @@ export default function LeadSearch() {
     if (!v) return
     setCustomGeographies((prev) =>
       prev.some((x) => x.toLowerCase() === v.toLowerCase()) ||
-      GEOGRAPHY_OPTIONS.some((x) => x.toLowerCase() === v.toLowerCase())
+      geographyOptions.some((x) => x.toLowerCase() === v.toLowerCase())
         ? prev
         : [...prev, v],
     )
@@ -758,15 +342,35 @@ export default function LeadSearch() {
   const addCustomRole = (value: string) => {
     const v = value.trim()
     if (!v) return
-    setCustomRoles((prev) =>
-      prev.some((x) => x.toLowerCase() === v.toLowerCase()) ||
-      ROLE_OPTIONS.some((x) => x.toLowerCase() === v.toLowerCase())
-        ? prev
-        : [...prev, v],
-    )
+    if (
+      departmentOptions.some((x) => x.toLowerCase() === v.toLowerCase()) ||
+      customRoles.some((x) => x.toLowerCase() === v.toLowerCase())
+    ) {
+      return
+    }
+    void supabase
+      .from('departments')
+      .insert({ label: v, value: v })
+      .then(({ error }) => {
+        if (error) {
+          setNotice(`Could not save department "${v}": ${error.message}`)
+          return
+        }
+        setCustomRoles((prev) =>
+          prev.some((x) => x.toLowerCase() === v.toLowerCase()) ? prev : [...prev, v],
+        )
+        setNotice(`Saved "${v}" as a department`)
+      })
   }
   const removeCustomRole = (value: string) => {
     setCustomRoles((prev) => prev.filter((x) => x !== value))
+    void supabase
+      .from('departments')
+      .delete()
+      .eq('label', value)
+      .then(({ error }) => {
+        if (error) setNotice(`Could not remove "${value}": ${error.message}`)
+      })
   }
 
   const handleSearch = async () => {
@@ -1038,7 +642,7 @@ export default function LeadSearch() {
     {
       key: 'industry',
       label: 'Industry',
-      options: mergeUnique([INDUSTRY_OPTIONS, dbOptions.industry]),
+      options: mergeUnique([industryOptions]),
       customOptions: customIndustries,
       onAddCustom: addCustomIndustry,
       onRemoveCustom: removeCustomIndustry,
@@ -1046,7 +650,7 @@ export default function LeadSearch() {
     {
       key: 'designation',
       label: 'Designation',
-      options: mergeUnique([DESIGNATION_OPTIONS, dbOptions.designation]),
+      options: mergeUnique([designationOptions]),
       customOptions: customDesignations,
       onAddCustom: addCustomDesignation,
       onRemoveCustom: removeCustomDesignation,
@@ -1054,7 +658,7 @@ export default function LeadSearch() {
     {
       key: 'geography',
       label: 'Geography',
-      options: mergeUnique([GEOGRAPHY_OPTIONS, dbOptions.geography]),
+      options: mergeUnique([geographyOptions]),
       customOptions: customGeographies,
       onAddCustom: addCustomGeography,
       onRemoveCustom: removeCustomGeography,
@@ -1062,7 +666,7 @@ export default function LeadSearch() {
     {
       key: 'role',
       label: 'Department',
-      options: mergeUnique([ROLE_OPTIONS, dbOptions.role]),
+      options: mergeUnique([departmentOptions]),
       customOptions: customRoles,
       onAddCustom: addCustomRole,
       onRemoveCustom: removeCustomRole,
@@ -1223,32 +827,26 @@ export default function LeadSearch() {
           }}
         >
           {comboboxFields.map((field) => (
-            <Combobox
+            <SearchableSelect
               key={field.key}
               label={field.label}
               value={filters[field.key]}
-              options={field.options}
+              options={field.options.map((o) => ({ value: o, label: o }))}
               customOptions={field.customOptions}
-              placeholder={`All ${field.label}`}
-              onSelect={(value) => handleSelect(field.key, value)}
               onAddCustom={field.onAddCustom}
               onRemoveCustom={field.onRemoveCustom}
+              onChange={(value) => handleSelect(field.key, value)}
+              placeholder={`All ${field.label}`}
             />
           ))}
           <div className="form-group" style={{ marginBottom: 0 }}>
-            <label>Company Size</label>
-            <select
-              className="seqb-filter"
+            <SearchableSelect
+              label="Company Size"
               value={filters.companySize}
-              onChange={(e) => handleSelect('companySize', e.target.value)}
-            >
-              <option value="">All Company Size</option>
-              {companySizes.map((n) => (
-                <option key={n.id} value={n.value}>
-                  {n.label}
-                </option>
-              ))}
-            </select>
+              options={companySizes.map((n) => ({ value: n.value, label: n.label }))}
+              onChange={(value) => handleSelect('companySize', value)}
+              placeholder="All Company Size"
+            />
           </div>
           <div className="form-group" style={{ marginBottom: 0 }}>
             <label>Number of Profiles</label>
@@ -1406,7 +1004,7 @@ export default function LeadSearch() {
           <table>
             <thead>
               <tr>
-                {['Name', 'Company', 'Job Title', 'Email', 'Phone', 'LinkedIn', 'Industry', 'Geography', 'Department', 'Action', 'Delete'].map((h) => (
+                {['Name', 'Company', 'Job Title', 'Email', 'Phone', 'LinkedIn', 'Industry', 'Geography', 'Department', 'Delete'].map((h) => (
                   <th key={h}>{h}</th>
                 ))}
               </tr>
@@ -1425,7 +1023,14 @@ export default function LeadSearch() {
                     ) : lead.email_attempted === true ? (
                       <span style={{ fontSize: '12.5px', color: '#9ca3af', fontStyle: 'italic' }}>Not Found</span>
                     ) : (
-                      '—'
+                      <button
+                        className="btn"
+                        disabled={enriching.has(lead.id) || !lead.id}
+                        onClick={() => void handleEnrichLead(lead)}
+                        style={{ fontSize: '12.5px', padding: '4px 12px' }}
+                      >
+                        {enriching.has(lead.id) ? '…' : 'Find Email'}
+                      </button>
                     )}
                   </td>
                   <td>
@@ -1467,21 +1072,7 @@ export default function LeadSearch() {
                   <td>{lead.industry || '—'}</td>
                   <td>{lead.geography || '—'}</td>
                   <td>{lead.role || '—'}</td>
-                  <td>
-                    {rowErrors[lead.id] && (
-                      <div style={{ color: '#dc2626', fontSize: '11.5px', marginBottom: 4 }}>
-                        ⚠️ {rowErrors[lead.id]}
-                      </div>
-                    )}
-                    <button
-                      className="btn"
-                      disabled={enriching.has(lead.id) || !lead.id}
-                      onClick={() => void handleEnrichLead(lead)}
-                      style={{ fontSize: '12.5px', padding: '4px 12px' }}
-                    >
-                      {enriching.has(lead.id) ? '…' : 'Find Email'}
-                    </button>
-                  </td>
+
                   <td>
                     <button
                       className="btn btn-secondary"

@@ -1,6 +1,8 @@
 import { useState, useEffect, useCallback } from 'react';
 import { fetchAllContactTypes, updateContactType, deleteContactType, getContactCountByType } from '../services/contactTypesService';
 import type { ContactType } from '../services/contactTypesService';
+import { getLeadCount } from '../services/leadsService';
+import { LEAD_MIRROR_TAB } from '../constants/constants';
 
 const iconProps = {
   viewBox: '0 0 24 24',
@@ -64,9 +66,12 @@ export default function ContactTypesTab({ onToast }: ContactTypesTabProps) {
     } else {
       setError(null);
       setContactTypes(data || []);
-      // Fetch contact counts for each type
+      // Fetch counts for each type. The lead-search mirror row counts LIVE leads
+      // (public.leads); every other row counts contacts of that type.
       for (const ct of data || []) {
-        const { count } = await getContactCountByType(ct.name);
+        const { count } = ct.name.toLowerCase() === LEAD_MIRROR_TAB.toLowerCase()
+          ? await getLeadCount()
+          : await getContactCountByType(ct.name);
         setContactCounts(prev => ({ ...prev, [ct.name]: count }));
       }
     }
@@ -196,7 +201,8 @@ export default function ContactTypesTab({ onToast }: ContactTypesTabProps) {
                     <tr key={ct.id}>
                       <td>
                         <span className="tag tag-default" style={{ fontSize: '11px' }}>
-                          {ct.name === 'Existing Client' ? 'Client' :
+                          {ct.name.toLowerCase() === LEAD_MIRROR_TAB.toLowerCase() ? 'Lead' :
+                           ct.name === 'Existing Client' ? 'Client' :
                            ct.name === 'New Lead' ? 'Lead' :
                            ct.name === 'Prospect' ? 'Prospect' :
                            ct.name === 'Newsletter' ? 'News' :

@@ -16,7 +16,7 @@ export interface ProfileCountOption {
   sort_order: number
 }
 
-export interface RoleOption {
+export interface DepartmentOption {
   id: string
   label: string
   value: string
@@ -53,19 +53,19 @@ export function fetchGeographies(): Promise<{ data: FilterOption[]; error: strin
   return fetchActiveOptions('geographies')
 }
 
-// The public.roles table uses id, label, value, created_at — no is_active or
-// sort_order columns. Fetch all roles ordered by label.
-export async function fetchRoles(): Promise<{ data: RoleOption[]; error: string | null }> {
+// The public.departments table uses id, label, value, created_at — no is_active
+// or sort_order columns. Fetch all departments ordered by label.
+export async function fetchDepartments(): Promise<{ data: DepartmentOption[]; error: string | null }> {
   try {
     const { data, error } = await supabase
-      .from('roles')
+      .from('departments')
       .select('id, label, value')
       .order('label', { ascending: true })
 
     if (error) return { data: [], error: error.message }
-    return { data: (data as RoleOption[]) || [], error: null }
+    return { data: (data as DepartmentOption[]) || [], error: null }
   } catch (err) {
-    return { data: [], error: err instanceof Error ? err.message : 'Failed to fetch roles' }
+    return { data: [], error: err instanceof Error ? err.message : 'Failed to fetch departments' }
   }
 }
 

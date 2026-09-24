@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useEffect, useCallback } from 'react';
-import { AV_COLORS } from '../constants/constants';
+import { AV_COLORS, LEAD_MIRROR_TAB } from '../constants/constants';
 import type { Contact, ContactInput } from '../types/contact';
 import {
   fetchContacts,
@@ -13,7 +13,15 @@ import {
 } from '../services/contactsService';
 import { fetchContactTypes, createContactType } from '../services/contactTypesService';
 import type { ContactType } from '../services/contactTypesService';
+import {
+  fetchLeads,
+  updateLead,
+  deleteLead,
+} from '../services/leadsService';
+import type { LeadRow } from '../services/leadsService';
 
+// The contact-type tab name that mirrors the Lead Database (public.leads).
+// When this tab is active the leads table is shown instead of the contacts table.
 interface ImportRow {
   [key: string]: unknown;
 }
@@ -48,6 +56,15 @@ function normalizeEmail(raw: string): string {
   if (!EMAIL_RE.test(s)) return '';
   return s;
 }
+
+function fmtShortDate(value?: string | null): string {
+  if (!value) return '—';
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return '—';
+  return d.toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
+}
+
+
 
 // Standardized icon components for sleek UI
 const iconProps = {
@@ -238,6 +255,7 @@ const DEFAULT_TYPE_TABS: { id: string; label: string; count?: number }[] = [
   { id: 'Prospect', label: 'Prospects' },
   { id: 'Newsletter', label: 'Newsletter' },
 ];
+
 // Used as fallback when contact types haven't loaded yet
 
 // Helper for tag style badges
@@ -343,6 +361,20 @@ export default function ContactsTab({
   const [dragOverTabId, setDragOverTabId] = useState<string | null>(null);
   const [draggedContactId, setDraggedContactId] = useState<string | null>(null);
 
+  // ─── LEAD MIRROR STATE (lead search4 tab) ───
+  const [leadRows, setLeadRows] = useState<LeadRow[]>([]);
+  const [leadsLoading, setLeadsLoading] = useState(false);
+  const [leadEditTarget, setLeadEditTarget] = useState<LeadRow | null>(null);
+  const [fLName, setFLName] = useState('');
+  const [fLEmail, setFLEmail] = useState('');
+  const [fLPhone, setFLPhone] = useState('');
+  const [fLCompany, setFLCompany] = useState('');
+  const [fLDesignation, setFLDesignation] = useState('');
+  const [fLIndustry, setFLIndustry] = useState('');
+  const [fLGeography, setFLGeography] = useState('');
+  const [fLSubmitting, setFLSubmitting] = useState(false);
+
+
   const C_PER_PAGE = 50;
 
   // ─── LOAD CONTACTS FROM SUPABASE ───
@@ -360,6 +392,20 @@ export default function ContactsTab({
     setLoading(false);
   }, [onPersistContacts, onToast]);
 
+  // ─── LOAD LEADS FROM SUPABASE (lead search4 tab) ───
+  const refreshLeads = useCallback(async () => {
+    setLeadsLoading(true);
+    const { data, error } = await fetchLeads();
+    if (error) {
+      setLeadRows([]);
+      onToast('Failed to load leads: ' + error, 'error');
+    } else {
+      setLeadRows(data || []);
+    }
+    setLeadsLoading(false);
+  }, [onToast]);
+
+
   // ─── LOAD CONTACT TYPES FROM SUPABASE ───
   const refreshContactTypes = useCallback(async () => {
     setContactTypesLoading(true);
@@ -376,18 +422,21 @@ export default function ContactsTab({
   }, []);
 
   useEffect(() => {
-    const loadContacts = async () => {
-      await refreshContacts();
-    };
+    const loadContacts = async () => { await refreshContacts(); };
     void loadContacts();
   }, [refreshContacts]);
 
   useEffect(() => {
-    const loadContactTypes = async () => {
-      await refreshContactTypes();
-    };
+    const loadContactTypes = async () => { await refreshContactTypes(); };
     void loadContactTypes();
   }, [refreshContactTypes]);
+
+  // Auto-load leads on mount so the tab is ready instantly
+  useEffect(() => {
+    const loadLeads = async () => { await refreshLeads(); };
+    void loadLeads();
+  }, [refreshLeads]);
+
 
   // ─── CONTACT METRICS ───
   const metrics = useMemo(() => {
@@ -417,7 +466,7 @@ export default function ContactsTab({
       );
     }
 
-    if (cTypeFilter !== 'all') {
+    if (cTypeFilter !== 'all' && cTypeFilter.toLowerCase() !== LEAD_MIRROR_TAB.toLowerCase()) {
       result = result.filter(c =>
         String(c.type || '').toLowerCase() === String(cTypeFilter).toLowerCase()
       );
@@ -634,6 +683,53 @@ export default function ContactsTab({
     }
   };
 
+
+  // ─── LEAD MIRROR HANDLERS (lead search4 tab) ───
+  const handleOpenLeadEdit = (lead: LeadRow) => {
+    setLeadEditTarget(lead);
+    setFLName(lead.full_name || '');
+    setFLEmail(lead.email || '');
+    setFLPhone(lead.phone || '');
+    setFLCompany(lead.company_name || '');
+    setFLDesignation(lead.designation || '');
+    setFLIndustry(lead.industry || '');
+    setFLGeography(lead.geography || '');
+  };
+
+  const handleDeleteLead = async (lead: LeadRow) => {
+    if (!confirm(`Delete ${lead.full_name || 'this lead'} from the Lead Database?`)) return;
+    const { error } = await deleteLead(lead.id);
+    if (error) {
+      onToast('Failed to delete lead: ' + error, 'error');
+      return;
+    }
+    onToast('Lead removed', 'info');
+    await refreshLeads();
+  };
+
+  const handleSubmitLeadForm = async () => {
+    if (fLSubmitting || !leadEditTarget) return;
+    if (!fLName.trim()) { onToast('Full name is required', 'error'); return; }
+    setFLSubmitting(true);
+    try {
+      const { error } = await updateLead(leadEditTarget.id, {
+        full_name: fLName.trim(),
+        email: fLEmail.trim() || null,
+        phone: fLPhone.trim() || null,
+        company_name: fLCompany.trim() || null,
+        designation: fLDesignation.trim() || null,
+        industry: fLIndustry.trim() || null,
+        geography: fLGeography.trim() || null,
+      });
+      if (error) { onToast('Failed to update lead: ' + error, 'error'); return; }
+      setLeadEditTarget(null);
+      onToast('Lead updated successfully', 'success');
+      await refreshLeads();
+    } finally {
+      setFLSubmitting(false);
+    }
+  };
+
   // ─── DRAG & DROP FOR IMPORT EXCEL ───
   const handleDragOver = (e: React.DragEvent) => {
     e.preventDefault();
@@ -711,19 +807,39 @@ export default function ContactsTab({
   }, [draggedContactId, contacts, onToast]);
 
   // ─── DYNAMIC TYPE TABS ───
+  // The lead-mirror tab is ALWAYS present (independently of any contact type
+  // row) and its badge ALWAYS comes from the live leads table. Every other tab
+  // is a pure contact-type filter on the contacts array.
   const typeTabs = useMemo(() => {
+    const asMirrorId = LEAD_MIRROR_TAB.toLowerCase();
+    const tabs: { id: string; label: string; count?: number }[] = [];
+
     if (contactTypes.length === 0) {
-      return DEFAULT_TYPE_TABS;
+      DEFAULT_TYPE_TABS.forEach(t => {
+        if (t.id.toLowerCase() !== asMirrorId) tabs.push(t);
+      });
+    } else {
+      tabs.push({ id: 'all', label: 'All Contacts', count: contacts.length });
+      contactTypes.forEach(ct => {
+        if (ct.name.toLowerCase() === asMirrorId) return; // mirror handled below
+        tabs.push({
+          id: ct.name,
+          label: ct.name,
+          count: contacts.filter(c =>
+            String(c.type || '').toLowerCase() === String(ct.name).toLowerCase()
+          ).length,
+        });
+      });
     }
-    const tabs = [{ id: 'all', label: 'All Contacts', count: contacts.length }];
-    contactTypes.forEach(ct => {
-      const count = contacts.filter(c =>
-        String(c.type || '').toLowerCase() === String(ct.name).toLowerCase()
-      ).length;
-      tabs.push({ id: ct.name, label: ct.name, count });
-    });
+
+    // Lead mirror tab: badge always = live leads count.
+    tabs.push({ id: LEAD_MIRROR_TAB, label: LEAD_MIRROR_TAB, count: leadRows.length });
     return tabs;
-  }, [contactTypes, contacts]);
+  }, [contactTypes, contacts, leadRows]);
+
+  // Whether the lead-mirror tab is currently active
+  const isLeadMirrorTab = cTypeFilter.toLowerCase() === LEAD_MIRROR_TAB.toLowerCase();
+
 
   // ─── CREATE LIST MODAL HANDLERS ───
   const handleOpenCreateListModal = () => {
@@ -950,24 +1066,149 @@ export default function ContactsTab({
 
         {/* Segment pills */}
         <div className="ct-tabs">
-          {typeTabs.map(tab => (
-            <button
-              key={tab.id}
-              className={`ct-tab ${cTypeFilter === tab.id ? 'active' : ''} ${dragOverTabId === tab.id ? 'drag-over' : ''}`}
-              onClick={() => { setCTypeFilter(tab.id); setCPage(1); }}
-              onDragOver={(e) => tab.id !== 'all' && handleTabDragOver(e, tab.id)}
-              onDragLeave={handleTabDragLeave}
-              onDrop={(e) => tab.id !== 'all' && handleTabDrop(e, tab.id)}
-            >
-              <span>{tab.label}</span>
-              {tab.count !== undefined && tab.count > 0 && (
-                <span className="ct-tab-count">{tab.count}</span>
-              )}
-            </button>
-          ))}
+          {typeTabs.map(tab => {
+            const isLeadMirror = tab.id.toLowerCase() === LEAD_MIRROR_TAB.toLowerCase();
+            return (
+              <button
+                key={tab.id}
+                className={`ct-tab ${cTypeFilter === tab.id ? 'active' : ''} ${dragOverTabId === tab.id ? 'drag-over' : ''}`}
+                onClick={() => {
+                  setCTypeFilter(tab.id);
+                  setCPage(1);
+                  if (isLeadMirror) void refreshLeads();
+                }}
+                onDragOver={(e) => tab.id !== 'all' && !isLeadMirror && handleTabDragOver(e, tab.id)}
+                onDragLeave={handleTabDragLeave}
+                onDrop={(e) => tab.id !== 'all' && !isLeadMirror && handleTabDrop(e, tab.id)}
+              >
+                <span>{tab.label}</span>
+                {tab.count !== undefined && tab.count > 0 && (
+                  <span className="ct-tab-count">{tab.count}</span>
+                )}
+              </button>
+            );
+          })}
         </div>
 
+        {/* ─── LEAD DATABASE MIRROR (lead search4 tab) ─── */}
+        {isLeadMirrorTab && (
+          <>
+            <div className="ct-toolbar">
+              <div>
+                <div className="ct-panel-title">Lead Database</div>
+                <div className="ct-record-count">{leadRows.length} records — live mirror of Lead Database</div>
+              </div>
+            </div>
+
+            <div className="ct-table-wrap">
+              <table className="ct-table">
+                <thead>
+                  <tr>
+                    <th style={{ width: 44 }}>#</th>
+                    <th>Name</th>
+                    <th>Email</th>
+                    <th>Phone</th>
+                    <th>Company</th>
+                    <th>Designation</th>
+                    <th>Industry</th>
+                    <th>Geography</th>
+                    <th>LinkedIn</th>
+                    <th>Created</th>
+                    <th style={{ textAlign: 'right', width: 116 }}>Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {leadsLoading ? (
+                    <tr>
+                      <td colSpan={11}>
+                        <div className="empty-state">
+                          <div style={{ display: 'inline-flex', alignItems: 'center', gap: 10 }}>
+                            <span className="spinner"></span>
+                            <span className="empty-title">Loading Lead Database...</span>
+                          </div>
+                        </div>
+                      </td>
+                    </tr>
+                  ) : leadRows.length === 0 ? (
+                    <tr>
+                      <td colSpan={11}>
+                        <div className="empty-state">
+                          <div className="empty-icon">🔍</div>
+                          <div className="empty-title">No leads found</div>
+                          <div className="empty-sub">Add leads via Lead Generation or Lead Database page.</div>
+                        </div>
+                      </td>
+                    </tr>
+                  ) : (
+                    leadRows.map((l, idx) => {
+                      const avatarBg = AV_COLORS ? AV_COLORS[(l.full_name || 'L').charCodeAt(0) % AV_COLORS.length] : '#3b82f6';
+                      const initials = (l.full_name || '')
+                        .split(' ').map((x: string) => x[0]).join('').substring(0, 2).toUpperCase() || '??';
+                      return (
+                        <tr key={l.id}>
+                          <td><div className="ct-sub">{idx + 1}</div></td>
+                          <td>
+                            <div className="ct-name-cell">
+                              <div className="ct-avatar" style={{ background: avatarBg }}>{initials}</div>
+                              <div className="ct-name-col">
+                                <div className="ct-name">{l.full_name || '—'}</div>
+                                <div className="ct-sub">{l.headline || '—'}</div>
+                              </div>
+                            </div>
+                          </td>
+                          <td><span className="ct-email">{l.email || '—'}</span></td>
+                          <td>{l.phone || '—'}</td>
+                          <td>
+                            <div className="ct-cell-main">{l.company_name || '—'}</div>
+                            <div className="ct-sub">{l.role || '—'}</div>
+                          </td>
+                          <td><div className="ct-desig">{l.designation || '—'}</div></td>
+                          <td>{l.industry || '—'}</td>
+                          <td>{l.geography || '—'}</td>
+                          <td>
+                            {l.linkedin_url
+                              ? <a href={l.linkedin_url} target="_blank" rel="noreferrer" className="ct-email">View</a>
+                              : '—'}
+                          </td>
+                          <td>{fmtShortDate(l.created_at)}</td>
+                          <td>
+                            <div className="ct-row-actions">
+                              <button title="Edit Lead" onClick={() => handleOpenLeadEdit(l)} className="ct-ibtn ct-ibtn-edit">
+                                <EditIcon size={15} />
+                              </button>
+                              <button title="Delete Lead" onClick={() => handleDeleteLead(l)} className="ct-ibtn ct-ibtn-danger">
+                                <TrashIcon size={15} />
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })
+                  )}
+                </tbody>
+              </table>
+            </div>
+
+            {!leadsLoading && (
+              <div className="ct-foot">
+                <div className="ct-sub" style={{ marginTop: 0 }}>
+                  Showing{' '}
+                  <span style={{ fontWeight: 600, color: 'var(--text2)' }}>
+                    {leadRows.length > 0 ? 1 : 0} – {leadRows.length}
+                  </span>{' '}
+                  of {leadRows.length}{' '}
+                  <span style={{ color: 'var(--text3)' }}>
+                    lead record{leadRows.length === 1 ? '' : 's'}
+                  </span>
+                </div>
+              </div>
+            )}
+          </>
+        )}
+
         {/* ─── CONTACTS TABLE ─── */}
+        {!isLeadMirrorTab && (
+        <>
         <div className="ct-table-wrap">
           <table className="ct-table">
             <thead>
@@ -1030,11 +1271,7 @@ export default function ContactsTab({
                     .toUpperCase() || '??';
 
                   const handleDragStart = (e: React.DragEvent<HTMLTableRowElement>) => {
-                    const contactData = {
-                      id: c.id,
-                      name: c.name,
-                      email: c.email,
-                    };
+                    const contactData = { id: c.id, name: c.name, email: c.email };
                     e.dataTransfer.setData('application/x-contact', JSON.stringify(contactData));
                     e.dataTransfer.effectAllowed = 'move';
                     setDraggedContactId(c.id);
@@ -1170,6 +1407,8 @@ export default function ContactsTab({
               </div>
             )}
           </div>
+        )}
+        </>
         )}
       </div>
 
@@ -1511,6 +1750,41 @@ export default function ContactsTab({
           </div>
         </div>
       )}
+
+      {/* ─── MODAL: EDIT LEAD (lead search4 tab) ─── */}
+      {leadEditTarget && (
+        <div className="modal-overlay">
+          <div className="modal modal-wide">
+            <div className="modal-header">
+              <div>
+                <div className="modal-title">Edit Lead Details</div>
+                <div className="ct-sub" style={{ marginTop: 3 }}>Update the lead profile in the Lead Database</div>
+              </div>
+              <button className="modal-close" onClick={() => setLeadEditTarget(null)} title="Close">
+                <CloseIcon size={16} />
+              </button>
+            </div>
+            <div className="modal-body">
+              <div className="form-grid">
+                <div className="form-group"><label>Full Name *</label><input type="text" placeholder="e.g. Rajiv Sharma" value={fLName} onChange={(e) => setFLName(e.target.value)} /></div>
+                <div className="form-group"><label>Email Address</label><input type="email" placeholder="rajiv@company.com" value={fLEmail} onChange={(e) => setFLEmail(e.target.value)} /></div>
+                <div className="form-group"><label>Phone</label><input type="text" placeholder="+91 98XXXXXXX" value={fLPhone} onChange={(e) => setFLPhone(e.target.value)} /></div>
+                <div className="form-group"><label>Company</label><input type="text" placeholder="e.g. Bajaj Electricals" value={fLCompany} onChange={(e) => setFLCompany(e.target.value)} /></div>
+                <div className="form-group"><label>Designation</label><input type="text" placeholder="VP Product Innovation" value={fLDesignation} onChange={(e) => setFLDesignation(e.target.value)} /></div>
+                <div className="form-group"><label>Industry</label><input type="text" placeholder="Electrical Equipment" value={fLIndustry} onChange={(e) => setFLIndustry(e.target.value)} /></div>
+                <div className="form-group"><label>Geography</label><input type="text" placeholder="Mumbai" value={fLGeography} onChange={(e) => setFLGeography(e.target.value)} /></div>
+              </div>
+            </div>
+            <div className="modal-footer">
+              <button className="btn btn-ghost" onClick={() => setLeadEditTarget(null)}>Cancel</button>
+              <button className="btn btn-primary" disabled={fLSubmitting} onClick={handleSubmitLeadForm}>
+                {fLSubmitting ? 'Saving...' : 'Save Changes'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
     </div>
   );
 }

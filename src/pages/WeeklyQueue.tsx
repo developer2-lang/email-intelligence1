@@ -114,6 +114,18 @@ function fmtDateTime(value?: string | null): string {
   });
 }
 
+/**
+ * Next cron slot for a queued contact, computed from its `queued_at` (the
+ * real schedule: every 30 min, Thursday 02:00–18:00 UTC = 7:30 AM–11:30 PM IST).
+ * Returns null when the row has no usable queued_at timestamp.
+ */
+function scheduledFor(row: QueueRow): Date | null {
+  if (!row.queued_at || row.status !== 'pending') return null;
+  const queued = new Date(row.queued_at);
+  if (Number.isNaN(queued.getTime())) return null;
+  return getNextCronRun(undefined, queued);
+}
+
 const TrackBadge = ({
   label,
   active,
@@ -157,7 +169,7 @@ export default function WeeklyQueue({ onToast }: WeeklyQueueProps) {
   const [statusFilter, setStatusFilter] = useState('');
 
   const [page, setPage] = useState(1);
-  const [pageSize, setPageSize] = useState(25);
+  const [pageSize, setPageSize] = useState(50);
 
   const [viewRow, setViewRow] = useState<QueueRow | null>(null);
   const [removeTarget, setRemoveTarget] = useState<QueueRow | null>(null);
@@ -335,7 +347,7 @@ export default function WeeklyQueue({ onToast }: WeeklyQueueProps) {
           <div className="contacts-title">Weekly Queue</div>
           <div className="contacts-sub">
             New contacts are queued automatically and receive one welcome email every Thursday from
-            8:00 AM IST (in batches of 30).
+            7:30 AM IST (in batches of 30).
           </div>
         </div>
         <div className="ct-toolbar-right" style={{ marginTop: 0 }}>
@@ -562,37 +574,32 @@ export default function WeeklyQueue({ onToast }: WeeklyQueueProps) {
                           >
                             {formatScheduledTime(new Date(r.sent_at))}
                           </span>
-                        ) : r.status === 'pending' ? (
-                          <span
-                            style={{
-                              display: 'inline-block',
-                              padding: '3px 10px',
-                              borderRadius: 999,
-                              background: STATUS_META.pending.bg,
-                              color: STATUS_META.pending.color,
-                              fontSize: 11.5,
-                              fontWeight: 600,
-                              whiteSpace: 'nowrap',
-                            }}
-                          >
-                            {formatScheduledTime(getNextCronRun())}
-                          </span>
-                        ) : (
-                          <span
-                            style={{
-                              display: 'inline-block',
-                              padding: '3px 10px',
-                              borderRadius: 999,
-                              background: STATUS_META.failed.bg,
-                              color: STATUS_META.failed.color,
-                              fontSize: 11.5,
-                              fontWeight: 600,
-                              whiteSpace: 'nowrap',
-                            }}
-                          >
-                            Retry next Wed
-                          </span>
-                        )}
+                        ) : (() => {
+                          const slot = scheduledFor(r);
+                          return slot ? (
+                            <span
+                              style={{
+                                display: 'inline-block',
+                                padding: '3px 10px',
+                                borderRadius: 999,
+                                background: STATUS_META.pending.bg,
+                                color: STATUS_META.pending.color,
+                                fontSize: 11.5,
+                                fontWeight: 600,
+                                whiteSpace: 'nowrap',
+                              }}
+                            >
+                              {formatScheduledTime(slot)}
+                            </span>
+                          ) : (
+                            <span
+                              className="ct-desig"
+                              style={{ whiteSpace: 'nowrap' }}
+                            >
+                              —
+                            </span>
+                          );
+                        })()}
                       </td>
                       <td style={{ textAlign: 'center' }}>
                         <div className="ct-desig">{r.attempts}</div>

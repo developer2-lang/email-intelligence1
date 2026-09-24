@@ -10,10 +10,12 @@ interface MainLayoutProps {
   onNavigate: (tab: TabKey) => void
   toasts: ToastMessage[]
   prefFrom?: string
+  userEmail?: string
+  onSignOut?: () => void
   children: ReactNode
 }
 
-export default function MainLayout({ activeTab, onNavigate, toasts, prefFrom, children }: MainLayoutProps) {
+export default function MainLayout({ activeTab, onNavigate, toasts, prefFrom, userEmail, onSignOut, children }: MainLayoutProps) {
   const [navOpen, setNavOpen] = useState(false)
   const meta = NAV_META[activeTab]
 
@@ -33,7 +35,7 @@ export default function MainLayout({ activeTab, onNavigate, toasts, prefFrom, ch
 
   return (
     <div className={`app${navOpen ? ' nav-open' : ''}`}>
-      <Sidebar activeTab={activeTab} onNavigate={handleNavigate} prefFrom={prefFrom} />
+      <Sidebar activeTab={activeTab} onNavigate={handleNavigate} prefFrom={prefFrom} userEmail={userEmail} onSignOut={onSignOut} />
 
       <div className="nav-backdrop" onClick={() => setNavOpen(false)} aria-hidden="true" />
 
@@ -67,7 +69,7 @@ export default function MainLayout({ activeTab, onNavigate, toasts, prefFrom, ch
             </div>
           </div>
           <div className="topbar-right">
-            <span className="tag tag-client">Demo Mode</span>
+            <span className="tag tag-client">{userEmail ? userEmail : 'Demo Mode'}</span>
           </div>
         </header>
 

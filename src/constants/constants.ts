@@ -21,6 +21,11 @@ export const NAV_META: { [key: string]: { title: string; sub: string } } = {
 
 export const AV_COLORS = ['#2563EB','#10B981','#F59E0B','#8B5CF6','#EF4444','#0891B2','#7C3AED'];
 
+// The contact-type tab in ContactsTab that is a live mirror of the Lead Database
+// (public.leads). Keeping this name as a contact_types reference row means the
+// tab still renders leads, NOT contacts.
+export const LEAD_MIRROR_TAB = 'lead search4';
+
 // ─── Campaign Type ─────────────────────────────────────────────────────────
 // The Campaign Type dropdown options. The selected value is stored verbatim
 // as the campaigns.campaign_type column.

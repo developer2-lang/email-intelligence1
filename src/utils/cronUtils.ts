@@ -8,13 +8,26 @@
  */
 
 /**
- * Returns the next Date on which the weekly-queue cron will fire.
+ * Returns the next Date on which the weekly-queue cron will fire, computed
+ * forwards from a reference time. Pass the row's `queued_at` to get that
+ * contact's actual scheduled slot:
+ *
+ *  - queued before 02:00 UTC on Thursday      → Thursday 02:00 UTC (7:30 AM IST)
+ *  - queued between 02:00–18:00 UTC Thursday  → next 30-min slot strictly after
+ *  - queued after 18:00 UTC Thursday          → next Thursday 02:00 UTC
+ *
+ * With no reference (`base` omitted/null) it behaves as before: the next slot
+ * strictly after "now".
  *
  * @param _cronExpression  Accepted for signature compatibility; the function
  *   always uses the hard-coded * /30 2-18 * * 4 schedule since we cannot
  *   parse arbitrary cron expressions without a library.
+ * @param base             Reference time (Date or ISO string). Defaults to now.
  */
-export function getNextCronRun(_cronExpression: string = '*/30 2-18 * * 4'): Date {
+export function getNextCronRun(
+  _cronExpression: string = '*/30 2-18 * * 4',
+  base?: Date | string | null
+): Date {
   // Thursday = 4 (0 = Sunday … 6 = Saturday)
   const TARGET_DOW = 4;
   // Batching window: every 30 min from 02:00 to 18:00 UTC (7:30 AM–11:30 PM IST).
@@ -22,13 +35,13 @@ export function getNextCronRun(_cronExpression: string = '*/30 2-18 * * 4'): Dat
   const WINDOW_END_UTC = 18 * 60;    // 18:00 UTC = 11:30 PM IST (last slot)
   const SLOT_MINUTES = 30;
 
-  const now = new Date();
-  const nowMinutes = now.getUTCHours() * 60 + now.getUTCMinutes();
-  const isTargetDay = now.getUTCDay() === TARGET_DOW;
-  const windowOver = nowMinutes >= WINDOW_END_UTC;
+  const ref = base ? new Date(base) : new Date();
+  const refMinutes = ref.getUTCHours() * 60 + ref.getUTCMinutes();
+  const isTargetDay = ref.getUTCDay() === TARGET_DOW;
+  const windowOver = refMinutes >= WINDOW_END_UTC;
 
   // Anchor: next Thursday at 00:00 UTC.
-  const next = new Date(now);
+  const next = new Date(ref);
   next.setUTCHours(0, 0, 0, 0);
   while (next.getUTCDay() !== TARGET_DOW) {
     next.setUTCDate(next.getUTCDate() + 1);
@@ -39,11 +52,11 @@ export function getNextCronRun(_cronExpression: string = '*/30 2-18 * * 4'): Dat
   }
 
   // Any future Thursday (or today before the window opens) -> first slot 02:00 UTC.
-  // Today inside the window -> next 30-min boundary strictly after now.
+  // Today inside the window -> next 30-min boundary strictly after base.
   let slotMinutes = WINDOW_START_UTC;
-  if (isTargetDay && !windowOver && nowMinutes >= WINDOW_START_UTC) {
+  if (isTargetDay && !windowOver && refMinutes >= WINDOW_START_UTC) {
     slotMinutes = Math.min(
-      Math.ceil((nowMinutes + 1) / SLOT_MINUTES) * SLOT_MINUTES,
+      Math.ceil((refMinutes + 1) / SLOT_MINUTES) * SLOT_MINUTES,
       WINDOW_END_UTC
     );
   }

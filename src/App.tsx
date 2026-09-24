@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { SEED_CAMPAIGNS, SEED_CONTACTS } from './constants/constants'
+import { useAuth } from './hooks/useAuth'
 import { useLocalStorage } from './hooks/useLocalStorage'
 import MainLayout from './layouts/MainLayout'
+import LoginPage from './pages/LoginPage'
 import AppRoutes from './routes/AppRoutes'
 import type { ApiState, CampTabState, SenderPrefs, StoredApiKeys, TabKey, ToastMessage } from './types'
 import { fetchCampaigns } from './services/campaignService'
@@ -35,6 +37,9 @@ const DEFAULT_PREFS: SenderPrefs = {
 }
 
 export default function App() {
+  // ─── AUTH ───
+  const { user, loading: authLoading, signIn, signOut } = useAuth()
+
   // ─── PERSISTED DATA ───
   const [contacts, setContacts] = useLocalStorage<any[]>('ei_contacts', SEED_CONTACTS)
   const [campaigns, setCampaigns] = useLocalStorage<any[]>('ei_campaigns', SEED_CAMPAIGNS)
@@ -114,11 +119,12 @@ export default function App() {
   // Kick off the initial load on mount. Deferred by a tick so the load's
   // setStates never run synchronously inside the effect body.
   useEffect(() => {
+    if (!user) return
     const timer = window.setTimeout(() => {
       void loadDashboardData()
     }, 0)
     return () => window.clearTimeout(timer)
-  }, [loadDashboardData])
+  }, [user, loadDashboardData])
 
   const chart1Ref = useRef<HTMLCanvasElement | null>(null)
 
@@ -189,8 +195,23 @@ export default function App() {
     [setPrefs],
   )
 
+  // ─── AUTH GATE ───
+  if (authLoading) {
+    return (
+      <div className="auth-loading">
+        <div className="spinner" />
+      </div>
+    )
+  }
+
+  if (!user) {
+    return <LoginPage onSignIn={signIn} />
+  }
+
+  const userEmail = user.email ?? ''
+
   return (
-    <MainLayout activeTab={activeTab} onNavigate={onNavigate} toasts={toasts} prefFrom={prefs.from}>
+    <MainLayout activeTab={activeTab} onNavigate={onNavigate} toasts={toasts} prefFrom={prefs.from} userEmail={userEmail} onSignOut={signOut}>
       <AppRoutes
         activeTab={activeTab}
         contacts={contacts}
