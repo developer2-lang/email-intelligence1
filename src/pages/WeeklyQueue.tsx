@@ -1,7 +1,8 @@
-import { useState, useMemo, useCallback, useEffect } from 'react';
+import { useState, useMemo, useCallback, useEffect, useLayoutEffect, useRef } from 'react';
 import { AV_COLORS } from '../constants/constants';
 import { supabase } from '../supabase';
 import { getNextCronRun, formatScheduledTime } from '../utils/cronUtils';
+import RecipientActivityModal, { RecipientRow, ActivityTab } from '../components/RecipientActivityModal';
 
 // ─── ICONS (match the Contacts page icon system) ─────────────────────────────
 const iconProps = {
@@ -50,6 +51,11 @@ const CloseIcon = ({ size = 16 }: { size?: number }) => (
 
 // ─── TYPES ───────────────────────────────────────────────────────────────────
 type QueueStatus = 'pending' | 'sending' | 'sent' | 'failed' | 'skipped';
+
+interface ActivityFilter {
+  status: QueueStatus | null;
+  initialTab: ActivityTab;
+}
 
 interface QueueRow {
   id: string;
@@ -174,6 +180,40 @@ export default function WeeklyQueue({ onToast }: WeeklyQueueProps) {
   const [viewRow, setViewRow] = useState<QueueRow | null>(null);
   const [removeTarget, setRemoveTarget] = useState<QueueRow | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [activity, setActivity] = useState<ActivityFilter | null>(null);
+
+  // ─── DUAL HORIZONTAL SCROLLBARS (top + bottom, synced) ───
+  // A thin strip above the table mirrors the native horizontal scrollbar of
+  // `.ct-table-wrap`. Both stay in lock-step via scrollLeft sync, and the strip
+  // only renders when the table actually overflows horizontally.
+  const topScrollRef = useRef<HTMLDivElement | null>(null);
+  const bottomWrapRef = useRef<HTMLDivElement | null>(null);
+  const [tableWidth, setTableWidth] = useState(1310);
+  const [hasHorizOverflow, setHasHorizOverflow] = useState(false);
+
+  useLayoutEffect(() => {
+    const wrap = bottomWrapRef.current;
+    if (!wrap) return;
+    const measure = () => {
+      setTableWidth(wrap.scrollWidth);
+      setHasHorizOverflow(wrap.scrollWidth > wrap.clientWidth + 1);
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(wrap);
+    return () => observer.disconnect();
+  }, []);
+
+  const handleTopScroll = () => {
+    if (topScrollRef.current && bottomWrapRef.current) {
+      bottomWrapRef.current.scrollLeft = topScrollRef.current.scrollLeft;
+    }
+  };
+  const handleBottomScroll = () => {
+    if (bottomWrapRef.current && topScrollRef.current) {
+      topScrollRef.current.scrollLeft = bottomWrapRef.current.scrollLeft;
+    }
+  };
 
   // ─── DATA FETCHING ───
   const fetchQueue = useCallback(async () => {
@@ -284,6 +324,86 @@ export default function WeeklyQueue({ onToast }: WeeklyQueueProps) {
     return counts;
   }, [dedupedRows]);
 
+  // ─── RECIPIENT ACTIVITY MODAL ───
+  // Rows shown in the modal: filtered to the clicked status when a status badge
+  // is clicked; otherwise all rows (engagement badges). The modal itself further
+  // splits them into tabs.
+  const activityRows = useMemo<RecipientRow[]>(() => {
+    const source = activity?.status
+      ? dedupedRows.filter((r) => r.status === activity.status)
+      : dedupedRows;
+    return source.map(
+      (r): RecipientRow => ({
+        id: r.id,
+        name: (r.full_name || '').trim(),
+        email: (r.email || '').trim(),
+        status: r.status,
+        queued_at: r.queued_at,
+        sent_at: r.sent_at,
+        opened_at: r.opened_at,
+        clicked_at: r.clicked_at,
+      }),
+    );
+  }, [dedupedRows, activity]);
+
+  // ─── ENGAGEMENT COUNTS (summary strip badges) ───
+  const engagement = useMemo(() => {
+    let opened = 0;
+    let notOpened = 0;
+    for (const r of dedupedRows) {
+      if (r.opened_at != null) opened += 1;
+      else if (r.sent_at != null) notOpened += 1;
+    }
+    return { opened, notOpened };
+  }, [dedupedRows]);
+
+  // ─── SUMMARY STRIP BADGES ───
+  // Status badges from STATUS_META, plus engagement badges (Opened / Not Opened)
+  // inserted right after "Sent".
+  const statusBadges: {
+    key: string;
+    count: number;
+    label: string;
+    bg: string;
+    color: string;
+    title: string;
+    onClick: () => void;
+  }[] = (['pending', 'sending', 'sent', 'failed', 'skipped'] as QueueStatus[]).map((s) => ({
+    key: s,
+    count: summary[s],
+    label: STATUS_META[s].label,
+    bg: STATUS_META[s].bg,
+    color: STATUS_META[s].color,
+    title: `View recipient activity — ${STATUS_META[s].label}`,
+    onClick: () => setActivity({ status: s, initialTab: 'all' }),
+  }));
+  const engagementBadges = [
+    {
+      key: 'opened',
+      count: engagement.opened,
+      label: 'Opened',
+      bg: '#D1FAE5',
+      color: '#065F46',
+      title: 'View recipient activity — recipients who opened the email',
+      onClick: () => setActivity({ status: null, initialTab: 'opened' }),
+    },
+    {
+      key: 'not_opened',
+      count: engagement.notOpened,
+      label: 'Not Opened',
+      bg: '#F1F5F9',
+      color: '#475569',
+      title: 'View recipient activity — sent but not opened yet',
+      onClick: () => setActivity({ status: null, initialTab: 'not_opened' }),
+    },
+  ];
+  const sentIndex = statusBadges.findIndex((b) => b.key === 'sent');
+  const summaryBadges = [
+    ...statusBadges.slice(0, sentIndex + 1),
+    ...engagementBadges,
+    ...statusBadges.slice(sentIndex + 1),
+  ];
+
   const totalPages = Math.ceil(filteredRows.length / pageSize) || 1;
   const safePage = Math.min(page, totalPages);
 
@@ -362,23 +482,33 @@ export default function WeeklyQueue({ onToast }: WeeklyQueueProps) {
 
       {/* ─── SUMMARY STRIP ─── */}
       <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', margin: '0 0 16px' }}>
-        {(['pending', 'sending', 'sent', 'failed', 'skipped'] as QueueStatus[]).map((s) => (
-          <div
-            key={s}
+        {summaryBadges.map((b) => (
+          <button
+            key={b.key}
+            type="button"
+            title={b.title}
+            onClick={b.onClick}
             style={{
               display: 'inline-flex',
               alignItems: 'center',
               gap: 8,
               padding: '7px 12px',
               borderRadius: 999,
-              background: STATUS_META[s].bg,
-              color: STATUS_META[s].color,
+              background: b.bg,
+              color: b.color,
               fontSize: 12.5,
               fontWeight: 600,
+              border: '1px solid transparent',
+              cursor: 'pointer',
+              transition: 'filter 0.15s ease, transform 0.05s ease',
             }}
+            onMouseEnter={(e) => (e.currentTarget.style.filter = 'brightness(0.96)')}
+            onMouseLeave={(e) => (e.currentTarget.style.filter = '')}
+            onMouseDown={(e) => (e.currentTarget.style.transform = 'scale(0.98)')}
+            onMouseUp={(e) => (e.currentTarget.style.transform = '')}
           >
-            {summary[s]} {STATUS_META[s].label}
-          </div>
+            {b.count} {b.label}
+          </button>
         ))}
       </div>
 
@@ -447,7 +577,17 @@ export default function WeeklyQueue({ onToast }: WeeklyQueueProps) {
         </div>
 
         {/* ─── QUEUE TABLE ─── */}
-        <div className="ct-table-wrap">
+        {hasHorizOverflow && (
+          <div
+            className="ct-table-scrollbar"
+            ref={topScrollRef}
+            onScroll={handleTopScroll}
+            aria-hidden="true"
+          >
+            <div style={{ width: tableWidth, minWidth: tableWidth, height: 1 }} />
+          </div>
+        )}
+        <div className="ct-table-wrap" ref={bottomWrapRef} onScroll={handleBottomScroll}>
           <table className="ct-table" style={{ minWidth: 1310 }}>
             <thead>
               <tr>
@@ -518,8 +658,10 @@ export default function WeeklyQueue({ onToast }: WeeklyQueueProps) {
                         <div className="ct-desig">{r.designation || '—'}</div>
                       </td>
                       <td>
-                        <span
-                          title={r.error_message || undefined}
+                        <button
+                          type="button"
+                          title={`${r.error_message || `View recipient activity — ${meta.label}`}`}
+                          onClick={() => setActivity({ status: r.status, initialTab: 'all' })}
                           style={{
                             display: 'inline-block',
                             padding: '3px 10px',
@@ -529,10 +671,15 @@ export default function WeeklyQueue({ onToast }: WeeklyQueueProps) {
                             fontSize: 12,
                             fontWeight: 600,
                             whiteSpace: 'nowrap',
+                            border: 'none',
+                            cursor: 'pointer',
+                            transition: 'filter 0.15s ease',
                           }}
+                          onMouseEnter={(e) => (e.currentTarget.style.filter = 'brightness(0.96)')}
+                          onMouseLeave={(e) => (e.currentTarget.style.filter = '')}
                         >
                           {meta.label}
-                        </span>
+                        </button>
                       </td>
                       <td>
                         <div className="ct-desig">{fmtDate(r.queued_at)}</div>
@@ -774,6 +921,21 @@ export default function WeeklyQueue({ onToast }: WeeklyQueueProps) {
             </div>
           </div>
         </div>
+      )}
+
+      {/* ─── MODAL: RECIPIENT ACTIVITY ─── */}
+      {activity && (
+        <RecipientActivityModal
+          key={`${activity.status ?? 'all'}-${activity.initialTab}`}
+          isOpen={true}
+          onClose={() => setActivity(null)}
+          title="Recipient Activity"
+          subtitle={`Weekly Welcome Email${
+            activity.status ? ` — ${STATUS_META[activity.status].label}` : ''
+          }`}
+          initialTab={activity.initialTab}
+          rows={activityRows}
+        />
       )}
     </div>
   );

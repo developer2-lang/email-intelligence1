@@ -90,3 +90,61 @@ export async function fetchNumberOfProfiles(): Promise<{ data: ProfileCountOptio
     return { data: [], error: err instanceof Error ? err.message : 'Failed to fetch number of profiles' }
   }
 }
+
+// ─── Custom option persistence ──────────────────────────────────────────────
+// Persist "+ Add Custom" values straight into their lookup table so they
+// survive reloads/sessions and flow through the same fetchActiveOptions path
+// the seeded options use. industries / designations / geographies /
+// company_sizes manage sort_order + is_active; departments only has
+// value/label.
+const SORT_ORDER_TABLES = new Set(['industries', 'designations', 'geographies', 'company_sizes'])
+
+export async function saveCustomOption(
+  table: string,
+  value: string,
+): Promise<{ error: string | null }> {
+  const label = value.trim()
+  if (!label) return { error: 'Option cannot be empty' }
+
+  const useSortOrder = SORT_ORDER_TABLES.has(table)
+  const payload: Record<string, unknown> = { value: label, label }
+
+  try {
+    if (useSortOrder) {
+      const { data: last, error: lastError } = await supabase
+        .from(table)
+        .select('sort_order')
+        .order('sort_order', { ascending: false })
+        .limit(1)
+      if (lastError) return { error: lastError.message }
+      payload.sort_order = Number(last?.[0]?.sort_order ?? 0) + 1
+      payload.is_active = true
+    }
+
+    const { error } = await supabase.from(table).insert(payload)
+    if (error) {
+      // 23505 = unique_violation → the value already exists in the table. The
+      // app-side dedupe guard handles the common case; this covers races.
+      if (error.code === '23505') return { error: null }
+      return { error: error.message }
+    }
+    return { error: null }
+  } catch (err) {
+    return { error: err instanceof Error ? err.message : 'Failed to save custom option' }
+  }
+}
+
+export async function removeCustomOption(
+  table: string,
+  value: string,
+): Promise<{ error: string | null }> {
+  const label = value.trim()
+  if (!label) return { error: 'Option cannot be empty' }
+  try {
+    const { error } = await supabase.from(table).delete().eq('label', label)
+    if (error) return { error: error.message }
+    return { error: null }
+  } catch (err) {
+    return { error: err instanceof Error ? err.message : 'Failed to remove custom option' }
+  }
+}

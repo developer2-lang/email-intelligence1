@@ -538,28 +538,6 @@ export default function LeadDatabase({ onToast }: LeadDatabaseProps) {
                 placeholder="Search name, email, company..."
               />
             </div>
-            <div style={{ minWidth: 178 }}>
-              <SearchableSelect
-                value={industryFilter}
-                options={industrySelectOptions}
-                onChange={(value) => {
-                  setIndustryFilter(value);
-                  setPage(1);
-                }}
-                placeholder="All Industries"
-              />
-            </div>
-            <div style={{ minWidth: 178 }}>
-              <SearchableSelect
-                value={geographyFilter}
-                options={geographySelectOptions}
-                onChange={(value) => {
-                  setGeographyFilter(value);
-                  setPage(1);
-                }}
-                placeholder="All Geographies"
-              />
-            </div>
           </div>
         </div>
 

@@ -3185,6 +3185,14 @@ canvas {
   overflow-x: auto;
 }
 
+/* Top horizontal scrollbar strip: a thin container whose only content is the
+   native horizontal scrollbar, mirroring the bottom one on wide tables. */
+.ct-table-scrollbar {
+  overflow-x: auto;
+  overflow-y: hidden;
+  overscroll-behavior-x: contain;
+}
+
 .ct-table {
   min-width: 1040px;
   border-collapse: separate;

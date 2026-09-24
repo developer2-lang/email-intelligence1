@@ -10,14 +10,11 @@ import {
   fetchGeographies,
   fetchIndustries,
   fetchNumberOfProfiles,
+  removeCustomOption,
+  saveCustomOption,
   type FilterOption,
   type ProfileCountOption,
 } from '../services/filterService'
-import {
-  addCustomFilterOption,
-  fetchCustomFilterOptions,
-  removeCustomFilterOption,
-} from '../services/customFilterOptionsService'
 import SearchableSelect from '../components/SearchableSelect'
 
 interface Lead {
@@ -196,6 +193,7 @@ export default function LeadSearch() {
   const [customDesignations, setCustomDesignations] = useState<string[]>(() => loadCustomValues('custom_designations'))
   const [customGeographies, setCustomGeographies] = useState<string[]>(() => loadCustomValues('custom_geographies'))
   const [customRoles, setCustomRoles] = useState<string[]>([])
+  const [customCompanySizes, setCustomCompanySizes] = useState<string[]>([])
 
   useEffect(() => {
     localStorage.setItem('leadSearchFilters', JSON.stringify(filters))
@@ -248,32 +246,6 @@ export default function LeadSearch() {
   }, [])
 
   useEffect(() => {
-    let cancelled = false
-    ;(async () => {
-      const { data, error } = await fetchCustomFilterOptions(['designation'])
-      if (cancelled) return
-      if (error) {
-        // Not a user-facing failure — the custom-options table may not be
-        // migrated yet, in which case we just fall back to localStorage.
-        console.error(`[LeadSearch] Could not load saved custom options: ${error}`)
-        return
-      }
-      const saved = data.designation ?? []
-      if (saved.length === 0) return
-      setCustomDesignations((prev) => {
-        const merged = [...prev]
-        for (const s of saved) {
-          if (!merged.some((x) => x.toLowerCase() === s.toLowerCase())) merged.push(s)
-        }
-        return merged
-      })
-    })()
-    return () => {
-      cancelled = true
-    }
-  }, [])
-
-useEffect(() => {
     ;(async () => {
       const { data, error } = await supabase
         .from('leads')
@@ -293,34 +265,45 @@ useEffect(() => {
   const addCustomIndustry = (value: string) => {
     const v = value.trim()
     if (!v) return
-    setCustomIndustries((prev) =>
-      prev.some((x) => x.toLowerCase() === v.toLowerCase()) ||
+    if (
+      customIndustries.some((x) => x.toLowerCase() === v.toLowerCase()) ||
       industryOptions.some((x) => x.toLowerCase() === v.toLowerCase())
-        ? prev
-        : [...prev, v],
-    )
+    ) {
+      return
+    }
+    setCustomIndustries((prev) => [...prev, v])
+    void saveCustomOption('industries', v).then((res) => {
+      setNotice(
+        res.error ? `Could not save "${v}": ${res.error}` : `Saved "${v}" as a custom industry`,
+      )
+    })
   }
   const removeCustomIndustry = (value: string) => {
     setCustomIndustries((prev) => prev.filter((x) => x !== value))
+    void removeCustomOption('industries', value).then((res) => {
+      if (res.error) setNotice(`Could not remove "${value}": ${res.error}`)
+    })
   }
 
   const addCustomDesignation = (value: string) => {
     const v = value.trim()
     if (!v) return
-    const exists =
+    if (
       customDesignations.some((x) => x.toLowerCase() === v.toLowerCase()) ||
       designationOptions.some((x) => x.toLowerCase() === v.toLowerCase())
-    if (exists) return
-    setCustomDesignations((prev) =>
-      prev.some((x) => x.toLowerCase() === v.toLowerCase()) ? prev : [...prev, v],
-    )
-    void addCustomFilterOption('designation', v).then((res) => {
-      setNotice(res.error ? `Could not save "${v}": ${res.error}` : `Saved "${v}" as a custom option`)
+    ) {
+      return
+    }
+    setCustomDesignations((prev) => [...prev, v])
+    void saveCustomOption('designations', v).then((res) => {
+      setNotice(
+        res.error ? `Could not save "${v}": ${res.error}` : `Saved "${v}" as a custom designation`,
+      )
     })
   }
   const removeCustomDesignation = (value: string) => {
     setCustomDesignations((prev) => prev.filter((x) => x !== value))
-    void removeCustomFilterOption('designation', value).then((res) => {
+    void removeCustomOption('designations', value).then((res) => {
       if (res.error) setNotice(`Could not remove "${value}": ${res.error}`)
     })
   }
@@ -328,15 +311,24 @@ useEffect(() => {
   const addCustomGeography = (value: string) => {
     const v = value.trim()
     if (!v) return
-    setCustomGeographies((prev) =>
-      prev.some((x) => x.toLowerCase() === v.toLowerCase()) ||
+    if (
+      customGeographies.some((x) => x.toLowerCase() === v.toLowerCase()) ||
       geographyOptions.some((x) => x.toLowerCase() === v.toLowerCase())
-        ? prev
-        : [...prev, v],
-    )
+    ) {
+      return
+    }
+    setCustomGeographies((prev) => [...prev, v])
+    void saveCustomOption('geographies', v).then((res) => {
+      setNotice(
+        res.error ? `Could not save "${v}": ${res.error}` : `Saved "${v}" as a custom geography`,
+      )
+    })
   }
   const removeCustomGeography = (value: string) => {
     setCustomGeographies((prev) => prev.filter((x) => x !== value))
+    void removeCustomOption('geographies', value).then((res) => {
+      if (res.error) setNotice(`Could not remove "${value}": ${res.error}`)
+    })
   }
 
   const addCustomRole = (value: string) => {
@@ -348,29 +340,39 @@ useEffect(() => {
     ) {
       return
     }
-    void supabase
-      .from('departments')
-      .insert({ label: v, value: v })
-      .then(({ error }) => {
-        if (error) {
-          setNotice(`Could not save department "${v}": ${error.message}`)
-          return
-        }
-        setCustomRoles((prev) =>
-          prev.some((x) => x.toLowerCase() === v.toLowerCase()) ? prev : [...prev, v],
-        )
-        setNotice(`Saved "${v}" as a department`)
-      })
+    setCustomRoles((prev) => [...prev, v])
+    void saveCustomOption('departments', v).then((res) => {
+      setNotice(res.error ? `Could not save "${v}": ${res.error}` : `Saved "${v}" as a department`)
+    })
   }
   const removeCustomRole = (value: string) => {
     setCustomRoles((prev) => prev.filter((x) => x !== value))
-    void supabase
-      .from('departments')
-      .delete()
-      .eq('label', value)
-      .then(({ error }) => {
-        if (error) setNotice(`Could not remove "${value}": ${error.message}`)
-      })
+    void removeCustomOption('departments', value).then((res) => {
+      if (res.error) setNotice(`Could not remove "${value}": ${res.error}`)
+    })
+  }
+
+  const addCustomCompanySize = (value: string) => {
+    const v = value.trim()
+    if (!v) return
+    if (
+      customCompanySizes.some((x) => x.toLowerCase() === v.toLowerCase()) ||
+      companySizes.some((n) => n.label.toLowerCase() === v.toLowerCase())
+    ) {
+      return
+    }
+    setCustomCompanySizes((prev) => [...prev, v])
+    void saveCustomOption('company_sizes', v).then((res) => {
+      setNotice(
+        res.error ? `Could not save "${v}": ${res.error}` : `Saved "${v}" as a custom company size`,
+      )
+    })
+  }
+  const removeCustomCompanySize = (value: string) => {
+    setCustomCompanySizes((prev) => prev.filter((x) => x !== value))
+    void removeCustomOption('company_sizes', value).then((res) => {
+      if (res.error) setNotice(`Could not remove "${value}": ${res.error}`)
+    })
   }
 
   const handleSearch = async () => {
@@ -844,6 +846,9 @@ useEffect(() => {
               label="Company Size"
               value={filters.companySize}
               options={companySizes.map((n) => ({ value: n.value, label: n.label }))}
+              customOptions={customCompanySizes}
+              onAddCustom={addCustomCompanySize}
+              onRemoveCustom={removeCustomCompanySize}
               onChange={(value) => handleSelect('companySize', value)}
               placeholder="All Company Size"
             />
