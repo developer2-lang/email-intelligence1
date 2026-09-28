@@ -27,17 +27,16 @@ function cleanStr(value: unknown): string | null {
   return s ? s : null;
 }
 
-/** Map a public.leads row to the equivalent public.contacts row. */
-export function leadToContactRow(row: Record<string, any>): Record<string, any> {
+/** Map a public.leads row to the equivalent public.contacts row. Returns null if email is missing. */
+export function leadToContactRow(row: Record<string, any>): Record<string, any> | null {
+  const email = cleanStr(row.email);
+  if (!email) return null;
+
   return {
     linkedin_url: cleanStr(row.linkedin_url),
     full_name: cleanStr(row.full_name) ?? "",
     company: cleanStr(row.company_name) ?? "",
-    // IMPORTANT: use null (not "") for missing email.
-    // contacts has a UNIQUE constraint on email; storing "" for every lead
-    // without an email collides on the second insert (23505 error).
-    // Postgres allows multiple NULLs in a unique index so null is safe.
-    email: cleanStr(row.email) ?? null,
+    email,
     designation: cleanStr(row.designation),
     industry: cleanStr(row.industry),
     geography: cleanStr(row.geography),
@@ -51,29 +50,14 @@ export function leadToContactRow(row: Record<string, any>): Record<string, any> 
 
 /**
  * Upsert contact rows on linkedin_url (dedupe target). Rows without a
- * linkedin_url are ignored. Accepts already-shaped contact objects, so
- * partial updates (e.g. only email/phone from enrichment) work too and only
- * touch the provided columns.
- *
- * Two ways this can fail without the database being at fault:
- *   1. contacts.email is unique (lower(trim(email)), partial). A row whose
- *      linkedin_url is brand new but whose email already belongs to another
- *      contact raises 23505 on the batched upsert.
- *   2. ON CONFLICT ("linkedin_url") is only satisfiable by a NON-partial
- *      unique index. A partial index (… WHERE linkedin_url IS NOT NULL)
- *      cannot be inferred without an index predicate, which PostgREST's
- *      on_conflict cannot express, so Postgres rejects the whole statement
- *      with 42P10.
- *
- * Either way the batch is retried as plain per-row INSERTs: no ON CONFLICT
- * clause means no arbiter to infer, and a 23505 on a single row is swallowed
- * so only that row is skipped. The lead save never fails.
+ * linkedin_url or email are ignored.
  */
 export async function upsertContactMirrors(
   client: any,
-  rows: Record<string, any>[]
+  rows: (Record<string, any> | null | undefined)[]
 ): Promise<{ error: any }> {
-  const list = rows.filter((r) => cleanStr(r.linkedin_url));
+  // Only mirror leads that have both a linkedin_url and a valid email
+  const list = rows.filter((r): r is Record<string, any> => Boolean(r && cleanStr(r.linkedin_url) && cleanStr(r.email)));
   if (list.length === 0) return { error: null };
 
   // Preferred path: also refreshes an existing mirrored contact in place.

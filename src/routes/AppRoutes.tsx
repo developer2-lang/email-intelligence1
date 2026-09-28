@@ -14,6 +14,7 @@ import TemplateEditorTab from '../pages/TemplateEditorTab'
 import TemplatesPage from '../pages/TemplatesPage'
 import LeadSearch from '../pages/LeadSearch'
 import LeadDatabase from '../pages/LeadDatabase'
+import ApifyScrapersTab from '../pages/ApifyScrapersTab'
 import WeeklyQueue from '../pages/WeeklyQueue'
 
 export interface AppRoutesProps {
@@ -168,6 +169,9 @@ export default function AppRoutes(props: AppRoutesProps) {
 
     case 'lead-database':
       return <LeadDatabase onToast={props.onToast} />
+
+    case 'apify':
+      return <ApifyScrapersTab onToast={props.onToast} />
 
     case 'weekly-queue':
       return <WeeklyQueue onToast={props.onToast} />

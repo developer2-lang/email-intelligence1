@@ -16,6 +16,7 @@ export const NAV_META: { [key: string]: { title: string; sub: string } } = {
   'contact-types': { title: 'Contact Types',    sub: 'Manage contact type definitions' },
   'lead-search': { title: 'Lead Search', sub: 'Find B2B leads by filters' },
   'lead-database': { title: 'Lead Database', sub: 'Browse and manage every saved lead' },
+  'apify':  { title: 'Apify',                    sub: 'Manage your Apify scraper links' },
   'weekly-queue': { title: 'Weekly Queue', sub: 'One welcome email per new contact, every Thursday (in batches)' },
 };
 

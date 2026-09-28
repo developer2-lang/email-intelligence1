@@ -12,6 +12,7 @@ export type TabKey =
   | 'contact-types'
   | 'lead-search'
   | 'lead-database'
+  | 'apify'
   | 'weekly-queue';
 
 export type CampTabState = 'list' | 'compose' | 'templates' | 'followups'

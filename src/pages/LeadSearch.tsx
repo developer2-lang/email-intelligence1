@@ -10,12 +10,14 @@ import {
   fetchGeographies,
   fetchIndustries,
   fetchNumberOfProfiles,
+  fetchStates,
   removeCustomOption,
   saveCustomOption,
   type FilterOption,
   type ProfileCountOption,
 } from '../services/filterService'
 import SearchableSelect from '../components/SearchableSelect'
+import { queueContactsForWeeklyEmail } from '../services/weeklyQueueService'
 
 interface Lead {
   id: string
@@ -37,12 +39,13 @@ interface Filters {
   industry: string
   designation: string
   geography: string
+  state: string
   role: string
   companySize: string
   maxItems: number
 }
 
-const DEFAULT_FILTERS: Filters = { industry: '', designation: '', geography: '', role: '', companySize: '', maxItems: 5 }
+const DEFAULT_FILTERS: Filters = { industry: '', designation: '', geography: '', state: '', role: '', companySize: '', maxItems: 5 }
 
 function mergeUnique(lists: string[][]): string[] {
   const seen = new Set<string>()
@@ -198,11 +201,13 @@ export default function LeadSearch() {
   const [industryOptions, setIndustryOptions] = useState<string[]>([])
   const [designationOptions, setDesignationOptions] = useState<string[]>([])
   const [geographyOptions, setGeographyOptions] = useState<string[]>([])
+  const [stateOptions, setStateOptions] = useState<string[]>([])
   const [departmentOptions, setDepartmentOptions] = useState<string[]>([])
 
   const [customIndustries, setCustomIndustries] = useState<string[]>(() => loadCustomValues('custom_industries'))
   const [customDesignations, setCustomDesignations] = useState<string[]>(() => loadCustomValues('custom_designations'))
   const [customGeographies, setCustomGeographies] = useState<string[]>(() => loadCustomValues('custom_geographies'))
+  const [customStates, setCustomStates] = useState<string[]>(() => loadCustomValues('custom_states'))
   const [customRoles, setCustomRoles] = useState<string[]>([])
   const [customCompanySizes, setCustomCompanySizes] = useState<string[]>([])
 
@@ -230,6 +235,10 @@ export default function LeadSearch() {
     localStorage.setItem('custom_geographies', JSON.stringify(customGeographies))
   }, [customGeographies])
 
+  useEffect(() => {
+    localStorage.setItem('custom_states', JSON.stringify(customStates))
+  }, [customStates])
+
   // Load every filter dropdown from its master table on mount so the options
   // always reflect the database (single source of truth), never hardcoded
   // lists. Geography labels can appear under multiple values ("India" vs
@@ -237,10 +246,11 @@ export default function LeadSearch() {
   useEffect(() => {
     let cancelled = false
     ;(async () => {
-      const [ind, des, geo, dept, cs, np] = await Promise.all([
+      const [ind, des, geo, st, dept, cs, np] = await Promise.all([
         fetchIndustries(),
         fetchDesignations(),
         fetchGeographies(),
+        fetchStates(),
         fetchDepartments(),
         fetchCompanySizes(),
         fetchNumberOfProfiles(),
@@ -251,11 +261,14 @@ export default function LeadSearch() {
       setGeographyOptions(
         mergeUnique([geo.data.filter((o) => o.value !== 'all').map((o) => o.label)]),
       )
+      setStateOptions(
+        mergeUnique([st.data.map((o) => o.name).filter(Boolean)]),
+      )
       setDepartmentOptions(dept.data.map((o) => o.label))
       setCompanySizes(cs.data)
       setProfileCounts(np.data)
       setFilterMetaError(
-        [ind, des, geo, dept, cs, np].map((r) => r.error).filter(Boolean).join('; ') || null,
+        [ind, des, geo, st, dept, cs, np].map((r) => r.error).filter(Boolean).join('; ') || null,
       )
       setFilterMetaLoading(false)
     })()
@@ -360,6 +373,29 @@ export default function LeadSearch() {
     })
   }
 
+  const addCustomState = (value: string) => {
+    const v = value.trim()
+    if (!v) return
+    if (
+      customStates.some((x) => x.toLowerCase() === v.toLowerCase()) ||
+      stateOptions.some((x) => x.toLowerCase() === v.toLowerCase())
+    ) {
+      return
+    }
+    setCustomStates((prev) => [...prev, v])
+    void saveCustomOption('states', v).then((res) => {
+      setNotice(
+        res.error ? `Could not save "${v}": ${res.error}` : `Saved "${v}" as a custom state`,
+      )
+    })
+  }
+  const removeCustomState = (value: string) => {
+    setCustomStates((prev) => prev.filter((x) => x !== value))
+    void removeCustomOption('states', value).then((res) => {
+      if (res.error) setNotice(`Could not remove "${value}": ${res.error}`)
+    })
+  }
+
   const addCustomRole = (value: string) => {
     const v = value.trim()
     if (!v) return
@@ -413,7 +449,7 @@ export default function LeadSearch() {
     // Mirrors how the Edge Function builds the Apify searchQuery, so the notice
     // names the search the user actually ran.
     const searchedQuery =
-      [filters.designation, filters.industry, filters.role].filter(Boolean).join(' ') || 'CEO'
+      [filters.designation, filters.industry, filters.role, filters.state].filter(Boolean).join(' ') || 'CEO'
     try {
       const { data, error } = await supabase.functions.invoke('scrape-leads', {
         body: { filters },
@@ -429,6 +465,22 @@ export default function LeadSearch() {
       // so the table and the message can never disagree.
       const freshLeads = await fetchLeadsFromDb()
       setLeads(freshLeads)
+
+      // Automatically queue any newly scraped leads that have an email into weekly queue
+      const withEmail = freshLeads.filter(l => l.email && l.email.trim())
+      if (withEmail.length > 0) {
+        void queueContactsForWeeklyEmail(
+          withEmail.map(l => ({
+            id: l.id,
+            contact_id: `lead-${l.id}`,
+            email: l.email,
+            full_name: l.full_name || '',
+            company: l.company_name || '',
+            designation: l.designation,
+            industry: l.industry,
+          }))
+        )
+      }
 
       console.info(
         `[LeadSearch] function reported ${saved} new / ${found} found — ` +
@@ -491,6 +543,19 @@ export default function LeadSearch() {
       const emailFound = typeof data.email === 'string' && data.email.trim().length > 0
       const phoneFound = hasPhoneValue(data?.phone)
 
+      if (emailFound && data.email) {
+        // Automatically queue newly enriched lead into weekly email queue
+        void queueContactsForWeeklyEmail([{
+          id: lead.id,
+          contact_id: `lead-${lead.id}`,
+          email: data.email,
+          full_name: data.full_name || lead.full_name || '',
+          company: data.company_name || lead.company_name || '',
+          designation: data.designation || lead.designation,
+          industry: lead.industry,
+        }])
+      }
+
       if (!emailFound) {
         // Mark this lead as "email not found" in local state
         setEmailNotFoundIds((prev) => new Set(prev).add(lead.id))
@@ -520,7 +585,13 @@ export default function LeadSearch() {
     }
   }
 
-  const hasFilters = Object.values(filters).some((v) => v !== '')
+  const hasFilters =
+    filters.industry !== '' ||
+    filters.designation !== '' ||
+    filters.geography !== '' ||
+    filters.state !== '' ||
+    filters.role !== '' ||
+    filters.companySize !== ''
 
   const tableQuery = tableSearch.trim().toLowerCase()
   // Only the table's own search box filters the rows. The dropdown filters
@@ -698,7 +769,7 @@ export default function LeadSearch() {
   }
 
   const comboboxFields: {
-    key: 'industry' | 'designation' | 'geography' | 'role'
+    key: 'industry' | 'designation' | 'geography' | 'state' | 'role'
     label: string
     options: string[]
     customOptions: string[]
@@ -728,6 +799,14 @@ export default function LeadSearch() {
       customOptions: customGeographies,
       onAddCustom: addCustomGeography,
       onRemoveCustom: removeCustomGeography,
+    },
+    {
+      key: 'state',
+      label: 'State',
+      options: mergeUnique([stateOptions]),
+      customOptions: customStates,
+      onAddCustom: addCustomState,
+      onRemoveCustom: removeCustomState,
     },
     {
       key: 'role',

@@ -161,11 +161,20 @@ export default {
         .join(" ") || "CEO";
 
       // 4. Build the input in the EXACT format this Actor expects
+      const locations: string[] = [];
+      if (filters.state && filters.geography) {
+        locations.push(`${filters.state}, ${filters.geography}`);
+      } else if (filters.state) {
+        locations.push(filters.state);
+      } else if (filters.geography) {
+        locations.push(filters.geography);
+      }
+
       const apifyInput = {
         profileScraperMode: "Full",
         searchQuery,
         maxItems: Number(filters.maxItems ?? filters.numProfiles) || 5,
-        locations: filters.geography ? [filters.geography] : [],
+        locations,
       };
 
       console.log("📤 Sending to Apify:", apifyInput);

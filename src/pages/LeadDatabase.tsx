@@ -6,6 +6,7 @@ import {
   fetchCustomFilterOptions,
   removeCustomFilterOption,
 } from '../services/customFilterOptionsService';
+import { queueContactsForWeeklyEmail } from '../services/weeklyQueueService';
 
 
 // ─── ICONS (match the Contacts page icon system) ─────────────────────────────
@@ -432,6 +433,19 @@ export default function LeadDatabase({ onToast }: LeadDatabaseProps) {
       if (error) {
         onToast('Failed to update lead: ' + error.message, 'error');
         return;
+      }
+
+      // If lead now has an email, queue it for weekly email
+      if (fEmail.trim()) {
+        void queueContactsForWeeklyEmail([{
+          id: editLead.id,
+          contact_id: `lead-${editLead.id}`,
+          email: fEmail.trim(),
+          full_name: fName.trim(),
+          company: fCompany.trim(),
+          designation: fDesig.trim(),
+          industry: fIndustry.trim(),
+        }]);
       }
 
       setEditLead(null);

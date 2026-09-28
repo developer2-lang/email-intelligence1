@@ -6,6 +6,7 @@ const NAV_SECTIONS: { label: string; tabs: TabKey[] }[] = [
   { label: 'Overview', tabs: ['dashboard', 'analytics'] },
   { label: 'Outreach', tabs: ['contacts', 'contact-types', 'campaigns', 'followups'] },
   { label: 'Lead Generation', tabs: ['lead-search', 'lead-database'] },
+  { label: 'Apify', tabs: ['apify'] },
   { label: 'Templates', tabs: ['template-editor', 'template-library'] },
   { label: 'Automation', tabs: ['sequences', 'sequence-builder', 'weekly-queue'] },
   { label: 'Settings', tabs: ['settings'] },
@@ -125,6 +126,13 @@ const NAV_ICONS: Record<TabKey, ReactNode> = {
     <>
       <circle cx="12" cy="12" r="9" />
       <polyline points="12 7 12 12 15.5 14" />
+    </>
+  ),
+  apify: (
+    <>
+      <circle cx="12" cy="12" r="3" />
+      <path d="M12 2v4M12 18v4M2 12h4M18 12h4" />
+      <path d="M5 5l3 3M16 16l3 3M19 5l-3 3M8 16l-3 3" />
     </>
   ),
 }

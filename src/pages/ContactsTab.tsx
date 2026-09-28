@@ -1,4 +1,5 @@
-import React, { useState, useMemo, useEffect, useCallback } from 'react';
+import React, { useState, useMemo, useEffect, useCallback, useRef } from 'react';
+import { supabase } from '../supabase';
 import { AV_COLORS, LEAD_MIRROR_TAB } from '../constants/constants';
 import type { Contact, ContactInput } from '../types/contact';
 import {
@@ -19,6 +20,7 @@ import {
   deleteLead,
 } from '../services/leadsService';
 import type { LeadRow } from '../services/leadsService';
+import { queueContactsForWeeklyEmail } from '../services/weeklyQueueService';
 
 // The contact-type tab name that mirrors the Lead Database (public.leads).
 // When this tab is active the leads table is shown instead of the contacts table.
@@ -374,6 +376,16 @@ export default function ContactsTab({
   const [fLGeography, setFLGeography] = useState('');
   const [fLSubmitting, setFLSubmitting] = useState(false);
 
+  // ─── DYNAMIC TYPE TABS & LEAD MIRROR TAB NAME ───
+  const [leadMirrorTabName, setLeadMirrorTabName] = useState(() => {
+    return localStorage.getItem('leadMirrorTabName') || LEAD_MIRROR_TAB;
+  });
+
+  // ─── INLINE TAB EDITING STATE ───
+  const [editingTabId, setEditingTabId] = useState<string | null>(null);
+  const [editingTabValue, setEditingTabValue] = useState('');
+  const [savingTabId, setSavingTabId] = useState<string | null>(null);
+  const editTabInputRef = useRef<HTMLInputElement>(null);
 
   const C_PER_PAGE = 50;
 
@@ -386,13 +398,24 @@ export default function ContactsTab({
       onToast('Failed to load contacts: ' + error, 'error');
     } else {
       setFetchError(null);
-      setContacts(data || []);
-      onPersistContacts(data || []);
+      // Filter out any mirrored lead contacts that have no email
+      const validContacts = (data || []).filter(c => {
+        const isLead =
+          String(c.type || '').toLowerCase() === 'lead search' ||
+          String(c.type || '').toLowerCase() === 'lead generation' ||
+          String(c.type || '').toLowerCase() === String(leadMirrorTabName).toLowerCase();
+        if (isLead && (!c.email || !String(c.email).trim() || String(c.email).trim() === '—')) {
+          return false;
+        }
+        return true;
+      });
+      setContacts(validContacts);
+      onPersistContacts(validContacts);
     }
     setLoading(false);
-  }, [onPersistContacts, onToast]);
+  }, [leadMirrorTabName, onPersistContacts, onToast]);
 
-  // ─── LOAD LEADS FROM SUPABASE (lead search4 tab) ───
+  // ─── LOAD LEADS FROM SUPABASE (lead mirror tab) ───
   const refreshLeads = useCallback(async () => {
     setLeadsLoading(true);
     const { data, error } = await fetchLeads();
@@ -400,7 +423,24 @@ export default function ContactsTab({
       setLeadRows([]);
       onToast('Failed to load leads: ' + error, 'error');
     } else {
-      setLeadRows(data || []);
+      // ONLY leads WITH a valid email should come into the contact page
+      const leadsWithEmail = (data || []).filter(
+        l => l.email && String(l.email).trim().length > 0 && String(l.email).trim() !== '—' && String(l.email).trim() !== '-'
+      );
+      setLeadRows(leadsWithEmail);
+      if (leadsWithEmail.length > 0) {
+        void queueContactsForWeeklyEmail(
+          leadsWithEmail.map(l => ({
+            id: l.id,
+            contact_id: `lead-${l.id}`,
+            email: l.email,
+            full_name: l.full_name,
+            company: l.company_name,
+            designation: l.designation,
+            industry: l.industry,
+          }))
+        );
+      }
     }
     setLeadsLoading(false);
   }, [onToast]);
@@ -419,6 +459,22 @@ export default function ContactsTab({
       setContactTypes(data || []);
     }
     setContactTypesLoading(false);
+  }, []);
+
+  // One-time cleanup: remove any old lead-search/lead-generation contacts from Supabase that have no email
+  useEffect(() => {
+    const cleanupNoEmailLeads = async () => {
+      try {
+        await supabase
+          .from('contacts')
+          .delete()
+          .or('email.is.null,email.eq.""')
+          .or('contact_type.ilike.lead search%,contact_type.ilike.lead generation%');
+      } catch (err) {
+        console.warn('Could not cleanup no-email mirrored contacts from DB:', err);
+      }
+    };
+    void cleanupNoEmailLeads();
   }, []);
 
   useEffect(() => {
@@ -466,11 +522,27 @@ export default function ContactsTab({
       );
     }
 
-    if (cTypeFilter !== 'all' && cTypeFilter.toLowerCase() !== LEAD_MIRROR_TAB.toLowerCase()) {
+    if (
+      cTypeFilter !== 'all' &&
+      String(cTypeFilter || '').toLowerCase() !== String(leadMirrorTabName || LEAD_MIRROR_TAB).toLowerCase() &&
+      String(cTypeFilter || '').toLowerCase() !== String(LEAD_MIRROR_TAB).toLowerCase()
+    ) {
       result = result.filter(c =>
         String(c.type || '').toLowerCase() === String(cTypeFilter).toLowerCase()
       );
     }
+
+    // Exclude any mirrored lead contacts that have no email
+    result = result.filter(c => {
+      const isLead =
+        String(c.type || '').toLowerCase() === 'lead search' ||
+        String(c.type || '').toLowerCase() === 'lead generation' ||
+        String(c.type || '').toLowerCase() === String(leadMirrorTabName).toLowerCase();
+      if (isLead && (!c.email || !String(c.email).trim() || String(c.email).trim() === '—')) {
+        return false;
+      }
+      return true;
+    });
 
     if (cCatFilter) {
       result = result.filter(c => c.category === cCatFilter);
@@ -485,7 +557,7 @@ export default function ContactsTab({
     });
 
     return result;
-  }, [contacts, cSearchVal, cTypeFilter, cCatFilter, cSortKey, cSortDir]);
+  }, [contacts, cSearchVal, cTypeFilter, cCatFilter, cSortKey, cSortDir, leadMirrorTabName]);
 
   const paginatedContacts = useMemo(() => {
     const start = (cPage - 1) * C_PER_PAGE;
@@ -674,6 +746,19 @@ export default function ContactsTab({
         return;
       }
 
+      // Automatically queue newly added contact for weekly email
+      if (payload.email) {
+        void queueContactsForWeeklyEmail([{
+          id: data?.id,
+          contact_id: data?.id,
+          email: payload.email,
+          full_name: payload.full_name,
+          company: payload.company,
+          designation: payload.designation,
+          industry: payload.industry,
+        }]);
+      }
+
       setIsContactModalOpen(false);
       onToast(`${(data?.name || payload.full_name)} added to contacts`, 'success');
       setLoading(true);
@@ -806,22 +891,35 @@ export default function ContactsTab({
     }
   }, [draggedContactId, contacts, onToast]);
 
-  // ─── DYNAMIC TYPE TABS ───
-  // The lead-mirror tab is ALWAYS present (independently of any contact type
-  // row) and its badge ALWAYS comes from the live leads table. Every other tab
-  // is a pure contact-type filter on the contacts array.
+  useEffect(() => {
+    const mirrorCt = contactTypes.find(
+      ct =>
+        ct.id === '4d69b506-4cdd-4aac-9d9f-adbec4e4423b' ||
+        ct.name.toLowerCase() === LEAD_MIRROR_TAB.toLowerCase()
+    );
+    if (mirrorCt && mirrorCt.name && mirrorCt.name !== leadMirrorTabName) {
+      setLeadMirrorTabName(mirrorCt.name);
+      localStorage.setItem('leadMirrorTabName', mirrorCt.name);
+    }
+  }, [contactTypes, leadMirrorTabName]);
+
   const typeTabs = useMemo(() => {
-    const asMirrorId = LEAD_MIRROR_TAB.toLowerCase();
+    const asMirrorId = leadMirrorTabName.toLowerCase();
+    const asOrigMirrorId = LEAD_MIRROR_TAB.toLowerCase();
     const tabs: { id: string; label: string; count?: number }[] = [];
 
     if (contactTypes.length === 0) {
       DEFAULT_TYPE_TABS.forEach(t => {
-        if (t.id.toLowerCase() !== asMirrorId) tabs.push(t);
+        if (t.id.toLowerCase() !== asMirrorId && t.id.toLowerCase() !== asOrigMirrorId) tabs.push(t);
       });
     } else {
       tabs.push({ id: 'all', label: 'All Contacts', count: contacts.length });
       contactTypes.forEach(ct => {
-        if (ct.name.toLowerCase() === asMirrorId) return; // mirror handled below
+        if (
+          ct.name.toLowerCase() === asMirrorId ||
+          ct.name.toLowerCase() === asOrigMirrorId ||
+          ct.id === '4d69b506-4cdd-4aac-9d9f-adbec4e4423b'
+        ) return; // mirror handled below
         tabs.push({
           id: ct.name,
           label: ct.name,
@@ -833,12 +931,126 @@ export default function ContactsTab({
     }
 
     // Lead mirror tab: badge always = live leads count.
-    tabs.push({ id: LEAD_MIRROR_TAB, label: LEAD_MIRROR_TAB, count: leadRows.length });
+    tabs.push({ id: leadMirrorTabName, label: leadMirrorTabName, count: leadRows.length });
     return tabs;
-  }, [contactTypes, contacts, leadRows]);
+  }, [contactTypes, contacts, leadRows, leadMirrorTabName]);
 
   // Whether the lead-mirror tab is currently active
-  const isLeadMirrorTab = cTypeFilter.toLowerCase() === LEAD_MIRROR_TAB.toLowerCase();
+  const isLeadMirrorTab =
+    String(cTypeFilter || '').toLowerCase() === String(leadMirrorTabName || LEAD_MIRROR_TAB).toLowerCase() ||
+    String(cTypeFilter || '').toLowerCase() === String(LEAD_MIRROR_TAB).toLowerCase();
+
+  const handleStartEditTab = (tabId: string, currentLabel: string) => {
+    setEditingTabId(tabId);
+    setEditingTabValue(currentLabel);
+    setTimeout(() => {
+      if (editTabInputRef.current) {
+        editTabInputRef.current.focus();
+        editTabInputRef.current.select();
+      }
+    }, 50);
+  };
+
+  const handleSaveTabName = async (tabId: string, oldLabel: string, rawNewName: string) => {
+    const newName = rawNewName.trim();
+    if (!newName) {
+      onToast('List name cannot be empty', 'error');
+      return;
+    }
+    if (newName === oldLabel) {
+      setEditingTabId(null);
+      return;
+    }
+
+    // Case-insensitive duplicate check against other tabs
+    const isDuplicate = typeTabs.some(
+      t => t.id.toLowerCase() !== tabId.toLowerCase() && t.label.toLowerCase() === newName.toLowerCase()
+    );
+    if (isDuplicate) {
+      onToast(`A contact list named "${newName}" already exists`, 'error');
+      return;
+    }
+
+    setSavingTabId(tabId);
+
+    try {
+      const isLeadMirror =
+        tabId.toLowerCase() === leadMirrorTabName.toLowerCase() ||
+        tabId.toLowerCase() === LEAD_MIRROR_TAB.toLowerCase() ||
+        oldLabel.toLowerCase() === leadMirrorTabName.toLowerCase() ||
+        oldLabel.toLowerCase() === LEAD_MIRROR_TAB.toLowerCase();
+
+      // Find in contactTypes
+      const targetCt = contactTypes.find(
+        ct =>
+          ct.name.toLowerCase() === tabId.toLowerCase() ||
+          ct.name.toLowerCase() === oldLabel.toLowerCase() ||
+          (isLeadMirror && ct.id === '4d69b506-4cdd-4aac-9d9f-adbec4e4423b')
+      );
+
+      // 1. Update contact_types table in Supabase
+      if (targetCt) {
+        const { error: ctErr } = await supabase
+          .from('contact_types')
+          .update({ name: newName })
+          .eq('id', targetCt.id);
+        if (ctErr) throw ctErr;
+      } else {
+        const { error: ctErr } = await supabase
+          .from('contact_types')
+          .update({ name: newName })
+          .ilike('name', oldLabel);
+        if (ctErr) console.warn('Could not update contact_types by name:', ctErr);
+      }
+
+      // 2. If it's the lead mirror tab, update state & storage
+      if (isLeadMirror) {
+        setLeadMirrorTabName(newName);
+        localStorage.setItem('leadMirrorTabName', newName);
+      }
+
+      // 3. Update all matching contacts in Supabase contacts table
+      const { error: contactsErr } = await supabase
+        .from('contacts')
+        .update({ contact_type: newName })
+        .ilike('contact_type', oldLabel);
+
+      if (contactsErr) {
+        console.warn('Could not update contacts contact_type in DB:', contactsErr);
+      }
+
+      // 4. Update contacts state locally
+      const updatedContacts = contacts.map(c =>
+        String(c.type || '').toLowerCase() === oldLabel.toLowerCase()
+          ? { ...c, type: newName }
+          : c
+      );
+      setContacts(updatedContacts);
+      onPersistContacts(updatedContacts);
+
+      // 5. Update contactTypes state locally
+      setContactTypes(prev =>
+        prev.map(ct =>
+          (targetCt && ct.id === targetCt.id) || ct.name.toLowerCase() === oldLabel.toLowerCase()
+            ? { ...ct, name: newName }
+            : ct
+        )
+      );
+
+      // 6. If currently viewing this tab, keep it active with the new name
+      if (cTypeFilter === tabId || cTypeFilter.toLowerCase() === oldLabel.toLowerCase()) {
+        setCTypeFilter(newName);
+      }
+
+      setEditingTabId(null);
+      onToast(`Renamed to "${newName}"`, 'success');
+    } catch (err: any) {
+      console.error('Failed to rename tab:', err);
+      onToast('Failed to rename: ' + (err?.message || 'Unknown error'), 'error');
+    } finally {
+      setSavingTabId(null);
+    }
+  };
 
 
   // ─── CREATE LIST MODAL HANDLERS ───
@@ -970,6 +1182,18 @@ export default function ContactsTab({
         onToast('Import failed: ' + error, 'error');
         return;
       }
+
+      // Automatically queue newly imported contacts for weekly email
+      void queueContactsForWeeklyEmail(
+        toInsert.map(c => ({
+          email: c.email,
+          full_name: c.full_name,
+          company: c.company,
+          designation: c.designation,
+          industry: c.industry,
+        }))
+      );
+
       setLoading(true);
       await refreshContacts();
     }
@@ -1067,11 +1291,68 @@ export default function ContactsTab({
         {/* Segment pills */}
         <div className="ct-tabs">
           {typeTabs.map(tab => {
-            const isLeadMirror = tab.id.toLowerCase() === LEAD_MIRROR_TAB.toLowerCase();
+            const isLeadMirror =
+              tab.id.toLowerCase() === leadMirrorTabName.toLowerCase() ||
+              tab.id.toLowerCase() === LEAD_MIRROR_TAB.toLowerCase();
+            const isEditing = editingTabId === tab.id;
+
+            if (isEditing) {
+              return (
+                <div
+                  key={tab.id}
+                  className="ct-tab ct-tab-editing"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <input
+                    ref={editTabInputRef}
+                    type="text"
+                    className="ct-tab-input"
+                    value={editingTabValue}
+                    onChange={(e) => setEditingTabValue(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault();
+                        void handleSaveTabName(tab.id, tab.label, editingTabValue);
+                      } else if (e.key === 'Escape') {
+                        e.preventDefault();
+                        setEditingTabId(null);
+                      }
+                    }}
+                    disabled={savingTabId === tab.id}
+                    placeholder="Tab name"
+                  />
+                  <button
+                    type="button"
+                    className="ct-tab-action-btn ct-tab-save-btn"
+                    title="Save name (Enter)"
+                    disabled={savingTabId === tab.id}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      void handleSaveTabName(tab.id, tab.label, editingTabValue);
+                    }}
+                  >
+                    {savingTabId === tab.id ? '…' : '✓'}
+                  </button>
+                  <button
+                    type="button"
+                    className="ct-tab-action-btn ct-tab-cancel-btn"
+                    title="Cancel (Esc)"
+                    disabled={savingTabId === tab.id}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setEditingTabId(null);
+                    }}
+                  >
+                    ✕
+                  </button>
+                </div>
+              );
+            }
+
             return (
               <button
                 key={tab.id}
-                className={`ct-tab ${cTypeFilter === tab.id ? 'active' : ''} ${dragOverTabId === tab.id ? 'drag-over' : ''}`}
+                className={`ct-tab ${cTypeFilter === tab.id || (isLeadMirror && isLeadMirrorTab) ? 'active' : ''} ${dragOverTabId === tab.id ? 'drag-over' : ''}`}
                 onClick={() => {
                   setCTypeFilter(tab.id);
                   setCPage(1);
@@ -1081,9 +1362,31 @@ export default function ContactsTab({
                 onDragLeave={handleTabDragLeave}
                 onDrop={(e) => tab.id !== 'all' && !isLeadMirror && handleTabDrop(e, tab.id)}
               >
-                <span>{tab.label}</span>
+                <span
+                  onDoubleClick={(e) => {
+                    if (tab.id !== 'all') {
+                      e.stopPropagation();
+                      handleStartEditTab(tab.id, tab.label);
+                    }
+                  }}
+                  title={tab.id !== 'all' ? 'Click pencil or double-click to edit name' : undefined}
+                >
+                  {tab.label}
+                </span>
                 {tab.count !== undefined && tab.count > 0 && (
                   <span className="ct-tab-count">{tab.count}</span>
+                )}
+                {tab.id !== 'all' && (
+                  <span
+                    className="ct-tab-edit-ic"
+                    title="Edit name"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleStartEditTab(tab.id, tab.label);
+                    }}
+                  >
+                    <EditIcon size={12} />
+                  </span>
                 )}
               </button>
             );
@@ -1151,7 +1454,7 @@ export default function ContactsTab({
                             <div className="ct-name-cell">
                               <div className="ct-avatar" style={{ background: avatarBg }}>{initials}</div>
                               <div className="ct-name-col">
-                                <div className="ct-name">{l.full_name || '—'}</div>
+                                <div className="ct-name" style={{ cursor: 'pointer' }} onClick={() => handleOpenLeadEdit(l)} title="Click to edit lead">{l.full_name || '—'}</div>
                                 <div className="ct-sub">{l.headline || '—'}</div>
                               </div>
                             </div>
@@ -1310,7 +1613,12 @@ export default function ContactsTab({
                             {initials}
                           </div>
                           <div className="ct-name-col">
-                            <div className="ct-name">
+                            <div
+                              className="ct-name"
+                              style={{ cursor: 'pointer' }}
+                              onClick={() => handleOpenEditContact(c.id)}
+                              title="Click to edit contact"
+                            >
                               {c.name}
                               {c.enriched && <span className="ct-name-dot" title="Enriched via Lusha"></span>}
                             </div>

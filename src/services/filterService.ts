@@ -53,6 +53,26 @@ export function fetchGeographies(): Promise<{ data: FilterOption[]; error: strin
   return fetchActiveOptions('geographies')
 }
 
+export interface StateOption {
+  id: number | string
+  name: string
+}
+
+// The public.states table uses id, name, created_at
+export async function fetchStates(): Promise<{ data: StateOption[]; error: string | null }> {
+  try {
+    const { data, error } = await supabase
+      .from('states')
+      .select('id, name')
+      .order('name', { ascending: true })
+
+    if (error) return { data: [], error: error.message }
+    return { data: (data as StateOption[]) || [], error: null }
+  } catch (err) {
+    return { data: [], error: err instanceof Error ? err.message : 'Failed to fetch states' }
+  }
+}
+
 // The public.departments table uses id, label, value, created_at — no is_active
 // or sort_order columns. Fetch all departments ordered by label.
 export async function fetchDepartments(): Promise<{ data: DepartmentOption[]; error: string | null }> {
@@ -107,7 +127,8 @@ export async function saveCustomOption(
   if (!label) return { error: 'Option cannot be empty' }
 
   const useSortOrder = SORT_ORDER_TABLES.has(table)
-  const payload: Record<string, unknown> = { value: label, label }
+  const payload: Record<string, unknown> =
+    table === 'states' ? { name: label } : { value: label, label }
 
   try {
     if (useSortOrder) {
@@ -141,7 +162,8 @@ export async function removeCustomOption(
   const label = value.trim()
   if (!label) return { error: 'Option cannot be empty' }
   try {
-    const { error } = await supabase.from(table).delete().eq('label', label)
+    const column = table === 'states' ? 'name' : 'label'
+    const { error } = await supabase.from(table).delete().eq(column, label)
     if (error) return { error: error.message }
     return { error: null }
   } catch (err) {
