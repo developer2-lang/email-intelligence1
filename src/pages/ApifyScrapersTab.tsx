@@ -119,7 +119,7 @@ export default function ApifyScrapersTab({ onToast }: ApifyScrapersTabProps) {
     const q = searchVal.trim().toLowerCase();
     if (!q) return scrapers;
     return scrapers.filter((s) =>
-      [s.name, s.description ?? '', s.url].some((field) => field.toLowerCase().includes(q)),
+      [s.name, s.url].some((field) => field.toLowerCase().includes(q)),
     );
   }, [scrapers, searchVal]);
 
@@ -259,7 +259,7 @@ export default function ApifyScrapersTab({ onToast }: ApifyScrapersTabProps) {
             </div>
             <div className="empty-sub">
               {searchVal.trim()
-                ? 'Try a different scraper name, description or URL.'
+                ? 'Try a different scraper name or URL.'
                 : 'Click "Add Scraper" to save your first Apify scraper link.'}
             </div>
           </div>
@@ -269,7 +269,6 @@ export default function ApifyScrapersTab({ onToast }: ApifyScrapersTabProps) {
               <thead>
                 <tr>
                   <th>Scraper Name</th>
-                  <th>Description</th>
                   <th>Apify URL</th>
                   <th style={{ textAlign: 'right', width: 220 }}>Actions</th>
                 </tr>
@@ -283,12 +282,7 @@ export default function ApifyScrapersTab({ onToast }: ApifyScrapersTabProps) {
                       </div>
                     </td>
                     <td>
-                      <div className="ct-desig" style={{ maxWidth: 260, whiteSpace: 'normal' }}>
-                        {s.description || '—'}
-                      </div>
-                    </td>
-                    <td>
-                      <div className="ct-email" style={{ maxWidth: 280, overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                      <div className="ct-email" style={{ maxWidth: 360, overflow: 'hidden', textOverflow: 'ellipsis' }}>
                         {s.url}
                       </div>
                     </td>
@@ -379,16 +373,6 @@ export default function ApifyScrapersTab({ onToast }: ApifyScrapersTabProps) {
                     setForm((f) => ({ ...f, url: e.target.value }));
                     if (formError) setFormError(null);
                   }}
-                />
-              </div>
-
-              <div className="form-group">
-                <label>Description (optional)</label>
-                <textarea
-                  rows={3}
-                  placeholder="e.g. Scrapes LinkedIn profile information."
-                  value={form.description}
-                  onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))}
                 />
               </div>
 
