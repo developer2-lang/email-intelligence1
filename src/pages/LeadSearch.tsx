@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import * as XLSX from 'xlsx'
 import jsPDF from 'jspdf'
 import autoTable from 'jspdf-autotable'
@@ -172,10 +172,21 @@ export default function LeadSearch() {
   const [error, setError] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
   const [searched, setSearched] = useState(false)
-  const [demoMode, setDemoMode] = useState(true)
   const [enriching, setEnriching] = useState<Set<string>>(new Set())
   const [deletingId, setDeletingId] = useState<string | null>(null)
   const [fetchingPhoneId, setFetchingPhoneId] = useState<string | null>(null)
+  const [emailNotFoundIds, setEmailNotFoundIds] = useState<Set<string>>(() => {
+    try {
+      const raw = localStorage.getItem('emailNotFoundIds')
+      return raw ? new Set<string>(JSON.parse(raw)) : new Set<string>()
+    } catch { return new Set<string>() }
+  })
+  const [phoneNotFoundIds, setPhoneNotFoundIds] = useState<Set<string>>(() => {
+    try {
+      const raw = localStorage.getItem('phoneNotFoundIds')
+      return raw ? new Set<string>(JSON.parse(raw)) : new Set<string>()
+    } catch { return new Set<string>() }
+  })
   const [, setRowErrors] = useState<Record<string, string>>({})
   const [tableSearch, setTableSearch] = useState('')
 
@@ -198,6 +209,14 @@ export default function LeadSearch() {
   useEffect(() => {
     localStorage.setItem('leadSearchFilters', JSON.stringify(filters))
   }, [filters])
+
+  useEffect(() => {
+    localStorage.setItem('phoneNotFoundIds', JSON.stringify([...phoneNotFoundIds]))
+  }, [phoneNotFoundIds])
+
+  useEffect(() => {
+    localStorage.setItem('emailNotFoundIds', JSON.stringify([...emailNotFoundIds]))
+  }, [emailNotFoundIds])
 
   useEffect(() => {
     localStorage.setItem('custom_industries', JSON.stringify(customIndustries))
@@ -245,18 +264,28 @@ export default function LeadSearch() {
     }
   }, [])
 
+  // Single source of truth for the table. The mount fetch and the post-search
+  // refresh MUST use the identical query, otherwise the row count can shrink or
+  // stall depending on which one ran last.
+  const fetchLeadsFromDb = useCallback(async () => {
+    const { data, error } = await supabase
+      .from('leads')
+      .select('*')
+      .order('created_at', { ascending: false })
+      .range(0, 9999) // explicit: never rely on the implicit PostgREST max-rows cap
+    if (error) throw error
+    return (data ?? []).map(leadFromRow)
+  }, [])
+
   useEffect(() => {
-    ;(async () => {
-      const { data, error } = await supabase
-        .from('leads')
-        .select('*')
-        .order('created_at', { ascending: false })
-        .limit(100)
-      if (!error) {
-        setLeads((data ?? []).map(leadFromRow))
+    void (async () => {
+      try {
+        setLeads(await fetchLeadsFromDb())
+      } catch {
+        // Leave the table empty; the search button reports its own errors.
       }
     })()
-  }, [])
+  }, [fetchLeadsFromDb])
 
   const handleSelect = (key: keyof Filters, value: string) => {
     setFilters((prev) => ({ ...prev, [key]: value }))
@@ -380,6 +409,11 @@ export default function LeadSearch() {
     setError(null)
     setNotice(null)
     setSearched(true)
+    const countBefore = leads.length
+    // Mirrors how the Edge Function builds the Apify searchQuery, so the notice
+    // names the search the user actually ran.
+    const searchedQuery =
+      [filters.designation, filters.industry, filters.role].filter(Boolean).join(' ') || 'CEO'
     try {
       const { data, error } = await supabase.functions.invoke('scrape-leads', {
         body: { filters },
@@ -387,24 +421,43 @@ export default function LeadSearch() {
       if (error) throw error
       if (!data?.success) throw new Error(data?.error || 'Search failed')
 
-      // Always reflect what's actually in the DB — re-fetch after the Edge
-      // Function persists the Apify results.
-      const { data: dbLeads, error: fetchError } = await supabase
-        .from('leads')
-        .select('*')
-        .order('created_at', { ascending: false })
-      if (fetchError) throw fetchError
-      const freshLeads = (dbLeads ?? []).map(leadFromRow)
-      setLeads(freshLeads)
-
       const saved = Number(data.savedCount) || 0
       const found = Number(data.found) || 0
-      if (found === 0) {
-        setNotice('No leads found for these filters')
-      } else if (saved > 0) {
+
+      // Always reflect what's actually in the DB — re-fetch after the Edge
+      // Function persists the Apify results. Awaited before the notice is set
+      // so the table and the message can never disagree.
+      const freshLeads = await fetchLeadsFromDb()
+      setLeads(freshLeads)
+
+      console.info(
+        `[LeadSearch] function reported ${saved} new / ${found} found — ` +
+          `table now shows ${freshLeads.length} (was ${countBefore})`,
+      )
+      if (saved > 0 && freshLeads.length <= countBefore) {
+        console.warn(
+          '[LeadSearch] The Edge Function saved a row but this client cannot see it. ' +
+            'The row is in the DB but filtered out for this session — check the leads ' +
+            'RLS policy (auth.uid() = user_id) against the new row\'s user_id.',
+        )
+      }
+
+      if (saved > 0) {
         setNotice(`${saved} new lead${saved === 1 ? '' : 's'} saved`)
+      } else if (found > 0) {
+        setNotice(
+          `No new leads — all ${found} match${found === 1 ? '' : 'es'} already in your database`,
+        )
+      } else if (freshLeads.length > 0) {
+        // Apify returned nothing new, but the database still holds earlier
+        // leads and the table below is showing them. Saying "no leads found"
+        // here contradicts the rows on screen.
+        setNotice(
+          `0 new leads for "${searchedQuery}" — showing your ${freshLeads.length} existing ` +
+            `lead${freshLeads.length === 1 ? '' : 's'}`,
+        )
       } else {
-        setNotice('Search complete')
+        setNotice(`No leads found for "${searchedQuery}"`)
       }
     } catch (e: any) {
       setError(e?.message || 'Search failed')
@@ -423,48 +476,59 @@ export default function LeadSearch() {
 
   const handleEnrichLead = async (lead: Lead) => {
     if (!lead.id) return
+    // Clear any previous "not found" state so Fetching... shows immediately
+    setEmailNotFoundIds((prev) => { const s = new Set(prev); s.delete(lead.id); return s })
     setEnriching((prev) => new Set(prev).add(lead.id))
-    setRowErrors((prev) => {
-      const next = { ...prev }
-      delete next[lead.id]
-      return next
-    })
+    setRowErrors((prev) => { const next = { ...prev }; delete next[lead.id]; return next })
     try {
       const { data, error } = await supabase.functions.invoke('enrich-lead', {
         body: { leadId: lead.id, linkedinUrl: lead.linkedinUrl },
       })
       if (error) throw error
-      if (!data?.success) throw new Error(data?.error || 'Enrichment failed')
+      // enrich-lead now always returns 200; check success flag
+      if (!data?.success) throw new Error(data?.reason || data?.error || 'Enrichment failed')
+
+      const emailFound = typeof data.email === 'string' && data.email.trim().length > 0
+      const phoneFound = hasPhoneValue(data?.phone)
+
+      if (!emailFound) {
+        // Mark this lead as "email not found" in local state
+        setEmailNotFoundIds((prev) => new Set(prev).add(lead.id))
+      }
+
       setLeads((prev) =>
         prev.map((l) =>
           l.id === lead.id
             ? {
                 ...l,
-                email: data.email,
-                phone: data.phone,
-                full_name: data.full_name || l.full_name,
+                // Only overwrite if something was returned — keep existing value otherwise
+                email:        emailFound ? data.email        : l.email,
+                phone:        phoneFound ? data.phone        : l.phone,
+                full_name:    data.full_name    || l.full_name,
                 company_name: data.company_name || l.company_name,
-                designation: data.designation || l.designation,
-                email_attempted: true,
-                phone_attempted: hasPhoneValue(data?.phone) ? l.phone_attempted : true,
+                designation:  data.designation  || l.designation,
               }
             : l,
         ),
       )
     } catch (e: any) {
+      // On any error, show "Not Found" so the user knows the attempt was made
+      setEmailNotFoundIds((prev) => new Set(prev).add(lead.id))
       setRowErrors((prev) => ({ ...prev, [lead.id]: e?.message || 'Enrichment failed' }))
     } finally {
-      setEnriching((prev) => {
-        const next = new Set(prev)
-        next.delete(lead.id)
-        return next
-      })
+      setEnriching((prev) => { const next = new Set(prev); next.delete(lead.id); return next })
     }
   }
 
   const hasFilters = Object.values(filters).some((v) => v !== '')
 
   const tableQuery = tableSearch.trim().toLowerCase()
+  // Only the table's own search box filters the rows. The dropdown filters
+  // (industry / designation / role / geography) are inputs to the Apify search,
+  // NOT table filters: they narrow what gets scraped, never what gets displayed.
+  // So a search that returns 0 new leads still renders every existing lead, and
+  // the table can only be empty when the database is empty or the user typed a
+  // search term that matches nothing.
   const filteredLeads = tableQuery
     ? leads.filter((lead) =>
         Object.values(lead).some((v) => String(v ?? '').toLowerCase().includes(tableQuery)),
@@ -681,6 +745,8 @@ export default function LeadSearch() {
       alert('No LinkedIn profile for this lead')
       return
     }
+    // Clear any previous "not found" state so Fetching... shows immediately
+    setPhoneNotFoundIds((prev) => { const s = new Set(prev); s.delete(leadId); return s })
     setFetchingPhoneId(leadId)
 
     try {
@@ -688,29 +754,24 @@ export default function LeadSearch() {
         body: { leadId, linkedinUrl },
       })
 
-      if (error || !data?.success) {
-        // Flag the row locally (the backend also persists it) so the cell shows
-        // "Not Found" — matching the refresh-persisted state.
-        setLeads((prev) =>
-          prev.map((l) => (l.id === leadId ? { ...l, phone_attempted: true } : l)),
-        )
-        alert(data?.error || error?.message || 'Failed to fetch phone')
+      if (error) {
+        // Network / invocation error
+        setPhoneNotFoundIds((prev) => new Set(prev).add(leadId))
         return
       }
 
-      if (!hasPhoneValue(data.phone)) {
-        setLeads((prev) =>
-          prev.map((l) => (l.id === leadId ? { ...l, phone_attempted: true } : l)),
-        )
+      if (!hasPhoneValue(data?.phone)) {
+        // Actor returned no phone
+        setPhoneNotFoundIds((prev) => new Set(prev).add(leadId))
         return
       }
 
-      // Update local state so the row immediately shows the phone number
+      // Success — update local state so the number shows immediately
       setLeads((prev) =>
-        prev.map((l) => (l.id === leadId ? { ...l, phone: data.phone, phone_attempted: true } : l)),
+        prev.map((l) => (l.id === leadId ? { ...l, phone: data.phone } : l)),
       )
     } catch (err) {
-      alert(err instanceof Error ? err.message : 'Failed to fetch phone')
+      setPhoneNotFoundIds((prev) => new Set(prev).add(leadId))
     } finally {
       setFetchingPhoneId(null)
     }
@@ -784,39 +845,7 @@ export default function LeadSearch() {
             Find B2B leads by filters
           </div>
         </div>
-        <div
-          style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}
-          onClick={() => setDemoMode((v) => !v)}
-          role="switch"
-          aria-checked={demoMode}
-        >
-          <span style={{ fontSize: '12.5px', fontWeight: 600, color: 'var(--text3)' }}>Demo Mode</span>
-          <span
-            style={{
-              position: 'relative',
-              width: '36px',
-              height: '20px',
-              borderRadius: '999px',
-              background: demoMode ? 'var(--accent)' : 'var(--border2)',
-              transition: 'background 0.15s ease',
-              display: 'inline-block',
-            }}
-          >
-            <span
-              style={{
-                position: 'absolute',
-                top: '2px',
-                left: demoMode ? '18px' : '2px',
-                width: '16px',
-                height: '16px',
-                borderRadius: '50%',
-                background: '#fff',
-                boxShadow: '0 1px 2px rgba(15,23,42,0.3)',
-                transition: 'left 0.15s ease',
-              }}
-            />
-          </span>
-        </div>
+
       </div>
 
       {/* ─── Filter Dropdowns ─── */}
@@ -1025,8 +1054,14 @@ export default function LeadSearch() {
                       <span style={{ fontSize: '12.5px' }}>{lead.email}</span>
                     ) : enriching.has(lead.id) ? (
                       <span style={{ fontSize: '12.5px', opacity: 0.6 }}>Fetching...</span>
-                    ) : lead.email_attempted === true ? (
-                      <span style={{ fontSize: '12.5px', color: '#9ca3af', fontStyle: 'italic' }}>Not Found</span>
+                    ) : emailNotFoundIds.has(lead.id) ? (
+                      <span style={{ fontSize: '12.5px', color: '#9ca3af', fontStyle: 'italic' }}>
+                        Not Found&nbsp;
+                        <button
+                          style={{ fontSize: '11px', color: 'var(--accent)', background: 'none', border: 'none', cursor: 'pointer', padding: 0, textDecoration: 'underline' }}
+                          onClick={() => setEmailNotFoundIds((prev) => { const s = new Set(prev); s.delete(lead.id); return s })}
+                        >Retry</button>
+                      </span>
                     ) : (
                       <button
                         className="btn"
@@ -1034,7 +1069,7 @@ export default function LeadSearch() {
                         onClick={() => void handleEnrichLead(lead)}
                         style={{ fontSize: '12.5px', padding: '4px 12px' }}
                       >
-                        {enriching.has(lead.id) ? '…' : 'Find Email'}
+                        Find Email
                       </button>
                     )}
                   </td>
@@ -1043,12 +1078,18 @@ export default function LeadSearch() {
                       <span style={{ fontSize: '12.5px' }}>{lead.phone}</span>
                     ) : fetchingPhoneId === lead.id ? (
                       <span style={{ fontSize: '12.5px', opacity: 0.6 }}>Fetching...</span>
-                    ) : lead.phone_attempted === true ? (
-                      <span style={{ fontSize: '12.5px', color: '#9ca3af', fontStyle: 'italic' }}>Not Found</span>
+                    ) : phoneNotFoundIds.has(lead.id) ? (
+                      <span style={{ fontSize: '12.5px', color: '#9ca3af', fontStyle: 'italic' }}>
+                        Not Found&nbsp;
+                        <button
+                          style={{ fontSize: '11px', color: 'var(--accent)', background: 'none', border: 'none', cursor: 'pointer', padding: 0, textDecoration: 'underline' }}
+                          onClick={() => setPhoneNotFoundIds((prev) => { const s = new Set(prev); s.delete(lead.id); return s })}
+                        >Retry</button>
+                      </span>
                     ) : (
                       <button
                         className="btn"
-                        disabled={!lead.id}
+                        disabled={fetchingPhoneId !== null || !lead.id}
                         onClick={() =>
                           lead.linkedinUrl
                             ? void handleFindPhone(lead.id, lead.linkedinUrl)

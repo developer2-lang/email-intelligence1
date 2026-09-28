@@ -2,6 +2,7 @@ import { withSupabase } from "jsr:@supabase/server@^1";
 import { createClient } from "npm:@supabase/supabase-js@2";
 
 function extractPhone(item: any): string {
+  // mobile_number is the confirmed field name from the actor's live response.
   const candidates = [
     item.mobile_number,
     item.phone,
@@ -12,24 +13,16 @@ function extractPhone(item: any): string {
     item.telephone,
     item.contactPhone,
     Array.isArray(item.phoneNumbers) ? item.phoneNumbers[0] : item.phoneNumbers,
-    Array.isArray(item.phones) ? item.phones[0] : item.phones,
+    Array.isArray(item.phones)       ? item.phones[0]       : item.phones,
   ];
   for (const c of candidates) {
     if (typeof c === "string" && c.trim()) return c.trim();
-  }
-  const nested = [item.data, item.profile, item.contact, item.result];
-  for (const n of nested) {
-    if (n && typeof n === "object" && !Array.isArray(n)) {
-      const deep = extractPhone(n);
-      if (deep) return deep;
-    }
   }
   return "";
 }
 
 export default {
   fetch: withSupabase({ auth: ["user", "publishable", "secret"] }, async (req) => {
-    // CORS headers so your React app can call this function
     const corsHeaders = {
       "Access-Control-Allow-Origin": "*",
       "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
@@ -39,103 +32,91 @@ export default {
       return new Response("ok", { headers: corsHeaders });
     }
 
+    // Always respond HTTP 200 so the frontend can read the JSON body.
+    const respond = (body: object) =>
+      new Response(JSON.stringify(body), {
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+
+    const { leadId, linkedinUrl } = await req.json().catch(() => ({}));
+    if (!leadId || !linkedinUrl) {
+      return respond({ success: false, found: false, reason: "leadId and linkedinUrl are required" });
+    }
+
     try {
-      // 1. Read the target row + profile from the React app
-      const { leadId, linkedinUrl } = await req.json();
-      if (!leadId || !linkedinUrl) {
-        return new Response(
-          JSON.stringify({ success: false, error: "leadId and linkedinUrl are required" }),
-          { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-        );
+      const APIFY_TOKEN = Deno.env.get("APIFY_TOKEN");
+      const ACTOR_ID    = Deno.env.get("APIFY_STAGE2_ACTOR_ID"); // J9mf98b4CIZpW72Ue
+
+      if (!APIFY_TOKEN || !ACTOR_ID) {
+        console.error("Missing APIFY_TOKEN or APIFY_STAGE2_ACTOR_ID");
+        return respond({ success: false, found: false, reason: "Server config error: missing Apify credentials" });
       }
 
-      // 2. Read secrets from Supabase
-      const APIFY_TOKEN = Deno.env.get("APIFY_TOKEN");
-      // Actor "Find Mobile Phones of Decision Makers". Plain ID, so no "~" encoding needed.
-      const APIFY_PHONE_ACTOR_ID = Deno.env.get("APIFY_PHONE_ACTOR_ID") || "J9mf98b4CIZpW72Ue";
+      // The mobile phone actor (J9mf98b4CIZpW72Ue) expects { "linkedinUrl": "..." }
+      // If we pass an invalid schema, it uses its default run input (which is Alex Maccaw's profile!)
+      const apifyInput = { linkedinUrl: linkedinUrl };
+      console.log("Calling phone actor", ACTOR_ID, "input:", JSON.stringify(apifyInput));
 
-      console.log("📞 Calling Apify actor", APIFY_PHONE_ACTOR_ID, "for", linkedinUrl);
-
-      // 3. Call the actor with its expected input key: { linkedinUrl }
       const res = await fetch(
-        `https://api.apify.com/v2/acts/${APIFY_PHONE_ACTOR_ID}/run-sync-get-dataset-items?token=${APIFY_TOKEN}`,
+        `https://api.apify.com/v2/acts/${ACTOR_ID}/run-sync-get-dataset-items?token=${APIFY_TOKEN}`,
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ linkedinUrl }),
+          body: JSON.stringify(apifyInput),
         }
       );
 
       if (!res.ok) {
         const errBody = await res.text();
-        console.error(`❌ Apify ${res.status}:`, errBody);
-        throw new Error(`Apify call failed (${res.status}): ${errBody}`);
+        console.error(`Apify ${res.status}:`, errBody);
+        return respond({ success: false, found: false, reason: `Apify actor returned ${res.status}` });
       }
 
       const data = await res.json();
-      console.log("📥 Apify response:", JSON.stringify(data).slice(0, 500));
+      console.log("Apify raw:", JSON.stringify(data).slice(0, 500));
 
-      // 4. Parse the first result and pull the phone number
-      const list = Array.isArray(data) ? data : Array.isArray(data?.data) ? data.data : [data];
+      // Response: [{ input_url, mobile_number, profile_url, ... }]
+      const list  = Array.isArray(data) ? data : (Array.isArray(data?.data) ? data.data : [data]);
       const first = list[0] ?? {};
-      const phone = extractPhone(first);
-      console.log("📞 phone found:", phone);
+      const phone = extractPhone(first); // reads mobile_number first
+      console.log("phone found:", phone || "(none)");
 
-      // Service client (bypasses RLS) for writing back to public.leads.
       const serviceClient = createClient(
         Deno.env.get("SUPABASE_URL")!,
         Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
       );
 
       if (!phone) {
-        const message = String(first?.message || "");
-        const noMobile =
-          first?.success === false ||
-          /not found/i.test(message) ||
-          /no mobile/i.test(message);
-        // Persist the "attempted" flag so the Lead Search UI keeps showing
-        // "Not Found" after a refresh instead of re-offering "Find Phone".
-        const { error: attemptedError } = await serviceClient
-          .from("leads")
-          .update({ phone_attempted: true })
-          .eq("id", leadId);
-        if (attemptedError) console.error("❌ Attempted-flag update error:", attemptedError);
-        return new Response(
-          JSON.stringify({
-            success: false,
-            error: noMobile
-              ? "No mobile number found for this profile"
-              : "No phone number returned from Apify",
-          }),
-          { status: 404, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-        );
+        // Mark attempted so we know a lookup was run (but UI always shows button).
+        await serviceClient.from("leads").update({ phone_attempted: true }).eq("id", leadId);
+        return respond({ success: true, found: false, reason: "No phone number found for this profile", phone: "" });
       }
 
-      // 5. Write the phone (and the attempted flag) back to public.leads
+      // Save phone to the leads row.
       const { error: updateError } = await serviceClient
         .from("leads")
         .update({ phone, phone_attempted: true })
         .eq("id", leadId);
-      if (updateError) {
-        console.error("❌ Update error:", updateError);
-        return new Response(
-          JSON.stringify({ success: false, error: updateError.message }),
-          { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-        );
-      }
-      console.log("✅ Updated lead", leadId, "phone =", phone);
 
-      // 6. Send the phone back to the React frontend
-      return new Response(
-        JSON.stringify({ success: true, found: true, phone }),
-        { headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
-    } catch (error: any) {
-      console.error("❌ Error:", error.message);
-      return new Response(
-        JSON.stringify({ success: false, error: error.message || "Phone lookup failed" }),
-        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
+      if (updateError) {
+        console.error("DB update error:", updateError);
+        return respond({ success: false, found: true, reason: updateError.message, phone });
+      }
+
+      console.log("Saved phone", phone, "for lead", leadId);
+
+      // Mirror into contacts — best-effort update (only if contact already exists).
+      const { error: mirrorError } = await serviceClient
+        .from("contacts")
+        .update({ phone })
+        .eq("linkedin_url", linkedinUrl);
+      if (mirrorError) console.error("Contact mirror error:", mirrorError);
+
+      return respond({ success: true, found: true, reason: "", phone });
+
+    } catch (err: any) {
+      console.error("Unhandled error:", err?.message);
+      return respond({ success: false, found: false, reason: err?.message || "Phone lookup failed" });
     }
   }),
 };

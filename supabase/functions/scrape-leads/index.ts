@@ -4,26 +4,40 @@ import { leadToContactRow, upsertContactMirrors } from "../_shared/contactMirror
 
 console.log("🔑 env check:", { url: !!Deno.env.get("SUPABASE_URL"), key: !!Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") });
 
-// Best-effort JWT payload reader (NOT signature verification — that is done by
-// Supabase at the gateway). Only an `authenticated` token's `sub` is a real user id.
-function decodeJwtPayload(token: string): Record<string, unknown> | null {
-  try {
-    const section = token.split(".")[1] ?? "";
-    const b64 = section.replace(/-/g, "+").replace(/_/g, "/");
-    return JSON.parse(atob(b64));
-  } catch {
-    return null;
+// Error carrying an HTTP status, so the catch block below can answer 401
+// instead of flattening every failure into a 400.
+class HttpError extends Error {
+  constructor(readonly status: number, message: string) {
+    super(message);
+    this.name = "HttpError";
   }
 }
 
-function getUserId(req: Request): string | null {
-  const authz = req.headers.get("authorization") ?? "";
-  const token = authz.startsWith("Bearer ") ? authz.slice(7) : authz;
-  const payload = decodeJwtPayload(token);
-  if (payload && payload.role === "authenticated" && typeof payload.sub === "string") {
-    return payload.sub;
-  }
-  return null;
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+// The subset of SupabaseContext this function needs. Declared structurally so
+// the helper stays independent of the SDK's generic Database parameter.
+interface UserContext {
+  userClaims?: { id?: string } | null;
+  jwtClaims?: { sub?: string } | null;
+  authMode?: string;
+}
+
+// Resolve the caller's user id from the VERIFIED claims that withSupabase puts
+// on the context — never from a hand-decoded Authorization header.
+//
+// `leads.user_id` is covered by RLS (`auth.uid() = user_id`), so a row saved
+// with user_id = NULL is invisible to every user of the app: the Edge Function
+// reports a successful save while the table never shows the new lead. Failing
+// loudly is the only safe outcome when no verified user is present.
+function requireUserId(ctx: UserContext): string {
+  const candidate = ctx?.userClaims?.id ?? ctx?.jwtClaims?.sub;
+  if (typeof candidate === "string" && UUID_RE.test(candidate)) return candidate;
+  throw new HttpError(
+    401,
+    `Unauthorized — no verified user on this request (authMode=${ctx?.authMode ?? "unknown"}). ` +
+      `Sign in and retry.`,
+  );
 }
 
 // Stage 1 mappings against the profile scraper's actual response shape
@@ -84,7 +98,7 @@ function stripToNull(value: any): string | null {
   return s ? s : null;
 }
 
-function toLeadRow(profile: any, userId: string | null, searchQuery: string, industry: string, roleFilter: string) {
+function toLeadRow(profile: any, userId: string, searchQuery: string, industry: string, roleFilter: string) {
   const jobTitle = stripToNull(extractJobTitle(profile));
   const row: Record<string, any> = {
     user_id: userId,
@@ -99,6 +113,14 @@ function toLeadRow(profile: any, userId: string | null, searchQuery: string, ind
     industry: industry || "",
     source_query: searchQuery,
   };
+  // email and phone are deliberately ABSENT from this object, not set to null.
+  // A key that is absent from the payload is not part of the generated
+  // `DO UPDATE SET` list, so re-searching a person keeps whatever enrich-lead
+  // already found. Writing `email: null` explicitly would wipe the enriched
+  // address on every repeat search. On a fresh INSERT the column falls back to
+  // its default (NULL) either way, so a brand new lead still lands with a NULL
+  // email — and never an empty string, which is what stage 1 used to risk.
+  //
   // Only write job_title when the scraper actually provided a current position —
   // an omitted key on UPSERT keeps any previously saved value instead of nulling it.
   if (jobTitle) row.job_title = jobTitle;
@@ -106,7 +128,7 @@ function toLeadRow(profile: any, userId: string | null, searchQuery: string, ind
 }
 
 export default {
-  fetch: withSupabase({ auth: "none" }, async (req) => {
+  fetch: withSupabase({ auth: ["user", "publishable", "secret"] }, async (req, ctx) => {
     // CORS headers so your React app can call this function
     const corsHeaders = {
       "Access-Control-Allow-Origin": "*",
@@ -118,6 +140,12 @@ export default {
     }
 
     try {
+      // 0. Resolve the caller BEFORE anything expensive happens. A request with
+      //    no verified user is rejected here, so an unauthenticated caller can
+      //    never spend Apify credits or write a row nobody can read back.
+      const userId = requireUserId(ctx);
+      console.log("✅ Caller resolved:", userId, "via authMode:", ctx?.authMode);
+
       // 1. Get the filters from the React form
       const body = (await req.json()) ?? {};
       const filters = body.filters ?? {};
@@ -177,9 +205,9 @@ export default {
           geography: profile.location?.linkedinText || profile.location?.parsed?.country || "",
         }));
 
-      // 8. Rows to persist. user_id = authenticated user when a JWT is present,
-      //     otherwise NULL (public app, no login required).
-      const userId = getUserId(req);
+      // 8. Rows to persist. user_id is the verified caller's id (resolved in
+      //     step 0) so the RLS policy `auth.uid() = user_id` lets this user read
+      //     back exactly what they just saved.
       const rows = profiles
         .map((profile: any) => toLeadRow(profile, userId, searchQuery, filters.industry, filters.role))
         .filter((row: any) => row.linkedin_url);
@@ -191,34 +219,81 @@ export default {
           Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
         );
 
-        // 8a. Count only rows not already in the DB ("new leads saved").
-        const { data: existing } = await serviceClient
-          .from("leads")
-          .select("linkedin_url")
-          .in("linkedin_url", rows.map((row: any) => row.linkedin_url));
-        const existingSet = new Set((existing ?? []).map((row: any) => row.linkedin_url));
-        savedCount = rows.filter((row: any) => !existingSet.has(row.linkedin_url)).length;
+        // A lead is identified solely by linkedin_url, and (user_id, linkedin_url)
+        // is the only conflict target the table offers — so dedupe on that pair
+        // and nothing else. No email matching, no prefilter SELECT.
+        //
+        // This is not about the unique constraints; it is a Postgres limitation.
+        // A single ON CONFLICT DO UPDATE statement aborts with 21000 ("ON
+        // CONFLICT DO UPDATE command cannot affect row a second time") if it
+        // carries the same conflict key twice. user_id is identical across the
+        // whole batch, so one row per linkedin_url is what makes a bulk upsert
+        // safe to send at all.
+        const seenUrls = new Set<string>();
+        const rowsToSave = rows.filter((row: any) => {
+          if (seenUrls.has(row.linkedin_url)) return false;
+          seenUrls.add(row.linkedin_url);
+          return true;
+        });
+        const collapsedCount = rows.length - rowsToSave.length;
+        if (collapsedCount > 0) {
+          console.log(`ℹ️ Collapsed ${collapsedCount} repeated profile(s) from this batch.`);
+        }
 
-        // 8b. Persist. Requires a unique index/constraint on linkedin_url
-        //     (UPSERT target) — see migrations.
-        const { error: upsertError } = await serviceClient
-          .from("leads")
-          .upsert(rows, { onConflict: "linkedin_url", ignoreDuplicates: false });
+        console.log(`📤 UPSERT PAYLOAD — ${rowsToSave.length} row(s):`, JSON.stringify(rowsToSave, null, 2));
+
+        // One statement. Anything with a linkedin_url lands: a new person is
+        // INSERTed, a person already stored under this user is UPDATED in
+        // place. There is no path that silently discards a row, because
+        // ON CONFLICT DO NOTHING is never used.
+        //
+        // `.select()` is what makes the outcome observable — without it PostgREST
+        // returns a null body, and a saved row is indistinguishable from a
+        // dropped one. That missing response is how a lead went missing before.
+        const { data: upsertData, error: upsertError, count: upsertCount, status: upsertStatus } =
+          await serviceClient
+            .from("leads")
+            .upsert(rowsToSave, {
+              onConflict: "user_id,linkedin_url",
+              ignoreDuplicates: false,
+              count: "exact",
+            })
+            .select("*");
+
+        console.log("📥 UPSERT RESPONSE:", {
+          status: upsertStatus,
+          count: upsertCount,
+          rowsReturned: upsertData?.length ?? 0,
+          error: upsertError
+            ? { code: upsertError.code, message: upsertError.message, details: upsertError.details }
+            : null,
+          data: upsertData,
+        });
 
         if (upsertError) {
-          console.error("❌ Upsert error:", upsertError);
+          // Nothing is swallowed here. The one expected failure is 21000 from a
+          // duplicate conflict key inside the batch, which the dedupe above
+          // prevents; anything else is a real problem the caller must see.
+          console.error("🚨 Upsert failed:", upsertError);
           return new Response(JSON.stringify({ success: false, error: upsertError.message }), {
             headers: { ...corsHeaders, "Content-Type": "application/json" },
             status: 400,
           });
         }
-        console.log("✅ Upserted leads. New rows:", savedCount, "/", rows.length);
 
-        // 8c. Mirror into contacts so Lead Search rows also appear on the
+        // Report what the database confirmed, never the size of the array we
+        // sent — reporting our own array length is what made a lost row look
+        // like a successful save.
+        savedCount = upsertData?.length ?? 0;
+        console.log(
+          `✅ Saved ${savedCount} lead(s) (inserted or updated) out of ${rows.length} scraped profile(s).`,
+        );
+
+        // 8e. Mirror into contacts so Lead Search rows also appear on the
         //     Contacts page under the "lead search" contact type.
         const { error: mirrorError } = await upsertContactMirrors(
           serviceClient,
-          rows.map(leadToContactRow)
+          rowsToSave.map(leadToContactRow)
         );
         if (mirrorError) console.error("❌ Contact mirror upsert error:", mirrorError);
       } else {
@@ -237,10 +312,11 @@ export default {
         { headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     } catch (error: any) {
-      console.error("❌ Error:", error.message);
-      return new Response(JSON.stringify({ success: false, error: error.message }), {
+      console.error("❌ Error:", error?.message);
+      const status = error instanceof HttpError ? error.status : 400;
+      return new Response(JSON.stringify({ success: false, error: error?.message || "Search failed" }), {
         headers: { ...corsHeaders, "Content-Type": "application/json" },
-        status: 400,
+        status,
       });
     }
   }),
