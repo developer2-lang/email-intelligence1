@@ -13,6 +13,7 @@ import {
   fetchStates,
   removeCustomOption,
   saveCustomOption,
+  resolveCountryCode,
   type FilterOption,
   type ProfileCountOption,
 } from '../services/filterService'
@@ -246,11 +247,10 @@ export default function LeadSearch() {
   useEffect(() => {
     let cancelled = false
     ;(async () => {
-      const [ind, des, geo, st, dept, cs, np] = await Promise.all([
+      const [ind, des, geo, dept, cs, np] = await Promise.all([
         fetchIndustries(),
         fetchDesignations(),
         fetchGeographies(),
-        fetchStates(),
         fetchDepartments(),
         fetchCompanySizes(),
         fetchNumberOfProfiles(),
@@ -261,14 +261,11 @@ export default function LeadSearch() {
       setGeographyOptions(
         mergeUnique([geo.data.filter((o) => o.value !== 'all').map((o) => o.label)]),
       )
-      setStateOptions(
-        mergeUnique([st.data.map((o) => o.name).filter(Boolean)]),
-      )
       setDepartmentOptions(dept.data.map((o) => o.label))
       setCompanySizes(cs.data)
       setProfileCounts(np.data)
       setFilterMetaError(
-        [ind, des, geo, st, dept, cs, np].map((r) => r.error).filter(Boolean).join('; ') || null,
+        [ind, des, geo, dept, cs, np].map((r) => r.error).filter(Boolean).join('; ') || null,
       )
       setFilterMetaLoading(false)
     })()
@@ -276,6 +273,48 @@ export default function LeadSearch() {
       cancelled = true
     }
   }, [])
+
+  // Dependent State dropdown: Loads only states for the selected Geography.
+  // If Geography is empty, clear stateOptions and reset any selected state.
+  useEffect(() => {
+    let cancelled = false
+    const selectedGeography = filters.geography
+
+    if (!selectedGeography || !selectedGeography.trim()) {
+      setStateOptions([])
+      if (filters.state) {
+        setFilters((prev) => ({ ...prev, state: '' }))
+      }
+      return
+    }
+
+    const countryCode = resolveCountryCode(selectedGeography)
+    console.log('Selected Geography:', selectedGeography)
+    console.log('Country code:', countryCode)
+
+    ;(async () => {
+      const res = await fetchStates(countryCode, selectedGeography)
+      if (cancelled) return
+      if (res.error) {
+        console.error('Failed to fetch states for', selectedGeography, res.error)
+        setStateOptions([])
+        return
+      }
+      const states = res.data.map((s) => s.name).filter(Boolean)
+      console.log('Filtered states:', states)
+      setStateOptions(states)
+      setFilters((prev) => {
+        if (prev.state && !states.includes(prev.state)) {
+          return { ...prev, state: '' }
+        }
+        return prev
+      })
+    })()
+
+    return () => {
+      cancelled = true
+    }
+  }, [filters.geography])
 
   // Single source of truth for the table. The mount fetch and the post-search
   // refresh MUST use the identical query, otherwise the row count can shrink or
@@ -301,7 +340,18 @@ export default function LeadSearch() {
   }, [fetchLeadsFromDb])
 
   const handleSelect = (key: keyof Filters, value: string) => {
-    setFilters((prev) => ({ ...prev, [key]: value }))
+    if (key === 'geography') {
+      // When Geography changes:
+      // 1. Clear currently selected State immediately
+      // 2. Set new Geography
+      setFilters((prev) => ({
+        ...prev,
+        geography: value,
+        state: '',
+      }))
+    } else {
+      setFilters((prev) => ({ ...prev, [key]: value }))
+    }
   }
 
   const addCustomIndustry = (value: string) => {
@@ -383,17 +433,9 @@ export default function LeadSearch() {
       return
     }
     setCustomStates((prev) => [...prev, v])
-    void saveCustomOption('states', v).then((res) => {
-      setNotice(
-        res.error ? `Could not save "${v}": ${res.error}` : `Saved "${v}" as a custom state`,
-      )
-    })
   }
   const removeCustomState = (value: string) => {
     setCustomStates((prev) => prev.filter((x) => x !== value))
-    void removeCustomOption('states', value).then((res) => {
-      if (res.error) setNotice(`Could not remove "${value}": ${res.error}`)
-    })
   }
 
   const addCustomRole = (value: string) => {
@@ -768,6 +810,8 @@ export default function LeadSearch() {
     doc.save(`leads_${fileStamp()}.pdf`)
   }
 
+  const isGeoEmpty = !filters.geography || !filters.geography.trim()
+
   const comboboxFields: {
     key: 'industry' | 'designation' | 'geography' | 'state' | 'role'
     label: string
@@ -775,6 +819,8 @@ export default function LeadSearch() {
     customOptions: string[]
     onAddCustom: (value: string) => void
     onRemoveCustom: (value: string) => void
+    disabled?: boolean
+    placeholder?: string
   }[] = [
     {
       key: 'industry',
@@ -783,6 +829,7 @@ export default function LeadSearch() {
       customOptions: customIndustries,
       onAddCustom: addCustomIndustry,
       onRemoveCustom: removeCustomIndustry,
+      placeholder: 'All Industry',
     },
     {
       key: 'designation',
@@ -791,6 +838,7 @@ export default function LeadSearch() {
       customOptions: customDesignations,
       onAddCustom: addCustomDesignation,
       onRemoveCustom: removeCustomDesignation,
+      placeholder: 'All Designation',
     },
     {
       key: 'geography',
@@ -799,14 +847,17 @@ export default function LeadSearch() {
       customOptions: customGeographies,
       onAddCustom: addCustomGeography,
       onRemoveCustom: removeCustomGeography,
+      placeholder: 'All Geography',
     },
     {
       key: 'state',
       label: 'State',
       options: mergeUnique([stateOptions]),
-      customOptions: customStates,
+      customOptions: isGeoEmpty ? [] : customStates,
       onAddCustom: addCustomState,
       onRemoveCustom: removeCustomState,
+      disabled: isGeoEmpty,
+      placeholder: isGeoEmpty ? 'Select Geography first' : 'All State',
     },
     {
       key: 'role',
@@ -815,6 +866,7 @@ export default function LeadSearch() {
       customOptions: customRoles,
       onAddCustom: addCustomRole,
       onRemoveCustom: removeCustomRole,
+      placeholder: 'All Department',
     },
   ]
 
@@ -946,7 +998,8 @@ export default function LeadSearch() {
               onAddCustom={field.onAddCustom}
               onRemoveCustom={field.onRemoveCustom}
               onChange={(value) => handleSelect(field.key, value)}
-              placeholder={`All ${field.label}`}
+              placeholder={field.placeholder || `All ${field.label}`}
+              disabled={field.disabled}
             />
           ))}
           <div className="form-group" style={{ marginBottom: 0 }}>

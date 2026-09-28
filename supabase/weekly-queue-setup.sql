@@ -3,6 +3,14 @@
 -- ============================================================================
 -- Run this ONCE in the Supabase SQL editor (Dashboard → SQL → New query).
 --
+-- !! THIS FILE DEFINES THE THURSDAY AUTOMATION. DO NOT EDIT IT TO ADD MANUAL
+-- !! RESCHEDULING. A separate, purely additive job for records a user manually
+-- !! rescheduled from the Weekly Queue page lives in
+-- !!   supabase/weekly-queue-manual-schedule-setup.sql
+-- !! Run that one IN ADDITION to this file. It never unschedules or edits
+-- !! `weekly-new-contact-email`, so the Thursday 7:30 AM IST behaviour below is
+-- !! unchanged whether or not you have applied it.
+--
 -- What it does:
 --   1) Enables pg_net (HTTP requests from Postgres) and supabase_vault
 --      (encrypted secrets) if they are not already enabled.

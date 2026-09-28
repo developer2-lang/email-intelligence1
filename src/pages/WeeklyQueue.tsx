@@ -1,7 +1,9 @@
 import { useState, useMemo, useCallback, useEffect, useLayoutEffect, useRef } from 'react';
 import { AV_COLORS } from '../constants/constants';
 import { supabase } from '../supabase';
-import { getNextCronRun, formatScheduledTime } from '../utils/cronUtils';
+import { getNextCronRun, formatScheduledTime, formatManualScheduledTime } from '../utils/cronUtils';
+import type { ScheduleBatch, ScheduleType } from '../utils/weeklyQueueSchedule';
+import ChangeScheduleModal from '../components/ChangeScheduleModal';
 import RecipientActivityModal, { RecipientRow, ActivityTab } from '../components/RecipientActivityModal';
 
 // ─── ICONS (match the Contacts page icon system) ─────────────────────────────
@@ -49,6 +51,15 @@ const CloseIcon = ({ size = 16 }: { size?: number }) => (
   </svg>
 );
 
+const CalendarIcon = ({ size = 15 }: { size?: number }) => (
+  <svg {...iconProps} width={size} height={size}>
+    <rect x="3" y="4" width="18" height="18" rx="2" ry="2" />
+    <line x1="16" y1="2" x2="16" y2="6" />
+    <line x1="8" y1="2" x2="8" y2="6" />
+    <line x1="3" y1="10" x2="21" y2="10" />
+  </svg>
+);
+
 // ─── TYPES ───────────────────────────────────────────────────────────────────
 type QueueStatus = 'pending' | 'sending' | 'sent' | 'failed' | 'skipped';
 
@@ -75,6 +86,15 @@ interface QueueRow {
   next_retry_at: string | null;
   error_message: string | null;
   created_at: string | null;
+  // ── Manual schedule (migration 20261011000000) ──
+  /** Persisted due-date. NULL ⇒ still owned by the automatic Thursday run. */
+  scheduled_for: string | null;
+  schedule_type: string | null;
+  schedule_batch: number | null;
+  schedule_batch_size: number | null;
+  schedule_interval_minutes: number | null;
+  manually_scheduled: boolean | null;
+  schedule_updated_at: string | null;
 }
 
 interface WeeklyQueueProps {
@@ -121,15 +141,32 @@ function fmtDateTime(value?: string | null): string {
 }
 
 /**
- * Next cron slot for a queued contact, computed from its `queued_at` (the
- * real schedule: every 30 min, Thursday 02:00–18:00 UTC = 7:30 AM–11:30 PM IST).
- * Returns null when the row has no usable queued_at timestamp.
+ * The send slot shown in the "Scheduled For" column, in priority order:
+ *
+ *   1. Manually rescheduled row → the PERSISTED `scheduled_for` value. This is
+ *      read straight from Supabase, so it survives a page refresh.
+ *   2. Otherwise → the automatic Thursday 7:30 AM IST slot projected from
+ *      `queued_at`, exactly as before this feature existed.
+ *
+ * Returns null for non-pending rows (the caller falls back to `sent_at`).
  */
 function scheduledFor(row: QueueRow): Date | null {
-  if (!row.queued_at || row.status !== 'pending') return null;
+  if (row.status !== 'pending') return null;
+
+  if (row.scheduled_for) {
+    const manual = new Date(row.scheduled_for);
+    if (!Number.isNaN(manual.getTime())) return manual;
+  }
+
+  if (!row.queued_at) return null;
   const queued = new Date(row.queued_at);
   if (Number.isNaN(queued.getTime())) return null;
   return getNextCronRun(undefined, queued);
+}
+
+/** True when the row's schedule was set by a user rather than the Thursday run. */
+function hasManualSchedule(row: QueueRow): boolean {
+  return row.scheduled_for != null;
 }
 
 const TrackBadge = ({
@@ -164,6 +201,12 @@ const TrackBadge = ({
 
 const PAGE_SIZE_OPTIONS = [25, 50, 100];
 
+/** PostgREST/URL length ceiling — chunk `.in('id', …)` updates well below it. */
+const UPDATE_CHUNK_SIZE = 100;
+
+/** Only these statuses may ever be manually rescheduled. */
+const RESCHEDULABLE_STATUS: QueueStatus = 'pending';
+
 // ─── MAIN COMPONENT ──────────────────────────────────────────────────────────
 export default function WeeklyQueue({ onToast }: WeeklyQueueProps) {
   const [rows, setRows] = useState<QueueRow[]>([]);
@@ -181,6 +224,11 @@ export default function WeeklyQueue({ onToast }: WeeklyQueueProps) {
   const [removeTarget, setRemoveTarget] = useState<QueueRow | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [activity, setActivity] = useState<ActivityFilter | null>(null);
+
+  // ─── MANUAL RESCHEDULING (selected PENDING rows only) ───
+  const [selectedIds, setSelectedIds] = useState<ReadonlySet<string>>(() => new Set<string>());
+  const [scheduleOpen, setScheduleOpen] = useState(false);
+  const [savingSchedule, setSavingSchedule] = useState(false);
 
   // ─── DUAL HORIZONTAL SCROLLBARS (top + bottom, synced) ───
   // A thin strip above the table mirrors the native horizontal scrollbar of
@@ -224,8 +272,20 @@ export default function WeeklyQueue({ onToast }: WeeklyQueueProps) {
         .select('*')
         .order('queued_at', { ascending: false });
       if (error) throw error;
-      setRows((data ?? []) as QueueRow[]);
+      const nextRows = (data ?? []) as QueueRow[];
+      setRows(nextRows);
       setFetchError(null);
+
+      // Drop anything from the current selection that is no longer a pending
+      // record in the table we just loaded.
+      setSelectedIds((prev) => {
+        if (prev.size === 0) return prev;
+        const live = new Set<string>();
+        for (const r of nextRows) {
+          if (r.status === RESCHEDULABLE_STATUS && prev.has(r.id)) live.add(r.id);
+        }
+        return live.size === prev.size ? prev : live;
+      });
     } catch (e: any) {
       const message = e?.message || 'Failed to load the weekly queue';
       setFetchError(
@@ -412,6 +472,147 @@ export default function WeeklyQueue({ onToast }: WeeklyQueueProps) {
     return filteredRows.slice(start, start + pageSize);
   }, [filteredRows, safePage, pageSize]);
 
+  // ─── SELECTION (pending rows only) ───
+  // Selection is a Set of queue row ids. Every read path re-validates it against
+  // the current data (see selectedRows), and fetchQueue() additionally prunes
+  // the stored Set, so a record that has since been sent or deleted can never
+  // take part in a reschedule.
+  const totalPendingRows = useMemo(
+    () => dedupedRows.filter((r) => r.status === RESCHEDULABLE_STATUS),
+    [dedupedRows]
+  );
+
+  const selectedRows = useMemo(
+    () => dedupedRows.filter((r) => r.status === RESCHEDULABLE_STATUS && selectedIds.has(r.id)),
+    [dedupedRows, selectedIds]
+  );
+
+  const selectedCount = selectedRows.length;
+
+  const isRowSelected = (id: string) => selectedIds.has(id);
+
+  const toggleRowSelection = (id: string) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  /** Pending rows on the CURRENT page only — i.e. what "select all" can see. */
+  const pageReschedulableRows = useMemo(
+    () => paginatedRows.filter((r) => r.status === RESCHEDULABLE_STATUS),
+    [paginatedRows]
+  );
+
+  const allPageSelected =
+    pageReschedulableRows.length > 0 &&
+    pageReschedulableRows.every((r) => selectedIds.has(r.id));
+
+  const somePageSelected = pageReschedulableRows.some((r) => selectedIds.has(r.id));
+
+  const toggleSelectAllOnPage = () => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (allPageSelected) {
+        for (const r of pageReschedulableRows) next.delete(r.id);
+      } else {
+        for (const r of pageReschedulableRows) next.add(r.id);
+      }
+      return next;
+    });
+  };
+
+  const clearSelection = useCallback(() => setSelectedIds(new Set<string>()), []);
+
+  // ─── CHANGE SCHEDULE ───
+  // Persists the schedule ONLY. No insert, no delete, no `status` write, and
+  // certainly no email: the existing process-weekly-queue Edge Function remains
+  // the only component that ever sends. The `.eq('status','pending')` guard on
+  // every update means a record that got sent between selection and save is
+  // silently skipped rather than rescheduled.
+  const handleChangeSchedule = async (plan: {
+    batches: ScheduleBatch[];
+    scheduleType: ScheduleType;
+  }) => {
+    if (savingSchedule) return;
+
+    const batches = plan.batches;
+    if (batches.length === 0) {
+      onToast('Nothing to reschedule — no pending records are selected.', 'error');
+      return;
+    }
+
+    setSavingSchedule(true);
+    const nowIso = new Date().toISOString();
+    let updated = 0;
+    const failures: string[] = [];
+
+    try {
+      for (const batch of batches) {
+        const payload = {
+          scheduled_for: batch.scheduledFor.toISOString(),
+          schedule_type: plan.scheduleType,
+          schedule_timezone: 'Asia/Kolkata',
+          schedule_batch: batch.batchNumber,
+          schedule_batch_size: batch.toSno - batch.fromSno + 1,
+          schedule_interval_minutes:
+            batches.length > 1
+              ? Math.round(
+                  (batches[1].scheduledFor.getTime() - batches[0].scheduledFor.getTime()) / 60000
+                )
+              : 0,
+          manually_scheduled: true,
+          schedule_updated_at: nowIso,
+        };
+
+        for (let i = 0; i < batch.rowIds.length; i += UPDATE_CHUNK_SIZE) {
+          const chunk = batch.rowIds.slice(i, i + UPDATE_CHUNK_SIZE);
+          const { data, error } = await supabase
+            .from('weekly_email_queue')
+            .update(payload)
+            .in('id', chunk)
+            .eq('status', RESCHEDULABLE_STATUS)
+            .select('id');
+
+          if (error) {
+            failures.push(`Batch ${batch.batchNumber}: ${error.message}`);
+            continue;
+          }
+          updated += (data ?? []).length;
+        }
+      }
+
+      const requested = batches.reduce((sum, b) => sum + b.rowIds.length, 0);
+      const failedCount = failures.length;
+
+      if (failedCount > 0) {
+        // Report the real error. Never claim success on a partial write.
+        onToast(
+          `Rescheduled ${updated} of ${requested} pending contacts. Errors — ${failures.join('; ')}`,
+          'error'
+        );
+        if (updated === 0) return;
+      } else if (updated !== requested) {
+        onToast(
+          `Rescheduled ${updated} of ${requested} pending contacts. ${requested - updated} record(s) were no longer pending and were left unchanged.`,
+          'error'
+        );
+      } else {
+        onToast(`${updated} pending contacts rescheduled successfully.`, 'success');
+      }
+
+      setScheduleOpen(false);
+      clearSelection();
+      await fetchQueue();
+    } catch (e: any) {
+      onToast('Failed to change schedule: ' + (e?.message || e), 'error');
+    } finally {
+      setSavingSchedule(false);
+    }
+  };
+
   // ─── REMOVE FROM QUEUE ───
   const handleConfirmRemove = async () => {
     if (submitting || !removeTarget) return;
@@ -447,6 +648,32 @@ export default function WeeklyQueue({ onToast }: WeeklyQueueProps) {
       { label: 'Industry', value: r.industry || '—' },
       { label: 'Status', value: STATUS_META[r.status].label },
       { label: 'Queued', value: fmtDateTime(r.queued_at) },
+      {
+        label: 'Scheduled For',
+        value: (() => {
+          if (r.status === 'sent' && r.sent_at) return formatScheduledTime(new Date(r.sent_at));
+          const slot = scheduledFor(r);
+          return slot ? formatManualScheduledTime(slot) : '—';
+        })(),
+      },
+      {
+        label: 'Schedule Source',
+        value: hasManualSchedule(r) ? 'Manual (changed from this page)' : 'Automatic — Thursday 7:30 AM IST',
+      },
+      { label: 'Schedule Type', value: r.schedule_type || '—' },
+      { label: 'Schedule Batch', value: r.schedule_batch != null ? `Batch ${r.schedule_batch}` : '—' },
+      {
+        label: 'Batch Size',
+        value: r.schedule_batch_size != null ? `${r.schedule_batch_size} contacts` : '—',
+      },
+      {
+        label: 'Batch Interval',
+        value:
+          r.schedule_interval_minutes != null && r.schedule_interval_minutes > 0
+            ? `${r.schedule_interval_minutes} minutes`
+            : '—',
+      },
+      { label: 'Schedule Updated', value: fmtDateTime(r.schedule_updated_at) },
       { label: 'Attempted', value: fmtDateTime(r.attempted_at) },
       { label: 'Sent', value: fmtDateTime(r.sent_at) },
       { label: 'Opened', value: fmtDateTime(r.opened_at) },
@@ -467,11 +694,16 @@ export default function WeeklyQueue({ onToast }: WeeklyQueueProps) {
           <div className="contacts-title">Weekly Queue</div>
           <div className="contacts-sub">
             New contacts are queued automatically and receive one welcome email every Thursday from
-            7:30 AM IST (in batches of 30).
+            7:30 AM IST (in batches of 30). Select pending records to move them to a different
+            schedule — all other pending records keep the automatic Thursday slot.
           </div>
         </div>
-        <div className="ct-toolbar-right" style={{ marginTop: 0 }}>
-          <button className="btn btn-ghost" disabled={refreshing} onClick={() => void handleRefresh()}>
+        <div className="ct-toolbar-right">
+          <button
+            className="btn btn-ghost"
+            disabled={refreshing}
+            onClick={() => void handleRefresh()}
+          >
             <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
               <RefreshIcon size={14} />
               {refreshing ? 'Refreshing...' : 'Refresh'}
@@ -541,9 +773,44 @@ export default function WeeklyQueue({ onToast }: WeeklyQueueProps) {
         <div className="ct-toolbar">
           <div>
             <div className="ct-panel-title">Weekly Email Queue</div>
-            <div className="ct-record-count">{filteredRows.length} records</div>
+            <div className="ct-record-count">
+              {filteredRows.length} records
+              {selectedCount > 0 ? ` · ${selectedCount} pending selected` : ''}
+            </div>
           </div>
           <div className="ct-toolbar-right">
+            <button
+              className="btn btn-primary"
+              disabled={selectedCount === 0 || savingSchedule}
+              title={
+                selectedCount === 0
+                  ? 'Select one or more pending records to change their schedule'
+                  : `Change the schedule for ${selectedCount} pending record${selectedCount === 1 ? '' : 's'}`
+              }
+              onClick={() => setScheduleOpen(true)}
+            >
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+                <CalendarIcon size={14} />
+                Change Schedule
+                {selectedCount > 0 ? ` (${selectedCount})` : ''}
+              </span>
+            </button>
+            {selectedCount > 0 && (
+              <button className="btn btn-ghost" onClick={clearSelection} disabled={savingSchedule}>
+                Clear
+              </button>
+            )}
+            {totalPendingRows.length > 0 && selectedCount < totalPendingRows.length && (
+              <button
+                className="btn btn-ghost"
+                onClick={() => setSelectedIds(new Set(totalPendingRows.map((r) => r.id)))}
+                disabled={savingSchedule}
+                title={`Select all ${totalPendingRows.length} pending records`}
+                style={{ fontSize: 12.5 }}
+              >
+                Select All Pending ({totalPendingRows.length})
+              </button>
+            )}
             <div className="ct-search">
               <span className="ct-search-ic">
                 <SearchIcon size={15} />
@@ -588,9 +855,35 @@ export default function WeeklyQueue({ onToast }: WeeklyQueueProps) {
           </div>
         )}
         <div className="ct-table-wrap" ref={bottomWrapRef} onScroll={handleBottomScroll}>
-          <table className="ct-table" style={{ minWidth: 1310 }}>
+          <table className="ct-table" style={{ minWidth: 1360 }}>
             <thead>
               <tr>
+                <th style={{ width: 44 }}>
+                  <input
+                    type="checkbox"
+                    checked={allPageSelected}
+                    ref={(el) => {
+                      if (el) el.indeterminate = !allPageSelected && somePageSelected;
+                    }}
+                    disabled={pageReschedulableRows.length === 0}
+                    onChange={toggleSelectAllOnPage}
+                    title={
+                      pageReschedulableRows.length === 0
+                        ? 'No pending records on this page'
+                        : allPageSelected
+                          ? 'Deselect all pending records on this page'
+                          : 'Select all pending records on this page'
+                    }
+                    aria-label="Select all pending records on this page"
+                    style={{
+                      accentColor: '#2563EB',
+                      width: 16,
+                      height: 16,
+                      cursor: pageReschedulableRows.length === 0 ? 'not-allowed' : 'pointer',
+                      margin: 0,
+                    }}
+                  />
+                </th>
                 <th>Name</th>
                 <th>Email</th>
                 <th>Company</th>
@@ -608,7 +901,7 @@ export default function WeeklyQueue({ onToast }: WeeklyQueueProps) {
             <tbody>
               {loading ? (
                 <tr>
-                  <td colSpan={12}>
+                  <td colSpan={13}>
                     <div className="empty-state">
                       <div style={{ display: 'inline-flex', alignItems: 'center', gap: 10 }}>
                         <span className="spinner"></span>
@@ -619,7 +912,7 @@ export default function WeeklyQueue({ onToast }: WeeklyQueueProps) {
                 </tr>
               ) : paginatedRows.length === 0 ? (
                 <tr>
-                  <td colSpan={12}>
+                  <td colSpan={13}>
                     <div className="empty-state">
                       <div className="empty-icon">📬</div>
                       <div className="empty-title">No queued contacts</div>
@@ -635,8 +928,43 @@ export default function WeeklyQueue({ onToast }: WeeklyQueueProps) {
                 paginatedRows.map((r) => {
                   const avatarBg = AV_COLORS[(r.full_name || 'A').charCodeAt(0) % AV_COLORS.length];
                   const meta = STATUS_META[r.status];
+                  // Selection is restricted to PENDING rows. Everything else
+                  // (sending / sent / opened / not opened / failed / skipped)
+                  // renders a disabled checkbox so it can never be picked.
+                  const canSelect = r.status === RESCHEDULABLE_STATUS;
                   return (
-                    <tr key={r.id}>
+                    <tr
+                      key={r.id}
+                      style={{
+                        background: isRowSelected(r.id) ? '#EFF6FF' : undefined,
+                        cursor: canSelect ? 'pointer' : undefined,
+                      }}
+                      onClick={(e) => {
+                        const target = e.target as HTMLElement;
+                        if (target.closest('button, a, input, select, textarea')) return;
+                        if (canSelect) {
+                          toggleRowSelection(r.id);
+                        }
+                      }}
+                    >
+                      <td style={{ textAlign: 'center' }}>
+                        {canSelect ? (
+                          <input
+                            type="checkbox"
+                            checked={isRowSelected(r.id)}
+                            onChange={() => toggleRowSelection(r.id)}
+                            title={`Select ${r.full_name || r.email || 'this contact'}`}
+                            aria-label={`Select ${r.full_name || r.email || r.id}`}
+                            style={{
+                              accentColor: '#2563EB',
+                              width: 16,
+                              height: 16,
+                              margin: 0,
+                              cursor: 'pointer',
+                            }}
+                          />
+                        ) : null}
+                      </td>
                       <td>
                         <div className="ct-name-cell">
                           <div className="ct-avatar" style={{ background: avatarBg }}>
@@ -723,27 +1051,43 @@ export default function WeeklyQueue({ onToast }: WeeklyQueueProps) {
                           </span>
                         ) : (() => {
                           const slot = scheduledFor(r);
-                          return slot ? (
+                          if (!slot) {
+                            return (
+                              <span className="ct-desig" style={{ whiteSpace: 'nowrap' }}>
+                                —
+                              </span>
+                            );
+                          }
+                          // A manually rescheduled row shows the PERSISTED
+                          // value from Supabase (survives refresh) in a
+                          // distinct colour; an untouched row keeps the
+                          // automatic Thursday 7:30 AM IST projection.
+                          const manual = hasManualSchedule(r);
+                          return (
                             <span
+                              title={
+                                manual
+                                  ? `Manually scheduled${r.schedule_batch ? ` — batch ${r.schedule_batch}` : ''}${
+                                      r.schedule_updated_at
+                                        ? `, changed ${fmtDateTime(r.schedule_updated_at)}`
+                                        : ''
+                                    }`
+                                  : 'Automatic weekly queue — every Thursday from 7:30 AM IST'
+                              }
                               style={{
                                 display: 'inline-block',
                                 padding: '3px 10px',
                                 borderRadius: 999,
-                                background: STATUS_META.pending.bg,
-                                color: STATUS_META.pending.color,
+                                background: manual ? '#DBEAFE' : STATUS_META.pending.bg,
+                                color: manual ? '#1D4ED8' : STATUS_META.pending.color,
                                 fontSize: 11.5,
                                 fontWeight: 600,
                                 whiteSpace: 'nowrap',
                               }}
                             >
-                              {formatScheduledTime(slot)}
-                            </span>
-                          ) : (
-                            <span
-                              className="ct-desig"
-                              style={{ whiteSpace: 'nowrap' }}
-                            >
-                              —
+                              {manual
+                                ? formatManualScheduledTime(slot)
+                                : formatScheduledTime(slot)}
                             </span>
                           );
                         })()}
@@ -921,6 +1265,16 @@ export default function WeeklyQueue({ onToast }: WeeklyQueueProps) {
             </div>
           </div>
         </div>
+      )}
+
+      {/* ─── MODAL: CHANGE SCHEDULE (pending records only) ─── */}
+      {scheduleOpen && (
+        <ChangeScheduleModal
+          rows={selectedRows}
+          submitting={savingSchedule}
+          onClose={() => setScheduleOpen(false)}
+          onSubmit={(plan) => void handleChangeSchedule(plan)}
+        />
       )}
 
       {/* ─── MODAL: RECIPIENT ACTIVITY ─── */}

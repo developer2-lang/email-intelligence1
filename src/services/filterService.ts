@@ -56,15 +56,98 @@ export function fetchGeographies(): Promise<{ data: FilterOption[]; error: strin
 export interface StateOption {
   id: number | string
   name: string
+  country_code?: string
+  country_name?: string
 }
 
-// The public.states table uses id, name, created_at
-export async function fetchStates(): Promise<{ data: StateOption[]; error: string | null }> {
+export const GEOGRAPHY_TO_COUNTRY_CODE: Record<string, string> = {
+  // India
+  'india': 'IN',
+  'in': 'IN',
+  'ind': 'IN',
+
+  // USA
+  'usa': 'US',
+  'us': 'US',
+  'u.s.a.': 'US',
+  'u.s.': 'US',
+  'united states': 'US',
+  'united states of america': 'US',
+
+  // Canada
+  'canada': 'CA',
+  'ca': 'CA',
+  'can': 'CA',
+
+  // UK / Great Britain
+  'united kingdom': 'GB',
+  'uk': 'GB',
+  'u.k.': 'GB',
+  'great britain': 'GB',
+
+  // Australia
+  'australia': 'AU',
+  'au': 'AU',
+
+  // Germany
+  'germany': 'DE',
+  'de': 'DE',
+
+  // France
+  'france': 'FR',
+  'fr': 'FR',
+
+  // Singapore
+  'singapore': 'SG',
+  'sg': 'SG',
+
+  // UAE
+  'united arab emirates': 'AE',
+  'uae': 'AE',
+}
+
+export function resolveCountryCode(geography?: string | null): string | null {
+  if (!geography) return null
+  const cleaned = geography.trim().toLowerCase()
+  if (!cleaned) return null
+
+  if (GEOGRAPHY_TO_COUNTRY_CODE[cleaned]) {
+    return GEOGRAPHY_TO_COUNTRY_CODE[cleaned]
+  }
+
+  const upper = geography.trim().toUpperCase()
+  if (/^[A-Z]{2}$/.test(upper)) {
+    return upper
+  }
+
+  return null
+}
+
+// The public.states table uses id, name, created_at, country_code, country_name
+export async function fetchStates(
+  countryCode?: string | null,
+  geographyName?: string | null,
+): Promise<{ data: StateOption[]; error: string | null }> {
   try {
-    const { data, error } = await supabase
+    const code = countryCode ? countryCode.toUpperCase() : resolveCountryCode(geographyName)
+
+    if (!code && !geographyName) {
+      // Do not load all countries' states by default
+      return { data: [], error: null }
+    }
+
+    let query = supabase
       .from('states')
-      .select('id, name')
+      .select('id, name, country_code, country_name')
       .order('name', { ascending: true })
+
+    if (code) {
+      query = query.eq('country_code', code)
+    } else if (geographyName) {
+      query = query.ilike('country_name', geographyName.trim())
+    }
+
+    const { data, error } = await query
 
     if (error) return { data: [], error: error.message }
     return { data: (data as StateOption[]) || [], error: null }

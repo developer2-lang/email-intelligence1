@@ -9,12 +9,45 @@
  * (20260927000000_weekly_new_contact_automation.sql) — and emails each NEW
  * contact exactly ONCE through Gmail SMTP.
  *
+ * ─── TWO INDEPENDENT ENTRY POINTS, ONE SENDER ─────────────────────────────
+ * The same function serves two pg_cron jobs, distinguished ONLY by the JSON
+ * body's `mode` field. Nothing else differs — same SMTP, same template, same
+ * claim/atomicity/retry logic, same per-run budget.
+ *
+ *   mode "all" (default, body '{}')  → job `weekly-new-contact-email`,
+ *     the 30-minute 02:00-18:00 UTC Thursday cron (07:30 AM-11:30 PM IST). THIS
+ *     IS THE PRE-EXISTING AUTOMATIC FLOW AND IT IS UNCHANGED. It still POSTs
+ *     '{}'. See supabase/weekly-queue-setup.sql.
+ *
+ *   mode "scheduled_only"  → job `weekly-queue-manual-schedule`, a 5-minute
+ *     cron (every 5 minutes, all week). Additive; only picks up rows a user
+ *     manually rescheduled from the Weekly Queue page to a date/time that is
+ *     NOT a Thursday slot. See supabase/weekly-queue-manual-schedule-setup.sql.
+
+ *
+ * ─── scheduled_for (migration 20261011000000) ──────────────────────────────
+ * A pending row is claimable only when it is DUE:
+ *
+ *   scheduled_for IS NULL      → always due. This is every row created by the
+ *     contacts/leads triggers and every row that existed before the migration,
+ *     so the Thursday 7:30 AM IST behaviour is byte-for-byte the same as before.
+ *   scheduled_for IS NOT NULL  → due only once scheduled_for <= now(). A record
+ *     the user moved to "Oct 1, 10:00 AM IST" simply waits for that instant.
+ *
+ * In "scheduled_only" mode the claim is additionally narrowed to the EARLIEST
+ * distinct scheduled_for instant among due rows, so one cron fire drains exactly
+ * one manual batch and can never bleed into the next (which is due later).
+ *
  *   - NEW contacts only: the queue table is only ever populated by an INSERT
  *     trigger on public.contacts, so contacts that existed before the
  *     migration are never present.
  *   - One-time send: UNIQUE(contact_id) means a contact has at most one queue
  *     row; rows are atomically claimed (pending → sending) so concurrent
  *     invocations (cron + a manual smoke test) can never double-send.
+ *   - Manual rescheduling is a pure due-date change: the Weekly Queue page
+ *     UPDATEs scheduled_for on selected PENDING rows and nothing else. This
+ *     function remains the only thing that ever sends, and it never marks a row
+ *     'sent' — only a successful SMTP send does.
  *   - Budget pacing: the free Edge Function wall-clock limit is ~150s, so the
  *     run stops at TIME_BUDGET_MS / MAX_EMAILS_PER_RUN and releases the
  *     remainder back to 'pending' — leftovers are drained by the next run.
@@ -327,12 +360,35 @@ async function markRow(id: string, updates: Record<string, unknown>): Promise<vo
   if (error) throw new Error(`Failed to update queue row ${id}: ${error.message}`);
 }
 
+/** Which rows this invocation is allowed to work on. */
+type QueueMode = 'all' | 'scheduled_only';
+
 /**
  * Recover rows a crashed run left in 'sending', then atomically claim up to
- * `limit` pending rows (status 'pending' → 'sending'). Concurrent invocations
- * cannot double-claim because the UPDATE re-checks status='pending'.
+ * `limit` DUE pending rows (status 'pending' → 'sending'). Concurrent
+ * invocations cannot double-claim because the UPDATE re-checks status='pending'.
+ *
+ * Due-ness is driven by `scheduled_for` (migration 20261011000000):
+ *
+ *   'all'            → scheduled_for IS NULL **or** scheduled_for <= now().
+ *                      Rows with no manual schedule (i.e. every row the
+ *                      contacts/leads triggers create) stay unconditionally
+ *                      eligible, which is exactly the pre-migration behaviour —
+ *                      the Thursday 07:30 AM IST run is unaffected. Rows a user
+ *                      manually rescheduled are additionally honoured if they
+ *                      have come due by then.
+ *   'scheduled_only' → scheduled_for IS NOT NULL AND scheduled_for <= now(),
+ *                      and only for the EARLIEST distinct due instant.
+ *
+ * Ordering is deliberately untouched in 'all' mode (`queued_at asc`, the
+ * original query) so Thursday behaves identically. 'scheduled_only' orders by
+ * scheduled_for first, because a manual batch schedule is expressed as
+ * increasing timestamps.
  */
-async function claimPending(limit: number): Promise<{ claimed: any[]; reclaimed: number }> {
+async function claimPending(
+  limit: number,
+  mode: QueueMode = 'all'
+): Promise<{ claimed: any[]; reclaimed: number }> {
   const nowIso = new Date().toISOString();
   let reclaimed = 0;
 
@@ -362,23 +418,66 @@ async function claimPending(limit: number): Promise<{ claimed: any[]; reclaimed:
     }
   }
 
-  const { data: pending, error: pendingError } = await supabase
-    .from('weekly_email_queue')
-    .select('id')
-    .eq('status', 'pending')
-    .or(`next_retry_at.is.null,next_retry_at.lte.${nowIso}`)
-    .order('queued_at', { ascending: true })
-    .limit(limit);
+  // Both branches share the same base filters; only the due-ness gate, the
+  // ordering and (in scheduled_only) the batch narrowing differ.
+  const basePending = () =>
+    supabase
+      .from('weekly_email_queue')
+      .select('id,scheduled_for')
+      .eq('status', 'pending')
+      .or(`next_retry_at.is.null,next_retry_at.lte.${nowIso}`);
+
+  const { data: pending, error: pendingError } =
+    mode === 'scheduled_only'
+      ? await basePending()
+          // Only rows a user manually rescheduled, and only once they are due.
+          .not('scheduled_for', 'is', null)
+          .lte('scheduled_for', nowIso)
+          .order('scheduled_for', { ascending: true })
+          .order('queued_at', { ascending: true })
+          .limit(limit)
+      : await basePending()
+          // Original ordering, plus the due-ness gate for manually rescheduled
+          // rows. `scheduled_for.is.null` keeps every trigger-created row
+          // unconditionally eligible → Thursday is unchanged.
+          .or(`scheduled_for.is.null,scheduled_for.lte.${nowIso}`)
+          .order('queued_at', { ascending: true })
+          .limit(limit);
+
   if (pendingError) throw new Error(`Failed to list pending rows: ${pendingError.message}`);
   if (!pending || pending.length === 0) return { claimed: [], reclaimed };
 
-  const ids = (pending as any[]).map((p) => p.id);
-  const { data: claimed, error: claimError } = await supabase
-    .from('weekly_email_queue')
-    .update({ status: 'sending', attempted_at: nowIso })
-    .in('id', ids)
-    .eq('status', 'pending')
-    .select('*');
+  // One fire drains exactly one manual batch: keep only the rows sharing the
+  // earliest due instant, so a batch that is due at 11:00 can never be sent
+  // early by a 10:05 fire that still has claim capacity left over.
+  let candidates = pending as any[];
+  if (mode === 'scheduled_only' && candidates.length > 0) {
+    const earliest = candidates[0].scheduled_for as string | null;
+    const sameInstant = candidates.filter((r: any) => r.scheduled_for === earliest);
+    if (sameInstant.length < candidates.length) {
+      log(
+        `[Claim] narrowing to earliest due instant ${earliest} — ${sameInstant.length}/${candidates.length} row(s) held back for a later batch`
+      );
+    }
+    candidates = sameInstant.slice(0, limit);
+  }
+
+  const ids = candidates.map((p: any) => p.id);
+  // Re-assert due-ness in the UPDATE as well, so a row whose scheduled_for was
+  // pushed forward between the SELECT and this write can never be claimed early.
+  const baseClaim = () =>
+    supabase
+      .from('weekly_email_queue')
+      .update({ status: 'sending', attempted_at: nowIso })
+      .in('id', ids)
+      .eq('status', 'pending')
+      .or(`scheduled_for.is.null,scheduled_for.lte.${nowIso}`);
+
+  const { data: claimed, error: claimError } =
+    mode === 'scheduled_only'
+      ? await baseClaim().not('scheduled_for', 'is', null).select('*')
+      : await baseClaim().select('*');
+
   if (claimError) throw new Error(`Failed to claim pending rows: ${claimError.message}`);
   return { claimed: claimed || [], reclaimed };
 }
@@ -441,9 +540,10 @@ async function sendOne(
 }
 
 // ─── Main processing loop ──────────────────────────────────────────────────
-async function processQueue() {
+async function processQueue(mode: QueueMode) {
   const start = Date.now();
   const counts = {
+    mode,
     claimed: 0,
     reclaimed: 0,
     sent: 0,
@@ -454,12 +554,12 @@ async function processQueue() {
     pending_remaining: 0,
   };
 
-  const { claimed, reclaimed } = await claimPending(MAX_EMAILS_PER_RUN);
+  const { claimed, reclaimed } = await claimPending(MAX_EMAILS_PER_RUN, mode);
   counts.claimed = claimed.length;
   counts.reclaimed = reclaimed;
 
   if (claimed.length === 0) {
-    log('No pending queue rows.');
+    log(`No due queue rows for mode "${mode}".`);
     return counts;
   }
 
@@ -518,6 +618,25 @@ function dateBudgetExceeded(start: number): boolean {
   return Date.now() - start > TIME_BUDGET_MS;
 }
 
+/**
+ * Read the `mode` field from the cron POST body.
+ *
+ * The pre-existing Thursday job posts '{}', which resolves to 'all' — the
+ * original, unchanged behaviour. The additive manual-schedule job posts
+ * '{"mode":"scheduled_only"}'. An unreadable/absent/empty body is treated as
+ * 'all' so a malformed request can never accidentally restrict the run.
+ */
+async function readMode(req: Request): Promise<QueueMode> {
+  try {
+    const raw = await req.text();
+    if (!raw.trim()) return 'all';
+    const parsed = JSON.parse(raw);
+    return parsed?.mode === 'scheduled_only' ? 'scheduled_only' : 'all';
+  } catch {
+    return 'all';
+  }
+}
+
 // ─── Main entry ────────────────────────────────────────────────────────────
 Deno.serve(async (req) => {
   const start = Date.now();
@@ -535,9 +654,13 @@ Deno.serve(async (req) => {
     });
   }
 
+  // The existing Thursday job POSTs '{}' → 'all' → identical behaviour to
+  // before this field existed. The additive job POSTs {"mode":"scheduled_only"}.
+  const mode = await readMode(req);
+  log(`Processing weekly email queue (mode: ${mode})...`);
+
   try {
-    log('Processing weekly email queue...');
-    const summary = await processQueue();
+    const summary = await processQueue(mode);
     return new Response(
       JSON.stringify({ success: true, elapsed_ms: Date.now() - start, ...summary }),
       { status: 200, headers: { 'Content-Type': 'application/json' } }

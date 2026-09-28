@@ -87,3 +87,42 @@ export function formatScheduledTime(date: Date): string {
   // Output: "Thu, Sep 24 • 8:00 AM IST"
   return formatted.replace(/, (\d{1,2}:\d{2} [AP]M)$/, ' • $1') + ' IST';
 }
+
+// ─── Weekly scheduling window (single source of truth) ───────────────────────
+// The automatic Thursday run only ever operates inside this window, so a manual
+// schedule must respect it too. Exported as minutes-from-IST-midnight (not UTC)
+// because the "Time (IST)" control is entered and displayed in IST.
+
+/** 07:30 IST — first slot of the automatic Thursday window. */
+export const WEEKLY_WINDOW_START_MIN = 7 * 60 + 30; // 450
+
+/** 23:30 IST — last slot of the automatic Thursday window. */
+export const WEEKLY_WINDOW_END_MIN = 23 * 60 + 30; // 1410
+
+/** The existing weekly cadence: one batch every 30 minutes. */
+export const WEEKLY_SLOT_MINUTES = 30;
+
+/** The weekday the existing automatic queue runs on (0 = Sunday). */
+export const AUTOMATIC_QUEUE_WEEKDAY = 4; // Thursday
+
+/**
+ * Formats a manually-chosen schedule as "Oct 1, 2026 • 10:00 AM IST".
+ *
+ * Deliberately a different shape from formatScheduledTime(): that one renders
+ * the weekday because every automatic slot is a Thursday. A manual schedule can
+ * land on any day, so the weekday is noise and the year is worth showing.
+ */
+export function formatManualScheduledTime(date: Date): string {
+  if (Number.isNaN(date.getTime())) return '—';
+  const formatted = new Intl.DateTimeFormat('en-US', {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+    hour12: true,
+    timeZone: 'Asia/Kolkata', // IST = UTC+5:30
+  }).format(date); // "Oct 1, 2026, 10:00 AM"
+
+  return formatted.replace(/, (\d{1,2}:\d{2} [AP]M)$/, ' • $1') + ' IST';
+}

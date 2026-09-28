@@ -15,6 +15,7 @@ interface SearchableSelectProps {
   customOptions?: string[]
   onAddCustom?: (value: string) => void
   onRemoveCustom?: (value: string) => void
+  disabled?: boolean
 }
 
 interface PanelPosition {
@@ -32,6 +33,7 @@ export default function SearchableSelect({
   customOptions,
   onAddCustom,
   onRemoveCustom,
+  disabled = false,
 }: SearchableSelectProps) {
   const [open, setOpen] = useState(false)
   const [query, setQuery] = useState('')
@@ -105,7 +107,14 @@ export default function SearchableSelect({
   }, [placeholder, options, customOptions])
 
   const q = query.trim().toLowerCase()
-  const filtered = rows.filter((r) => !q || r.label.trim().toLowerCase().includes(q))
+  const qNorm = query.trim().normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase()
+  const filtered = rows.filter((r) => {
+    if (!q) return true
+    const labelLower = r.label.trim().toLowerCase()
+    if (labelLower.includes(q)) return true
+    const labelNorm = r.label.trim().normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase()
+    return labelNorm.includes(qNorm)
+  })
 
   const choose = (val: string) => {
     onChange(val)
@@ -143,10 +152,14 @@ export default function SearchableSelect({
       <button
         ref={triggerRef}
         type="button"
-        className="ss-trigger"
+        className={`ss-trigger${disabled ? ' ss-disabled' : ''}`}
         aria-haspopup="listbox"
-        aria-expanded={open}
-        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open && !disabled}
+        aria-disabled={disabled}
+        disabled={disabled}
+        onClick={() => {
+          if (!disabled) setOpen((v) => !v)
+        }}
       >
         <span className={`ss-trigger-text${value && value !== '' ? ' ss-has-value' : ''}`}>
           {triggerText}

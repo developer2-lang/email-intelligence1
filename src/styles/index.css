@@ -988,8 +988,17 @@ tbody tr:hover {
   transition: border-color 0.15s ease, box-shadow 0.15s ease;
 }
 
-.ss-trigger:hover {
+.ss-trigger:hover:not(:disabled):not(.ss-disabled) {
   border-color: var(--accent);
+}
+
+.ss-trigger:disabled,
+.ss-trigger.ss-disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+  background: var(--surface2);
+  border-color: var(--border1);
+  color: var(--text4);
 }
 
 .ss-trigger:focus-visible {
