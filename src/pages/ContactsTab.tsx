@@ -1385,7 +1385,7 @@ export default function ContactsTab({
                       handleStartEditTab(tab.id, tab.label);
                     }}
                   >
-                    <EditIcon size={12} />
+                    <EditIcon size={13} />
                   </span>
                 )}
               </button>
