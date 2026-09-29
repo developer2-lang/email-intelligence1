@@ -565,13 +565,35 @@ async function processQueue(mode: QueueMode) {
 
   const { html: bodyTemplate, subjectBase: subjectTemplate } = await resolveWelcomeContent();
 
-  const ids = Array.from(new Set(claimed.map((r: any) => r.contact_id)));
-  const { data: contactRows, error: contactsError } = await supabase
-    .from('contacts')
-    .select('*')
-    .in('id', ids);
-  if (contactsError) throw new Error(`Failed to fetch contacts: ${contactsError.message}`);
-  const contactMap = new Map<string, any>((contactRows || []).map((c: any) => [String(c.id), c]));
+  const allContactIds = Array.from(new Set(claimed.map((r: any) => r.contact_id)));
+  const normalContactIds = allContactIds.filter((id: string) => !id.startsWith('lead-'));
+  const leadQueueIds = allContactIds.filter((id: string) => id.startsWith('lead-'));
+
+  const contactMap = new Map<string, any>();
+
+  if (normalContactIds.length > 0) {
+    const { data: contactRows, error: contactsError } = await supabase
+      .from('contacts')
+      .select('*')
+      .in('id', normalContactIds);
+    if (contactsError) throw new Error(`Failed to fetch contacts: ${contactsError.message}`);
+    (contactRows || []).forEach((c: any) => contactMap.set(String(c.id), c));
+  }
+
+  if (leadQueueIds.length > 0) {
+    const cleanLeadIds = leadQueueIds.map((id: string) => id.replace(/^lead-/, ''));
+    const { data: leadRows, error: leadsError } = await supabase
+      .from('leads')
+      .select('*')
+      .in('id', cleanLeadIds);
+    if (leadsError) throw new Error(`Failed to fetch leads: ${leadsError.message}`);
+    (leadRows || []).forEach((l: any) => {
+      contactMap.set(`lead-${l.id}`, {
+        ...l,
+        company: l.company_name,
+      });
+    });
+  }
 
   const finished = new Set<string>();
 
