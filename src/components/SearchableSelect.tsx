@@ -16,6 +16,9 @@ interface SearchableSelectProps {
   onAddCustom?: (value: string) => void
   onRemoveCustom?: (value: string) => void
   disabled?: boolean
+  loading?: boolean
+  error?: string | null
+  emptyMessage?: string
 }
 
 interface PanelPosition {
@@ -34,6 +37,9 @@ export default function SearchableSelect({
   onAddCustom,
   onRemoveCustom,
   disabled = false,
+  loading = false,
+  error = null,
+  emptyMessage,
 }: SearchableSelectProps) {
   const [open, setOpen] = useState(false)
   const [query, setQuery] = useState('')
@@ -89,7 +95,7 @@ export default function SearchableSelect({
   }, [open])
 
   const selected = options.find((o) => o.value === value)
-  const triggerText = selected?.label ?? value ?? placeholder
+  const triggerText = selected?.label || (value ? value : placeholder)
 
   const rows = useMemo(() => {
     const seen = new Set<string>()
@@ -274,42 +280,75 @@ export default function SearchableSelect({
                 )}
 
                 <div className="ss-list">
-                  {filtered.length > 0 ? (
-                    filtered.map((r) => {
-                      const active = hovered === r.label || r.value === value
-                      return (
+                  {loading ? (
+                    <div
+                      className="ss-empty"
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '8px',
+                        padding: '10px 12px',
+                      }}
+                    >
+                      <span className="spinner" style={{ width: 14, height: 14 }} />
+                      <span>Loading {label ? label.toLowerCase() : 'options'}...</span>
+                    </div>
+                  ) : error ? (
+                    <div className="ss-empty" style={{ color: '#ef4444', padding: '10px 12px' }}>
+                      {error}
+                    </div>
+                  ) : filtered.length > 0 ? (
+                    <>
+                      {filtered.slice(0, 150).map((r) => {
+                        const active = hovered === r.label || r.value === value
+                        return (
+                          <div
+                            key={r.label}
+                            role="option"
+                            aria-selected={r.value === value}
+                            className={`ss-option${active ? ' ss-option-active' : ''}`}
+                            onMouseDown={(e) => {
+                              e.preventDefault()
+                              choose(r.value)
+                            }}
+                            onMouseEnter={() => setHovered(r.label)}
+                            onMouseLeave={() => setHovered((h) => (h === r.label ? null : h))}
+                          >
+                            <span className="ss-option-label">{r.label}</span>
+                            {r.custom && onRemoveCustom && (
+                              <span
+                                title={`Remove ${r.label}`}
+                                className="ss-option-remove"
+                                onMouseDown={(e) => e.stopPropagation()}
+                                onClick={(e) => {
+                                  e.stopPropagation()
+                                  onRemoveCustom(r.label)
+                                  setHovered(null)
+                                }}
+                              >
+                                ×
+                              </span>
+                            )}
+                          </div>
+                        )
+                      })}
+                      {filtered.length > 150 && (
                         <div
-                          key={r.label}
-                          role="option"
-                          aria-selected={r.value === value}
-                          className={`ss-option${active ? ' ss-option-active' : ''}`}
-                          onMouseDown={(e) => {
-                            e.preventDefault()
-                            if (!r.custom) choose(r.value)
+                          className="ss-empty"
+                          style={{
+                            fontSize: '11px',
+                            color: 'var(--text4)',
+                            borderTop: '1px solid var(--border)',
+                            background: 'var(--surface2)',
+                            textAlign: 'center',
                           }}
-                          onMouseEnter={() => setHovered(r.label)}
-                          onMouseLeave={() => setHovered((h) => (h === r.label ? null : h))}
                         >
-                          <span className="ss-option-label">{r.label}</span>
-                          {r.custom && onRemoveCustom && (
-                            <span
-                              title={`Remove ${r.label}`}
-                              className="ss-option-remove"
-                              onMouseDown={(e) => e.stopPropagation()}
-                              onClick={(e) => {
-                                e.stopPropagation()
-                                onRemoveCustom(r.label)
-                                setHovered(null)
-                              }}
-                            >
-                              ×
-                            </span>
-                          )}
+                          Showing 150 of {filtered.length} matches. Type to filter more.
                         </div>
-                      )
-                    })
+                      )}
+                    </>
                   ) : (
-                    <div className="ss-empty">No matches</div>
+                    <div className="ss-empty">{emptyMessage || 'No matches'}</div>
                   )}
                 </div>
               </>

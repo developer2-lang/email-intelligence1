@@ -18,6 +18,7 @@ import {
   type ProfileCountOption,
 } from '../services/filterService'
 import SearchableSelect from '../components/SearchableSelect'
+import { fetchMasterCompanies, addCustomCompanyToMaster } from '../services/companyService'
 import { queueContactsForWeeklyEmail } from '../services/weeklyQueueService'
 
 interface Lead {
@@ -37,6 +38,7 @@ interface Lead {
 }
 
 interface Filters {
+  company: string
   industry: string
   designation: string
   geography: string
@@ -46,7 +48,7 @@ interface Filters {
   maxItems: number
 }
 
-const DEFAULT_FILTERS: Filters = { industry: '', designation: '', geography: '', state: '', role: '', companySize: '', maxItems: 5 }
+const DEFAULT_FILTERS: Filters = { company: '', industry: '', designation: '', geography: '', state: '', role: '', companySize: '', maxItems: 5 }
 
 function mergeUnique(lists: string[][]): string[] {
   const seen = new Set<string>()
@@ -200,12 +202,16 @@ export default function LeadSearch() {
   const [filterMetaError, setFilterMetaError] = useState<string | null>(null)
 
   const [industryOptions, setIndustryOptions] = useState<string[]>([])
+  const [companyOptions, setCompanyOptions] = useState<string[]>([])
+  const [companyLoading, setCompanyLoading] = useState(false)
+  const [companyError, setCompanyError] = useState<string | null>(null)
   const [designationOptions, setDesignationOptions] = useState<string[]>([])
   const [geographyOptions, setGeographyOptions] = useState<string[]>([])
   const [stateOptions, setStateOptions] = useState<string[]>([])
   const [departmentOptions, setDepartmentOptions] = useState<string[]>([])
 
   const [customIndustries, setCustomIndustries] = useState<string[]>(() => loadCustomValues('custom_industries'))
+  const [customCompanies, setCustomCompanies] = useState<string[]>(() => loadCustomValues('custom_companies'))
   const [customDesignations, setCustomDesignations] = useState<string[]>(() => loadCustomValues('custom_designations'))
   const [customGeographies, setCustomGeographies] = useState<string[]>(() => loadCustomValues('custom_geographies'))
   const [customStates, setCustomStates] = useState<string[]>(() => loadCustomValues('custom_states'))
@@ -229,6 +235,10 @@ export default function LeadSearch() {
   }, [customIndustries])
 
   useEffect(() => {
+    localStorage.setItem('custom_companies', JSON.stringify(customCompanies))
+  }, [customCompanies])
+
+  useEffect(() => {
     localStorage.setItem('custom_designations', JSON.stringify(customDesignations))
   }, [customDesignations])
 
@@ -242,21 +252,29 @@ export default function LeadSearch() {
 
   // Load every filter dropdown from its master table on mount so the options
   // always reflect the database (single source of truth), never hardcoded
-  // lists. Geography labels can appear under multiple values ("India" vs
-  // "india") so they are de-duplicated; the 'all' sentinel row is skipped.
+  // lists. Companies are loaded dynamically from public.lb_company_master.
   useEffect(() => {
     let cancelled = false
+    setCompanyLoading(true)
+    setCompanyError(null)
     ;(async () => {
-      const [ind, des, geo, dept, cs, np] = await Promise.all([
+      const [ind, des, geo, dept, cs, np, co] = await Promise.all([
         fetchIndustries(),
         fetchDesignations(),
         fetchGeographies(),
         fetchDepartments(),
         fetchCompanySizes(),
         fetchNumberOfProfiles(),
+        fetchMasterCompanies(),
       ])
       if (cancelled) return
       setIndustryOptions(ind.data.map((o) => o.label))
+      if (co.error) {
+        setCompanyError(co.error)
+      } else {
+        setCompanyOptions(co.data)
+      }
+      setCompanyLoading(false)
       setDesignationOptions(des.data.map((o) => o.label))
       setGeographyOptions(
         mergeUnique([geo.data.filter((o) => o.value !== 'all').map((o) => o.label)]),
@@ -482,6 +500,52 @@ export default function LeadSearch() {
     })
   }
 
+  const addCustomCompany = async (value: string) => {
+    const name = value.trim()
+    if (!name) return
+
+    // Case-insensitive check against already loaded company list
+    const existing = companyOptions.find((company) => company.toLowerCase() === name.toLowerCase())
+    if (existing) {
+      handleSelect('company', existing)
+      setNotice(`Company "${existing}" is already available and has been selected.`)
+      return
+    }
+
+    setCompanyLoading(true)
+    const res = await addCustomCompanyToMaster(name)
+    if (res.error) {
+      setNotice(`Could not save company "${name}": ${res.error}`)
+      setCompanyLoading(false)
+      return
+    }
+
+    // Refresh company list from DB to ensure single source of truth
+    const refreshed = await fetchMasterCompanies()
+    if (!refreshed.error && refreshed.data.length > 0) {
+      setCompanyOptions(refreshed.data)
+    } else {
+      setCompanyOptions((prev) =>
+        mergeUnique([[...prev, name]]).sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }))
+      )
+    }
+    setCompanyLoading(false)
+
+    // Automatically select the newly added company
+    const selectedCompany = res.data || name
+    handleSelect('company', selectedCompany)
+
+    if (res.isDuplicate) {
+      setNotice(`Company "${selectedCompany}" already existed in database and is now selected.`)
+    } else {
+      setNotice(`Saved "${selectedCompany}" to companies and selected it.`)
+    }
+  }
+
+  const removeCustomCompany = (value: string) => {
+    setCustomCompanies((prev) => prev.filter((company) => company !== value))
+  }
+
   const handleSearch = async () => {
     setLoading(true)
     setError(null)
@@ -491,7 +555,7 @@ export default function LeadSearch() {
     // Mirrors how the Edge Function builds the Apify searchQuery, so the notice
     // names the search the user actually ran.
     const searchedQuery =
-      [filters.designation, filters.industry, filters.role, filters.state].filter(Boolean).join(' ') || 'CEO'
+      [filters.company, filters.designation, filters.industry, filters.role, filters.state].filter(Boolean).join(' ') || 'CEO'
     try {
       const { data, error } = await supabase.functions.invoke('scrape-leads', {
         body: { filters },
@@ -628,6 +692,7 @@ export default function LeadSearch() {
   }
 
   const hasFilters =
+    filters.company !== '' ||
     filters.industry !== '' ||
     filters.designation !== '' ||
     filters.geography !== '' ||
@@ -636,17 +701,19 @@ export default function LeadSearch() {
     filters.companySize !== ''
 
   const tableQuery = tableSearch.trim().toLowerCase()
-  // Only the table's own search box filters the rows. The dropdown filters
-  // (industry / designation / role / geography) are inputs to the Apify search,
-  // NOT table filters: they narrow what gets scraped, never what gets displayed.
+  // The company dropdown and table search narrow displayed rows; the other
+  // dropdowns are inputs to the Apify search only.
   // So a search that returns 0 new leads still renders every existing lead, and
   // the table can only be empty when the database is empty or the user typed a
   // search term that matches nothing.
+  const companyFilteredLeads = filters.company
+    ? leads.filter((lead) => lead.company_name?.toLowerCase().includes(filters.company.toLowerCase()))
+    : leads
   const filteredLeads = tableQuery
-    ? leads.filter((lead) =>
+    ? companyFilteredLeads.filter((lead) =>
         Object.values(lead).some((v) => String(v ?? '').toLowerCase().includes(tableQuery)),
       )
-    : leads
+    : companyFilteredLeads
 
   const csvCell = (v: unknown): string => {
     const s = String(v ?? '').replace(/[\r\n\t]+/g, ' ').trim()
@@ -813,15 +880,30 @@ export default function LeadSearch() {
   const isGeoEmpty = !filters.geography || !filters.geography.trim()
 
   const comboboxFields: {
-    key: 'industry' | 'designation' | 'geography' | 'state' | 'role'
+    key: 'company' | 'industry' | 'designation' | 'geography' | 'state' | 'role'
     label: string
     options: string[]
-    customOptions: string[]
-    onAddCustom: (value: string) => void
-    onRemoveCustom: (value: string) => void
+    customOptions?: string[]
+    onAddCustom?: (value: string) => void
+    onRemoveCustom?: (value: string) => void
     disabled?: boolean
     placeholder?: string
+    loading?: boolean
+    error?: string | null
+    emptyMessage?: string
   }[] = [
+    {
+      key: 'company',
+      label: 'Company',
+      options: mergeUnique([companyOptions]),
+      customOptions: customCompanies,
+      onAddCustom: addCustomCompany,
+      onRemoveCustom: removeCustomCompany,
+      placeholder: 'All Company',
+      loading: companyLoading,
+      error: companyError,
+      emptyMessage: 'No companies found',
+    },
     {
       key: 'industry',
       label: 'Industry',
@@ -1000,6 +1082,9 @@ export default function LeadSearch() {
               onChange={(value) => handleSelect(field.key, value)}
               placeholder={field.placeholder || `All ${field.label}`}
               disabled={field.disabled}
+              loading={field.loading}
+              error={field.error}
+              emptyMessage={field.emptyMessage}
             />
           ))}
           <div className="form-group" style={{ marginBottom: 0 }}>
@@ -1158,7 +1243,7 @@ export default function LeadSearch() {
           </div>
           {searched && !loading && (
             <div style={{ fontSize: '12.5px', color: 'var(--text3)', marginLeft: 'auto' }}>
-              {tableSearch.trim()
+              {tableSearch.trim() || filters.company
                 ? `${filteredLeads.length} of ${leads.length} leads shown`
                 : `${leads.length} leads found`}
             </div>

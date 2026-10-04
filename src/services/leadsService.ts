@@ -1,4 +1,5 @@
 import { supabase } from '../supabase'
+import { fetchMasterCompanies } from './companyService'
 
 export interface LeadRow {
   id: string
@@ -34,6 +35,10 @@ export async function fetchLeads(): Promise<{ data: LeadRow[]; error: string | n
   } catch (err) {
     return { data: [], error: err instanceof Error ? err.message : 'Failed to fetch leads' }
   }
+}
+
+export async function fetchCompanyNames(): Promise<{ data: string[]; error: string | null }> {
+  return fetchMasterCompanies()
 }
 
 export async function getLeadCount(): Promise<{ count: number; error: string | null }> {

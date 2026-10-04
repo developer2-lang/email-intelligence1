@@ -155,8 +155,8 @@ export default {
       const APIFY_TOKEN = Deno.env.get("APIFY_TOKEN");
       const ACTOR_ID = Deno.env.get("APIFY_ACTOR_ID");
 
-      // 3. Combine the selected designation + industry + role into the search query
-      const searchQuery = [filters.designation, filters.industry, filters.role]
+      // 3. Combine the selected company + designation + industry + role into the search query
+      const searchQuery = [filters.company, filters.designation, filters.industry, filters.role]
         .filter(Boolean)
         .join(" ") || "CEO";
 
@@ -199,7 +199,12 @@ export default {
       console.log("📥 Apify response:", data);
 
       // 6. Profiles returned by the actor
-      const profiles = Array.isArray(data) ? data : (data.data ?? []);
+      const scrapedProfiles = Array.isArray(data) ? data : (data.data ?? []);
+      const profiles = filters.company
+        ? scrapedProfiles.filter((profile: any) =>
+            extractCompany(profile).toLowerCase().includes(String(filters.company).toLowerCase())
+          )
+        : scrapedProfiles;
 
       // 7. Cleaned shape for the frontend (kept for compatibility).
       const cleanedArray = profiles
