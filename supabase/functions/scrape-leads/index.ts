@@ -147,34 +147,34 @@ export default {
       console.log("✅ Caller resolved:", userId, "via authMode:", ctx?.authMode);
 
       // 1. Get the filters from the React form
-      const body = (await req.json()) ?? {};
-      const filters = body.filters ?? {};
+      const body = (await req.json().catch(() => ({}))) ?? {};
+      const filters = body.filters ?? body ?? {};
       console.log("✅ Filters received:", filters);
 
       // 2. Read secrets from Supabase
       const APIFY_TOKEN = Deno.env.get("APIFY_TOKEN");
-      const ACTOR_ID = Deno.env.get("APIFY_ACTOR_ID");
+      const ACTOR_ID = Deno.env.get("APIFY_ACTOR_ID") || "harvestapi/linkedin-profile-search";
 
-      // 3. Combine the selected company + designation + industry + role into the search query
-      const searchQuery = [filters.company, filters.designation, filters.industry, filters.role]
-        .filter(Boolean)
-        .join(" ") || "CEO";
+      const company = String(filters.company || '').trim();
+      const industry = String(filters.industry || '').trim();
+      const designation = String(filters.designation || '').trim();
+      const role = String(filters.role || '').trim();
+      const geography = String(filters.geography || '').trim();
+      const state = String(filters.state || '').trim();
+      const maxItems = Number(filters.maxItems ?? filters.maxResults ?? filters.numProfiles ?? 10) || 10;
 
-      // 4. Build the input in the EXACT format this Actor expects
-      const locations: string[] = [];
-      if (filters.state && filters.geography) {
-        locations.push(`${filters.state}, ${filters.geography}`);
-      } else if (filters.state) {
-        locations.push(filters.state);
-      } else if (filters.geography) {
-        locations.push(filters.geography);
-      }
+      // Build searchQuery by joining all non-empty values from [company, designation, industry, role]
+      const searchQuery = [company, designation, industry, role].filter(Boolean).join(' ') || 'CEO';
+
+      const currentCompanies = company ? [company] : [];
+      const locations = [state ? (geography ? `${state}, ${geography}` : state) : geography].filter(Boolean);
 
       const apifyInput = {
+        searchQuery: searchQuery,
+        currentCompanies: currentCompanies,
+        locations: locations,
+        maxItems: maxItems || 10,
         profileScraperMode: "Full",
-        searchQuery,
-        maxItems: Number(filters.maxItems ?? filters.numProfiles) || 5,
-        locations,
       };
 
       console.log("📤 Sending to Apify:", apifyInput);
@@ -198,12 +198,21 @@ export default {
       const data = await response.json();
       console.log("📥 Apify response:", data);
 
-      // 6. Profiles returned by the actor
+      // 6. Profiles returned by the actor — strictly filter by currentCompanies
       const scrapedProfiles = Array.isArray(data) ? data : (data.data ?? []);
-      const profiles = filters.company
-        ? scrapedProfiles.filter((profile: any) =>
-            extractCompany(profile).toLowerCase().includes(String(filters.company).toLowerCase())
-          )
+      const profiles = currentCompanies.length > 0
+        ? scrapedProfiles.filter((profile: any) => {
+            const comp = extractCompany(profile).toLowerCase().trim();
+            const target = company.toLowerCase();
+            const headline = (extractDesignation(profile) || '').toLowerCase();
+            return (
+              comp === target ||
+              comp.includes(target) ||
+              target.includes(comp) ||
+              headline.includes(`@ ${target}`) ||
+              headline.includes(`at ${target}`)
+            );
+          })
         : scrapedProfiles;
 
       // 7. Cleaned shape for the frontend (kept for compatibility).

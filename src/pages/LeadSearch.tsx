@@ -504,42 +504,29 @@ export default function LeadSearch() {
     const name = value.trim()
     if (!name) return
 
+    // Immediately select the custom company and save to custom options
+    handleSelect('company', name)
+    setCustomCompanies((prev) => mergeUnique([[...prev, name]]))
+
     // Case-insensitive check against already loaded company list
     const existing = companyOptions.find((company) => company.toLowerCase() === name.toLowerCase())
     if (existing) {
       handleSelect('company', existing)
-      setNotice(`Company "${existing}" is already available and has been selected.`)
+      setNotice(`Company "${existing}" selected.`)
       return
     }
 
-    setCompanyLoading(true)
-    const res = await addCustomCompanyToMaster(name)
-    if (res.error) {
-      setNotice(`Could not save company "${name}": ${res.error}`)
-      setCompanyLoading(false)
-      return
-    }
+    setNotice(`Selected company "${name}".`)
 
-    // Refresh company list from DB to ensure single source of truth
-    const refreshed = await fetchMasterCompanies()
-    if (!refreshed.error && refreshed.data.length > 0) {
-      setCompanyOptions(refreshed.data)
-    } else {
-      setCompanyOptions((prev) =>
-        mergeUnique([[...prev, name]]).sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }))
-      )
-    }
-    setCompanyLoading(false)
-
-    // Automatically select the newly added company
-    const selectedCompany = res.data || name
-    handleSelect('company', selectedCompany)
-
-    if (res.isDuplicate) {
-      setNotice(`Company "${selectedCompany}" already existed in database and is now selected.`)
-    } else {
-      setNotice(`Saved "${selectedCompany}" to companies and selected it.`)
-    }
+    // Attempt to persist to master table in background without blocking selection
+    void addCustomCompanyToMaster(name).then(async (res) => {
+      if (!res.error) {
+        const refreshed = await fetchMasterCompanies()
+        if (!refreshed.error && refreshed.data.length > 0) {
+          setCompanyOptions(refreshed.data)
+        }
+      }
+    })
   }
 
   const removeCustomCompany = (value: string) => {
@@ -551,32 +538,123 @@ export default function LeadSearch() {
     setError(null)
     setNotice(null)
     setSearched(true)
-    const countBefore = leads.length
-    // Mirrors how the Edge Function builds the Apify searchQuery, so the notice
-    // names the search the user actually ran.
     const searchedQuery =
       [filters.company, filters.designation, filters.industry, filters.role, filters.state].filter(Boolean).join(' ') || 'CEO'
+
     try {
-      const { data, error } = await supabase.functions.invoke('scrape-leads', {
-        body: { filters },
-      })
-      if (error) throw error
+      let data: any = null
+      const session = (await supabase.auth.getSession()).data.session
+
+      // Determine clean LinkedIn location: pick State if chosen, otherwise mapped Geography (never combine with comma/space)
+      const COUNTRY_MAP: Record<string, string> = {
+        USA: 'United States',
+        US: 'United States',
+        UK: 'United Kingdom',
+        IN: 'India',
+        CA: 'Canada',
+        AU: 'Australia',
+      }
+      let selectedLocation: string | null = null
+      if (filters.state && filters.state.trim()) {
+        selectedLocation = filters.state.trim()
+      } else if (filters.geography && filters.geography.trim()) {
+        const geo = filters.geography.trim()
+        selectedLocation = COUNTRY_MAP[geo.toUpperCase()] || geo
+      }
+      const searchLocations = selectedLocation ? [selectedLocation] : []
+
+      const searchPayload = {
+        filters: {
+          ...filters,
+          locations: searchLocations,
+        },
+        locations: searchLocations,
+        userId: session?.user?.id,
+      }
+
+      // Call the backend API route using Apify Client SDK
+      try {
+        const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+        if (session?.access_token) {
+          headers['Authorization'] = `Bearer ${session.access_token}`
+        }
+        const res = await fetch('/api/leads/search', {
+          method: 'POST',
+          headers,
+          body: JSON.stringify(searchPayload),
+        })
+        if (res.ok) {
+          data = await res.json()
+        } else {
+          const errData = await res.json().catch(() => null)
+          throw new Error(errData?.error || `API returned status ${res.status}`)
+        }
+      } catch (apiErr: any) {
+        console.warn('[LeadSearch] Backend /api/leads/search call failed, falling back to Supabase function:', apiErr.message)
+        const edgeRes = await supabase.functions.invoke('scrape-leads', {
+          body: searchPayload,
+        })
+        if (edgeRes.error) throw edgeRes.error
+        data = edgeRes.data
+      }
+
       if (!data?.success) throw new Error(data?.error || 'Search failed')
 
       const saved = Number(data.savedCount) || 0
       const found = Number(data.found) || 0
 
-      // Always reflect what's actually in the DB — re-fetch after the Edge
-      // Function persists the Apify results. Awaited before the notice is set
-      // so the table and the message can never disagree.
-      const freshLeads = await fetchLeadsFromDb()
-      setLeads(freshLeads)
+      // Map leads directly returned in response payload (Name, Job Title, Email, LinkedIn URL)
+      const returnedLeads: Lead[] = Array.isArray(data.leads || data.data)
+        ? (data.leads || data.data).map((l: any) => ({
+            id: l.id || `lead-${Date.now()}-${Math.random()}`,
+            email: l.email || undefined,
+            phone: l.phone || undefined,
+            linkedinUrl: l.linkedinUrl || l.linkedin_url,
+            full_name: l.full_name,
+            company_name: l.company_name,
+            job_title: l.job_title,
+            designation: l.designation,
+            role: l.role,
+            industry: l.industry,
+            geography: l.geography,
+          }))
+        : []
 
-      // Automatically queue any newly scraped leads that have an email into weekly queue
-      const withEmail = freshLeads.filter(l => l.email && l.email.trim())
+      // Re-fetch stored leads from database if available
+      let freshLeads: Lead[] = []
+      try {
+        freshLeads = await fetchLeadsFromDb()
+      } catch {
+        freshLeads = []
+      }
+
+      // Merge returned leads with DB leads, prioritizing freshly returned leads
+      const mergedMap = new Map<string, Lead>()
+      for (const l of returnedLeads) {
+        const key = l.linkedinUrl || l.id
+        mergedMap.set(key, l)
+      }
+      for (const l of freshLeads) {
+        const key = l.linkedinUrl || l.id
+        if (!mergedMap.has(key)) {
+          mergedMap.set(key, l)
+        } else {
+          mergedMap.set(key, { ...l, ...mergedMap.get(key) })
+        }
+      }
+
+      const finalLeads = Array.from(mergedMap.values())
+      if (finalLeads.length > 0) {
+        setLeads(finalLeads)
+      } else if (returnedLeads.length > 0) {
+        setLeads(returnedLeads)
+      }
+
+      // Automatically queue newly scraped leads that have an email into weekly queue
+      const withEmail = (finalLeads.length > 0 ? finalLeads : returnedLeads).filter((l) => l.email && l.email.trim())
       if (withEmail.length > 0) {
         void queueContactsForWeeklyEmail(
-          withEmail.map(l => ({
+          withEmail.map((l) => ({
             id: l.id,
             contact_id: `lead-${l.id}`,
             email: l.email,
@@ -588,32 +666,13 @@ export default function LeadSearch() {
         )
       }
 
-      console.info(
-        `[LeadSearch] function reported ${saved} new / ${found} found — ` +
-          `table now shows ${freshLeads.length} (was ${countBefore})`,
-      )
-      if (saved > 0 && freshLeads.length <= countBefore) {
-        console.warn(
-          '[LeadSearch] The Edge Function saved a row but this client cannot see it. ' +
-            'The row is in the DB but filtered out for this session — check the leads ' +
-            'RLS policy (auth.uid() = user_id) against the new row\'s user_id.',
-        )
-      }
-
+      const totalFound = returnedLeads.length || found
       if (saved > 0) {
         setNotice(`${saved} new lead${saved === 1 ? '' : 's'} saved`)
-      } else if (found > 0) {
-        setNotice(
-          `No new leads — all ${found} match${found === 1 ? '' : 'es'} already in your database`,
-        )
-      } else if (freshLeads.length > 0) {
-        // Apify returned nothing new, but the database still holds earlier
-        // leads and the table below is showing them. Saying "no leads found"
-        // here contradicts the rows on screen.
-        setNotice(
-          `0 new leads for "${searchedQuery}" — showing your ${freshLeads.length} existing ` +
-            `lead${freshLeads.length === 1 ? '' : 's'}`,
-        )
+      } else if (totalFound > 0) {
+        setNotice(`Found ${totalFound} lead${totalFound === 1 ? '' : 's'} for "${searchedQuery}"`)
+      } else if (finalLeads.length > 0) {
+        setNotice(`0 new leads for "${searchedQuery}" — showing ${finalLeads.length} existing leads`)
       } else {
         setNotice(`No leads found for "${searchedQuery}"`)
       }
@@ -891,6 +950,7 @@ export default function LeadSearch() {
     loading?: boolean
     error?: string | null
     emptyMessage?: string
+    allowCustom?: boolean
   }[] = [
     {
       key: 'company',
@@ -899,10 +959,11 @@ export default function LeadSearch() {
       customOptions: customCompanies,
       onAddCustom: addCustomCompany,
       onRemoveCustom: removeCustomCompany,
-      placeholder: 'All Company',
+      placeholder: 'Type or select company...',
+      allowCustom: true,
       loading: companyLoading,
       error: companyError,
-      emptyMessage: 'No companies found',
+      emptyMessage: 'Type any company name...',
     },
     {
       key: 'industry',
@@ -1085,6 +1146,7 @@ export default function LeadSearch() {
               loading={field.loading}
               error={field.error}
               emptyMessage={field.emptyMessage}
+              allowCustom={field.allowCustom}
             />
           ))}
           <div className="form-group" style={{ marginBottom: 0 }}>

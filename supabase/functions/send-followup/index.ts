@@ -2,7 +2,7 @@
  * send-followup — Supabase Edge Function ("Send Follow-up").
  *
  * Lets the React app send follow-up emails directly via Gmail SMTP with no
- * local Node.js backend (localhost:5000). It mirrors the exact conventions of
+ * local Node.js backend (localhost:5002). It mirrors the exact conventions of
  * the existing send-campaign Edge Function (CORS, auth, SMTP client, open
  * tracking) and ports the behaviour of backend/services/followupService.js:
  *

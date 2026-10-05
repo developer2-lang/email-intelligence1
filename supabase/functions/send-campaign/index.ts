@@ -2,7 +2,7 @@
  * send-campaign — Supabase Edge Function ("Send Now").
  *
  * Lets the React app send a campaign immediately without the local Node.js
- * backend (localhost:5000). It validates the campaign payload, saves it to
+ * backend (localhost:5002). It validates the campaign payload, saves it to
  * Supabase, resolves the audience, and emails every recipient directly via
  * Gmail SMTP using the exact same conventions as the existing cloud scheduler
  * (scheduled-campaign-runner):

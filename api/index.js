@@ -8,6 +8,7 @@ import campaignRoutes from '../backend/routes/campaignRoutes.js';
 import trackingRoutes from '../backend/routes/trackingRoutes.js';
 import followupRoutes from '../backend/routes/followupRoutes.js';
 import sequenceRoutes from '../backend/routes/sequenceRoutes.js';
+import leadRoutes from '../backend/routes/leadRoutes.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const distDir = path.resolve(__dirname, '..', 'dist');
@@ -66,6 +67,7 @@ app.use('/api/tracking', trackingRoutes);
 app.use('/api/track', trackingRoutes);
 app.use('/api/followups', followupRoutes);
 app.use('/api/sequences', sequenceRoutes);
+app.use('/api/leads', leadRoutes);
 
 // Serve the built SPA (handles `/` and any non-API client-side route that
 // reaches this function). In a correctly configured Vercel deploy, non-API

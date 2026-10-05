@@ -4,6 +4,8 @@
   "private": true,
   "type": "module",
   "dependencies": {
+    "apify-client": "^2.25.0",
+    "cors": "^2.8.6",
     "dotenv": "^17.4.2",
     "express": "^5.2.1"
   }

@@ -34,7 +34,7 @@ if (!baseUrl) {
   console.warn('  the public internet:');
   console.warn('    - deployed:  TRACKING_BASE_URL=https://your-public-domain.com');
   console.warn('    - local dev: TRACKING_BASE_URL=https://abc123.ngrok-free.app');
-  console.warn('      (start ngrok with: ngrok http 5000)');
+  console.warn('      (start ngrok with: ngrok http 5002)');
   console.warn('═══════════════════════════════════════════════════════════════════');
 } else {
   console.log(`[Tracking] Public base URL: ${baseUrl}`);

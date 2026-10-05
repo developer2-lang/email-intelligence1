@@ -19,6 +19,7 @@ interface SearchableSelectProps {
   loading?: boolean
   error?: string | null
   emptyMessage?: string
+  allowCustom?: boolean
 }
 
 interface PanelPosition {
@@ -40,6 +41,7 @@ export default function SearchableSelect({
   loading = false,
   error = null,
   emptyMessage,
+  allowCustom,
 }: SearchableSelectProps) {
   const [open, setOpen] = useState(false)
   const [query, setQuery] = useState('')
@@ -50,6 +52,8 @@ export default function SearchableSelect({
   const rootRef = useRef<HTMLDivElement>(null)
   const triggerRef = useRef<HTMLButtonElement>(null)
   const panelRef = useRef<HTMLDivElement>(null)
+
+  const isCustomAllowed = allowCustom ?? Boolean(onAddCustom)
 
   // Position the panel at the trigger, and keep it anchored while the page or
   // any scroll container moves. The panel is portaled to document.body so it
@@ -122,6 +126,8 @@ export default function SearchableSelect({
     return labelNorm.includes(qNorm)
   })
 
+  const exactMatch = rows.some((r) => r.label.trim().toLowerCase() === q && r.value !== '')
+
   const choose = (val: string) => {
     onChange(val)
     setOpen(false)
@@ -132,10 +138,9 @@ export default function SearchableSelect({
   }
 
   const submitCustom = () => {
-    if (!onAddCustom) return
     const v = customValue.trim()
     if (!v) return
-    onAddCustom(v)
+    if (onAddCustom) onAddCustom(v)
     choose(v)
   }
 
@@ -170,6 +175,32 @@ export default function SearchableSelect({
         <span className={`ss-trigger-text${value && value !== '' ? ' ss-has-value' : ''}`}>
           {triggerText}
         </span>
+        {value && value !== '' && !disabled && (
+          <span
+            className="ss-clear"
+            title="Clear selection"
+            onClick={(e) => {
+              e.stopPropagation()
+              onChange('')
+            }}
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              cursor: 'pointer',
+              marginLeft: 'auto',
+              marginRight: '4px',
+              padding: '2px 6px',
+              fontSize: '14px',
+              fontWeight: 'bold',
+              color: 'var(--text4, #9ca3af)',
+              lineHeight: 1,
+              borderRadius: '4px',
+            }}
+          >
+            ×
+          </span>
+        )}
         <span className="ss-caret" aria-hidden="true">
           ▾
         </span>
@@ -246,7 +277,11 @@ export default function SearchableSelect({
                     value={query}
                     autoFocus
                     autoComplete="off"
-                    placeholder="Type to search..."
+                    placeholder={
+                      isCustomAllowed
+                        ? `Type to search or enter custom ${label ? label.toLowerCase() : 'value'}...`
+                        : 'Type to search...'
+                    }
                     onChange={(e) => setQuery(e.target.value)}
                     onKeyDown={(e) => {
                       if (e.key === 'Escape') {
@@ -254,23 +289,29 @@ export default function SearchableSelect({
                         close()
                       } else if (e.key === 'Enter') {
                         e.preventDefault()
-                        const [first] = filtered
-                        if (first) {
-                          choose(first.value)
+                        if (exactMatch) {
+                          const match = filtered.find((f) => f.label.trim().toLowerCase() === q)
+                          if (match) choose(match.value)
+                        } else if (isCustomAllowed && query.trim()) {
+                          const customVal = query.trim()
+                          if (onAddCustom) onAddCustom(customVal)
+                          choose(customVal)
+                        } else if (filtered.length > 0) {
+                          choose(filtered[0].value)
                         }
                       }
                     }}
                   />
                 </div>
 
-                {onAddCustom && (
+                {isCustomAllowed && (
                   <div className="ss-add-row">
                     <button
                       type="button"
                       className="ss-add"
                       onMouseDown={(e) => e.preventDefault()}
                       onClick={() => {
-                        setCustomValue('')
+                        setCustomValue(query.trim())
                         setIsAddingCustom(true)
                       }}
                     >
@@ -280,6 +321,27 @@ export default function SearchableSelect({
                 )}
 
                 <div className="ss-list">
+                  {query.trim() && !exactMatch && isCustomAllowed && (
+                    <div
+                      role="option"
+                      className="ss-option"
+                      style={{
+                        background: '#eff6ff',
+                        color: '#1d4ed8',
+                        fontWeight: 600,
+                        borderBottom: '1px solid var(--border)',
+                        cursor: 'pointer',
+                      }}
+                      onMouseDown={(e) => {
+                        e.preventDefault()
+                        const customVal = query.trim()
+                        if (onAddCustom) onAddCustom(customVal)
+                        choose(customVal)
+                      }}
+                    >
+                      <span className="ss-option-label">➕ Use "{query.trim()}"</span>
+                    </div>
+                  )}
                   {loading ? (
                     <div
                       className="ss-empty"

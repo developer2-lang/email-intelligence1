@@ -1,7 +1,7 @@
 /**
  * Sequence / Drip automation API — serverless edition.
  *
- * This client no longer talks to the local Express backend (localhost:5000).
+ * This client no longer talks to the local Express backend (localhost:5002).
  * Every sequence operation talks DIRECTLY to Supabase (the same anon-key
  * pattern the rest of the app already uses), and the two operations that need
  * server-side sending (SMTP) are delegated to Supabase Edge Functions:
