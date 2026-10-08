@@ -43,17 +43,17 @@ create extension if not exists supabase_vault;
 --    script unschedules the previous job first, then schedules a fresh one.
 do $$
 begin
-  if exists (select 1 from cron.job where jobname = 'scheduled-campaign-runner') then
-    perform cron.unschedule('scheduled-campaign-runner');
+  if exists (select 1 from cron.job where jobname = 'scheduled-campaign-runner-cron') then
+    perform cron.unschedule('scheduled-campaign-runner-cron');
   end if;
 
   perform cron.schedule(
-    'scheduled-campaign-runner',
+    'scheduled-campaign-runner-cron',
     '* * * * *', -- every minute
     $cron$
     select
       net.http_post(
-        url := 'https://novreeapdwjnpzflyiey.supabase.co/functions/v1/scheduled-campaign-runner',
+        url := 'https://oscdtdlwdrwvjvteqcix.supabase.co/functions/v1/scheduled-campaign-runner',
         headers := jsonb_build_object(
           'Content-Type', 'application/json',
           'x-cron-secret',
@@ -69,12 +69,12 @@ $$;
 -- 3) Confirm the job is registered.
 select jobid, jobname, schedule, active, command
 from cron.job
-where jobname = 'scheduled-campaign-runner';
+where jobname = 'scheduled-campaign-runner-cron';
 
 -- 4) (Optional) Manual smoke test — run the same POST the cron job would run:
 --    select
 --      net.http_post(
---        url := 'https://novreeapdwjnpzflyiey.supabase.co/functions/v1/scheduled-campaign-runner',
+--        url := 'https://oscdtdlwdrwvjvteqcix.supabase.co/functions/v1/scheduled-campaign-runner',
 --        headers := jsonb_build_object(
 --          'Content-Type', 'application/json',
 --          'x-cron-secret',
@@ -87,4 +87,4 @@ where jobname = 'scheduled-campaign-runner';
 --      select * from net._http_response order by created desc limit 3;
 --
 --    To stop scheduling entirely (keep the function deployed):
---      select cron.unschedule('scheduled-campaign-runner');
+--      select cron.unschedule('scheduled-campaign-runner-cron');

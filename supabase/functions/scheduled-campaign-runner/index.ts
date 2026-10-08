@@ -71,9 +71,8 @@ const supabaseUrl = Deno.env.get('R_SUPABASE_URL');
 const supabaseKey = Deno.env.get('R_SERVICE_ROLE_KEY') || Deno.env.get('SUPABASE_ANON_KEY');
 const supabase = createClient(supabaseUrl, supabaseKey);
 // ─── Configuration (env) ───────────────────────────────────────────────────
-// Prefer the R_-prefixed secret (this project's convention); fall back to the
-// legacy CRON_SECRET name so the deployed cron keeps working mid-transition.
-const CRON_SECRET = (Deno.env.get('R_CRON_SECRET') || Deno.env.get('CRON_SECRET') || '').trim();
+// R_CRON_SECRET is the single source of truth for scheduled-campaign-runner auth.
+const CRON_SECRET = (Deno.env.get('R_CRON_SECRET') || '').trim();
 const SMTP_HOST = (Deno.env.get('R_EMAIL_HOST') || 'smtp.gmail.com').trim();
 const SMTP_PORT = parseInt(Deno.env.get('R_EMAIL_PORT') || '465', 10);
 const SMTP_USER = (Deno.env.get('R_EMAIL_USER') || '').trim();
@@ -1376,7 +1375,7 @@ Deno.serve(async (req)=>{
   const secret = (req.headers.get('x-cron-secret') || '').trim();
   if (!CRON_SECRET || !secret || secret !== CRON_SECRET) {
     logErr('Unauthorized — missing/invalid x-cron-secret header');
-    logErr(`Hint: set R_CRON_SECRET (or CRON_SECRET) to exactly the value the cron job sends in the x-cron-secret header`);
+    logErr('Hint: set R_CRON_SECRET to exactly the value the cron job sends in the x-cron-secret header');
     return new Response(JSON.stringify({
       success: false,
       error: 'Unauthorized'
