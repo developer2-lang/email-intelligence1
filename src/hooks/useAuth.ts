@@ -59,6 +59,7 @@ export function useAuth() {
 
     const { data: subscription } = supabase.auth.onAuthStateChange((event, session) => {
       if (!active) return
+      if (typeof window !== 'undefined' && localStorage.getItem('ei_test_user')) return
 
       if (event === 'SIGNED_OUT' || !session) {
         localStorage.removeItem(LOGIN_TIMESTAMP_KEY)

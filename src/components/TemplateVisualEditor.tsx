@@ -433,7 +433,12 @@ function injectMobileCss(editor: Editor, mobile: boolean) {
     if (!frameDoc) return;
     const existing = frameDoc.getElementById(MOBILE_CSS_ID);
     if (mobile) {
-      if (!existing) {
+      if (existing) {
+        existing.textContent = MOBILE_RESPONSIVE_CSS;
+        if (frameDoc.head && existing !== frameDoc.head.lastElementChild) {
+          frameDoc.head.appendChild(existing);
+        }
+      } else {
         const style = frameDoc.createElement('style');
         style.id = MOBILE_CSS_ID;
         style.textContent = MOBILE_RESPONSIVE_CSS;
@@ -3542,27 +3547,154 @@ const iconBtn: React.CSSProperties = {
 export const MOBILE_RESPONSIVE_CSS = `
 /* ── Mobile responsive overrides for email preview ─────────────────────── */
 @charset "UTF-8";
-@media only screen and (max-width: 768px) {
-  html, body {
-    width: 100% !important;
-    max-width: 100% !important;
-    margin: 0 !important;
-    padding: 0 !important;
-    overflow-x: hidden !important;
-  }
-  /* Every table (including fixed-width content cards) is capped to the
-     viewport. Both width and max-width are set so HTML width attributes
-     (e.g. width="600") and inline style widths are fully overridden. */
-  table { width: 100% !important; max-width: 100% !important; min-width: 0 !important; table-layout: auto !important; }
-  td, th { width: auto !important; max-width: 100% !important; min-width: 0 !important; word-wrap: break-word !important; overflow-wrap: break-word !important; }
-  /* Images scale down to the viewport while keeping their aspect ratio */
-  img { max-width: 100% !important; height: auto !important; }
-  /* Text blocks wrap instead of overflowing */
-  p, div, span, h1, h2, h3, h4, h5, h6, a { max-width: 100% !important; word-wrap: break-word !important; overflow-wrap: break-word !important; }
-  /* Multi-column email blocks stack vertically on narrow screens so each
-     column becomes a full-width section instead of squeezing side-by-side. */
-  td[width$="%"], th[width$="%"] { display: block !important; width: 100% !important; }
-  * { box-sizing: border-box !important; }
+*, *::before, *::after {
+  box-sizing: border-box !important;
+  max-width: 100% !important;
+}
+html, body {
+  width: 100% !important;
+  max-width: 100% !important;
+  overflow-x: hidden !important;
+  margin: 0 !important;
+  padding: 0 !important;
+}
+/* Every table is constrained to the mobile viewport and cannot blow out */
+table {
+  width: 100% !important;
+  max-width: 100% !important;
+  min-width: 0 !important;
+  table-layout: fixed !important;
+}
+td, th {
+  max-width: 100% !important;
+  min-width: 0 !important;
+  word-wrap: break-word !important;
+  overflow-wrap: break-word !important;
+  word-break: break-word !important;
+}
+/* Outer card padding: compact on mobile so content has breathing room */
+td[style*="padding: 32px"], td[style*="padding:32px"],
+td[style*="padding: 32px 16px"], td[style*="padding:32px 16px"] {
+  padding-left: 12px !important;
+  padding-right: 12px !important;
+  padding-top: 16px !important;
+  padding-bottom: 16px !important;
+}
+/* Multi-column grid cells (3-column, 2-column, 4-column) stay side-by-side and proportional */
+td[style*="width:33"], td[style*="width: 33"], td[width="33%"], td[width="33.33%"] {
+  display: table-cell !important;
+  width: 33.33% !important;
+  max-width: 33.33% !important;
+  padding: 0 4px !important;
+  vertical-align: top !important;
+}
+td[style*="width:50"], td[style*="width: 50"], td[width="50%"] {
+  display: table-cell !important;
+  width: 50% !important;
+  max-width: 50% !important;
+  padding: 0 4px !important;
+  vertical-align: top !important;
+}
+td[style*="width:25"], td[style*="width: 25"], td[width="25%"] {
+  display: table-cell !important;
+  width: 25% !important;
+  max-width: 25% !important;
+  padding: 0 3px !important;
+  vertical-align: top !important;
+}
+/* Desktop container cells with fixed desktop widths (600px, 594px, etc.) become 100% */
+td[style*="width:600px"], td[style*="width: 600px"], td[width="600"],
+td[style*="width:594px"], td[style*="width: 594px"], td[width="594"],
+td[style*="width: 100%"], td[style*="width:100%"], td[width="100%"] {
+  width: 100% !important;
+  max-width: 100% !important;
+}
+div[style*="width"] {
+  max-width: 100% !important;
+  width: 100% !important;
+}
+/* Fluid height on mobile: desktop editing often writes fixed pixel heights (e.g. height: 1546px, 1933px)
+   which cuts off reflowed text and hides signatures and footers. Override all fixed heights so the full
+   template and footer are always completely visible. */
+td[style*="height"], th[style*="height"],
+div[style*="height"], table[style*="height"],
+p[style*="height"], section[style*="height"],
+span[style*="height"] {
+  height: auto !important;
+  max-height: none !important;
+}
+/* Ensure the footer card is full-width, fluid height, and fully visible */
+[data-te-footer], footer, [role="contentinfo"] {
+  width: 100% !important;
+  max-width: 100% !important;
+  height: auto !important;
+  box-sizing: border-box !important;
+}
+/* Images scale down smoothly */
+img {
+  max-width: 100% !important;
+  height: auto !important;
+  display: block !important;
+}
+img[style*="width"], img[width] {
+  max-width: 100% !important;
+  width: auto !important;
+  height: auto !important;
+}
+/* Product / gallery images in multi-column tables remain small and neat */
+td[style*="33%"] img, td[width="33%"] img, td[width="33.33%"] img {
+  max-width: 100% !important;
+  max-height: 120px !important;
+  width: auto !important;
+  height: auto !important;
+  margin: 0 auto !important;
+  object-fit: contain !important;
+}
+td[style*="50%"] img, td[width="50%"] img {
+  max-width: 100% !important;
+  max-height: 160px !important;
+  width: auto !important;
+  height: auto !important;
+  margin: 0 auto !important;
+  object-fit: contain !important;
+}
+td[style*="25%"] img, td[width="25%"] img {
+  max-width: 100% !important;
+  max-height: 90px !important;
+  width: auto !important;
+  height: auto !important;
+  margin: 0 auto !important;
+  object-fit: contain !important;
+}
+/* Buttons and CTAs: adapt from fixed 543px width to comfortable fluid pill buttons */
+a[data-te-role="link"], a[style*="width"], a[class*="btn"], a[class*="button"] {
+  display: inline-block !important;
+  max-width: 100% !important;
+  width: auto !important;
+  height: auto !important;
+  min-height: 38px !important;
+  padding: 8px 18px !important;
+  font-size: 14px !important;
+  line-height: 1.3 !important;
+  box-sizing: border-box !important;
+  white-space: normal !important;
+  word-wrap: break-word !important;
+  text-align: center !important;
+}
+/* Text blocks wrap nicely */
+p, div, span, h1, h2, h3, h4, h5, h6, a {
+  max-width: 100% !important;
+  word-wrap: break-word !important;
+  overflow-wrap: break-word !important;
+}
+.email-container, .container, [class*="container"] {
+  width: 100% !important;
+  max-width: 100% !important;
+}
+.hero-image, .hero, [class*="hero"] {
+  width: 100% !important;
+  max-width: 100% !important;
+  height: auto !important;
 }
 `;
 
@@ -3870,41 +4002,50 @@ const EDITOR_CSS = `
   }
   .te-canvas {
     min-height: 480px !important;
-    max-width: 100% !important;
     width: 100% !important;
-    display: flex !important;
-    justify-content: flex-start !important;
-    align-items: flex-start !important;
+    max-width: 100% !important;
+    box-sizing: border-box !important;
     overflow-x: auto !important;
     overflow-y: auto !important;
     -webkit-overflow-scrolling: touch !important;
-    padding: 6px 4px !important;
-    box-sizing: border-box !important;
+    display: block !important;
+    text-align: center !important;
+    padding: 10px 4px !important;
   }
-  .te-editor .gjs-cv-canvas {
+  .te-editor .gjs-editor {
     width: 100% !important;
     max-width: 100% !important;
+    min-width: 0 !important;
+    display: inline-block !important;
+    text-align: left !important;
   }
-  .te-editor .gjs-cv-canvas__frames {
+  .te-editor .gjs-cv-canvas,
+  .te-editor .gjs-cv-canvas__frames,
+  .te-editor .gjs-frames {
     width: 100% !important;
     max-width: 100% !important;
+    min-width: 0 !important;
+    overflow: visible !important;
   }
   .te-editor .gjs-frame-wrapper {
-    margin: 6px auto 16px !important;
-    max-width: 100% !important;
+    margin: 10px auto 24px !important;
+    box-shadow: 0 4px 18px rgba(15,23,42,0.12) !important;
+    border-radius: 8px !important;
+    min-height: 480px !important;
   }
   .te-editor.te-device-mobile .gjs-frame-wrapper {
-    width: 100% !important;
-    max-width: 100% !important;
-    margin: 6px auto 16px !important;
-    box-shadow: 0 2px 10px rgba(15, 23, 42, 0.12) !important;
-    border-radius: 8px !important;
-    overflow: hidden !important;
+    width: min(375px, calc(100% - 12px)) !important;
+    max-width: 375px !important;
+    margin: 10px auto 24px !important;
+    box-shadow: 0 2px 14px rgba(15, 23, 42, 0.15) !important;
+    border-radius: 12px !important;
+    overflow: visible !important;
+    min-height: 480px !important;
   }
   .te-editor.te-device-mobile .gjs-frame {
     width: 100% !important;
     max-width: 100% !important;
-    border-radius: 6px !important;
+    border-radius: 10px !important;
   }
   .te-editor.te-device-mobile iframe {
     width: 100% !important;
@@ -3975,6 +4116,7 @@ const EDITOR_CSS = `
 /* Phone-like frame for the mobile canvas: rounded bezel + subtle screen
    inset so the 375px preview reads as a real device, not a shrunk desktop. */
 .te-editor.te-device-mobile .gjs-frame-wrapper {
+  max-width: 375px !important;
   border-radius: 24px;
   box-shadow:
     0 0 0 8px #1E293B,
@@ -3983,6 +4125,7 @@ const EDITOR_CSS = `
   margin: 30px auto 48px;
 }
 .te-editor.te-device-mobile .gjs-frame {
+  max-width: 375px !important;
   border-radius: 16px;
   overflow: hidden;
 }
@@ -4140,14 +4283,6 @@ const EDITOR_CSS = `
 .te-am-img-preview img { max-width: 100%; max-height: 180px; object-fit: contain; border-radius: 6px; background: #1a1a1a; }
 .te-am-img-preview-name { font-size: 12px; color: #94A3B8; word-break: break-all; text-align: center; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 `;
-
-// [TEMP-DIAG REMOVE] Helper used by the mobile resize diagnostic sampler.
-function firstDiff(prev: Record<string, number | string>, cur: Record<string, number | string>): boolean {
-  for (const k of Object.keys(cur)) {
-    if (String(prev[k]) !== String(cur[k])) return true;
-  }
-  return false;
-}
 
 /* ─── Main component ─────────────────────────────────────────────────────── */
 
@@ -5057,72 +5192,15 @@ const TemplateVisualEditor = forwardRef<TemplateVisualEditorHandle, TemplateVisu
     }, []);
 
     const switchDevice = useCallback((id: string) => {
-      editorRef.current?.setDevice(id);
+      deviceRef.current = id;
+      setDevice(id);
+      if (editorRef.current) {
+        editorRef.current.setDevice(id);
+        injectMobileCss(editorRef.current, id === 'mobile');
+      }
     }, []);
 
-    // [TEMP-DIAG REMOVE] When Mobile is selected, sample the frame metrics every
-    // animation frame for ~3.5s and log every change. Goal: capture the exact
-    // alternating values of the mobile resize loop (e.g. 375 -> 530 -> 375).
-    useEffect(() => {
-      if (device !== 'mobile' || !editor) return;
-      const ed = editorRef.current;
-      if (!ed) return;
-      let raf = 0;
-      let running = true;
-      let prev: Record<string, number | string> = {};
-      let changes = 0;
-      let start = performance.now();
-      let lastA = '';
-      let lastB = '';
-      const tick = () => {
-        if (!running) return;
-        raf = requestAnimationFrame(tick);
-        try {
-          const frameDoc = ed.Canvas.getDocument();
-          if (!frameDoc) return;
-          const win = frameDoc.defaultView;
-          const body = frameDoc.body;
-          const docEl = frameDoc.documentElement;
-          const iframe = win?.frameElement as HTMLElement | null;
-          const s = {
-            t: Math.round(performance.now() - start),
-            frameH: iframe ? getComputedStyle(iframe).height : '?',
-            frameW: iframe ? getComputedStyle(iframe).width : '?',
-            bodySH: body.scrollHeight,
-            bodyCH: body.clientHeight,
-            bodySW: body.scrollWidth,
-            bodyCW: body.clientWidth,
-            htmlSH: docEl.scrollHeight,
-            winIH: win?.innerHeight ?? '?',
-            winIW: win?.innerWidth ?? '?',
-          };
-          const sig =
-            `${s.frameW}|${s.frameH}|${s.bodySH}|${s.bodySW}|${s.bodyCH}|${s.bodyCW}|${s.htmlSH}|${s.winIH}`;
-          if (Object.keys(prev).length === 0 || firstDiff(prev, s)) {
-            changes += 1;
-            lastA = lastB;
-            lastB = sig;
-            console.log('[te-diag]', JSON.stringify(s));
-          }
-          prev = s as unknown as Record<string, number | string>;
-          if (performance.now() - start > 3500) stop();
-        } catch {
-          /* frame not ready */
-        }
-      };
-      const stop = () => {
-        running = false;
-        cancelAnimationFrame(raf);
-        console.warn(
-          `[te-diag] DONE changes=${changes} lastA=${lastA} lastB=${lastB} OSCILLATING=${lastA !== lastB ? 'YES' : 'no'}`
-        );
-      };
-      tick();
-      return stop;
-      // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [device, editor]);
-
-return (
+    return (
       <div className={`te-editor${fullscreen ? ' te-fs' : ''}${device === 'mobile' ? ' te-device-mobile' : ''}${contentCollapsed ? ' te-content-collapsed' : ''}${propsCollapsed ? ' te-props-collapsed' : ''}`}>
         <style>{EDITOR_CSS}</style>
         <div className="te-head">
