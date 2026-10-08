@@ -3542,7 +3542,7 @@ const iconBtn: React.CSSProperties = {
 export const MOBILE_RESPONSIVE_CSS = `
 /* ── Mobile responsive overrides for email preview ─────────────────────── */
 @charset "UTF-8";
-@media only screen and (max-width: 600px) {
+@media only screen and (max-width: 768px) {
   html, body {
     width: 100% !important;
     max-width: 100% !important;
@@ -3862,18 +3862,52 @@ const EDITOR_CSS = `
     flex: 1 1 auto !important;
     min-height: 480px !important;
     max-width: 100% !important;
-    overflow: auto !important;
+    overflow-x: auto !important;
+    overflow-y: auto !important;
     -webkit-overflow-scrolling: touch !important;
     background: #F1F5F9 !important;
+    padding: 0 !important;
   }
   .te-canvas {
     min-height: 480px !important;
     max-width: 100% !important;
-    overflow: auto !important;
+    width: 100% !important;
+    display: flex !important;
+    justify-content: flex-start !important;
+    align-items: flex-start !important;
+    overflow-x: auto !important;
+    overflow-y: auto !important;
+    -webkit-overflow-scrolling: touch !important;
+    padding: 6px 4px !important;
+    box-sizing: border-box !important;
+  }
+  .te-editor .gjs-cv-canvas {
+    width: 100% !important;
+    max-width: 100% !important;
+  }
+  .te-editor .gjs-cv-canvas__frames {
+    width: 100% !important;
+    max-width: 100% !important;
+  }
+  .te-editor .gjs-frame-wrapper {
+    margin: 6px auto 16px !important;
+    max-width: 100% !important;
   }
   .te-editor.te-device-mobile .gjs-frame-wrapper {
-    box-shadow: 0 4px 16px rgba(15, 23, 42, 0.2) !important;
-    margin: 12px auto 20px !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    margin: 6px auto 16px !important;
+    box-shadow: 0 2px 10px rgba(15, 23, 42, 0.12) !important;
+    border-radius: 8px !important;
+    overflow: hidden !important;
+  }
+  .te-editor.te-device-mobile .gjs-frame {
+    width: 100% !important;
+    max-width: 100% !important;
+    border-radius: 6px !important;
+  }
+  .te-editor.te-device-mobile iframe {
+    width: 100% !important;
     max-width: 100% !important;
   }
 
@@ -4124,7 +4158,8 @@ const TemplateVisualEditor = forwardRef<TemplateVisualEditorHandle, TemplateVisu
     const editorRef = useRef<Editor | null>(null);
     const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const destroyedRef = useRef(false);
-    const deviceRef = useRef('desktop');
+    const isMobileViewport = typeof window !== 'undefined' && window.innerWidth <= 768;
+    const deviceRef = useRef(isMobileViewport ? 'mobile' : 'desktop');
     const onChangeRef = useRef(onChange);
     const onErrorRef = useRef(onError);
     const previewUrlRef = useRef<string | null>(null);
@@ -4132,7 +4167,7 @@ const TemplateVisualEditor = forwardRef<TemplateVisualEditorHandle, TemplateVisu
     const [editor, setEditor] = useState<Editor | null>(null);
     const [selected, setSelected] = useState<Component | null>(null);
     const [tick, setTick] = useState(0);
-    const [device, setDevice] = useState('desktop');
+    const [device, setDevice] = useState(() => (typeof window !== 'undefined' && window.innerWidth <= 768 ? 'mobile' : 'desktop'));
     const [isEmpty, setIsEmpty] = useState(true);
     const [contentCollapsed, setContentCollapsed] = useState(false);
     const [propsCollapsed, setPropsCollapsed] = useState(true);
@@ -4990,7 +5025,12 @@ const TemplateVisualEditor = forwardRef<TemplateVisualEditorHandle, TemplateVisu
       // `disableWrapperResize` / requirement #17). Runs after components are
       // parsed so the wrapper subtree exists.
       disableWrapperResize(editor);
-      editor.setDevice('desktop');
+      const initialDev = typeof window !== 'undefined' && window.innerWidth <= 768 ? 'mobile' : 'desktop';
+      deviceRef.current = initialDev;
+      editor.setDevice(initialDev);
+      if (initialDev === 'mobile') {
+        injectMobileCss(editor, true);
+      }
       setIsEmpty(isContentEmpty(editor));
 
       return () => {
