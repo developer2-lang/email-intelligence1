@@ -591,6 +591,7 @@ export default function TemplateEditorTab({ onToast, onNavigate }: TemplateEdito
 
       {/* ─── Template management toolbar ─── */}
       <div
+        className="te-management-toolbar"
         style={{
           display: 'flex',
           alignItems: 'center',
@@ -603,13 +604,13 @@ export default function TemplateEditorTab({ onToast, onNavigate }: TemplateEdito
           background: '#FFFFFF',
         }}
       >
-        <button type="button" style={toolButton} onClick={openLibrary} disabled={templatesLoading}>
+        <button type="button" className="te-tb-btn" style={toolButton} onClick={openLibrary} disabled={templatesLoading}>
           📂 Select Template
         </button>
-        <button type="button" style={toolButton} onClick={() => onNavigate('template-library')}>
+        <button type="button" className="te-tb-btn" style={toolButton} onClick={() => onNavigate('template-library')}>
           📁 All Templates
         </button>
-        <button type="button" style={toolButton} onClick={startNewTemplate}>
+        <button type="button" className="te-tb-btn" style={toolButton} onClick={startNewTemplate}>
           + New Template
         </button>
         <input
@@ -621,6 +622,7 @@ export default function TemplateEditorTab({ onToast, onNavigate }: TemplateEdito
         />
         <button
           type="button"
+          className="te-tb-btn"
           style={{ ...toolButton, color: '#1D4ED8', borderColor: '#BFDBFE', background: '#EFF6FF' }}
           onClick={() => fileInputRef.current?.click()}
           disabled={uploading}
@@ -628,10 +630,11 @@ export default function TemplateEditorTab({ onToast, onNavigate }: TemplateEdito
           {uploading ? 'Uploading template…' : 'Upload HTML Template'}
         </button>
 
-        <span style={{ width: 1, height: 22, background: '#E2E8F0', margin: '0 4px' }} aria-hidden="true" />
+        <span className="te-tb-divider" style={{ width: 1, height: 22, background: '#E2E8F0', margin: '0 4px' }} aria-hidden="true" />
 
         <button
           type="button"
+          className="te-tb-btn"
           style={{
             ...toolButton,
             color: '#FFFFFF',
@@ -644,18 +647,18 @@ export default function TemplateEditorTab({ onToast, onNavigate }: TemplateEdito
         >
           {saving ? 'Saving…' : 'Save Template'}
         </button>
-        <button type="button" style={toolButton} onClick={openSaveAs} disabled={saving || savingAs}>
+        <button type="button" className="te-tb-btn" style={toolButton} onClick={openSaveAs} disabled={saving || savingAs}>
           Save As
         </button>
 
-        <span style={{ width: 1, height: 22, background: '#E2E8F0', margin: '0 4px' }} aria-hidden="true" />
+        <span className="te-tb-divider" style={{ width: 1, height: 22, background: '#E2E8F0', margin: '0 4px' }} aria-hidden="true" />
 
-        <button type="button" style={toolButton} onClick={openPreview}>
+        <button type="button" className="te-tb-btn" style={toolButton} onClick={openPreview}>
           Preview
         </button>
 
-        <span style={{ flex: 1 }} />
-        <div style={{ display: 'flex', gap: '6px' }}>
+        <span className="te-tb-spacer" style={{ flex: 1 }} />
+        <div className="te-mode-toggle" style={{ display: 'flex', gap: '6px' }}>
           <button type="button" style={tabBtn(mode === 'visual')} onClick={switchToVisual}>
             Visual
           </button>

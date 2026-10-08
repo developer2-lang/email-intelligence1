@@ -19,9 +19,14 @@ export default function LoginPage({ onSignIn }: LoginPageProps) {
     if (busy) return
     setError(null)
     setBusy(true)
-    const result = await onSignIn(email.trim(), password)
-    if (result.error) {
-      setError(result.error)
+    try {
+      const result = await onSignIn(email.trim(), password)
+      if (result.error) {
+        setError(result.error)
+        setBusy(false)
+      }
+    } catch (err: any) {
+      setError(err?.message || 'Failed to sign in. Please try again.')
       setBusy(false)
     }
   }

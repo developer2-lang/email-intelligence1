@@ -3686,50 +3686,243 @@ const EDITOR_CSS = `
 }
 
 /* Mobile / narrow: stack the editor vertically. The CONTENT rail moves to the
-   top as a horizontally-scrolling strip of blocks, the canvas sits below it and
-   the PROPERTIES panel docks underneath. Every section uses the full available
-   width, so nothing overlaps or forces the page wider. */
-@media (max-width: 700px) {
+   top as a compact horizontally-scrolling strip of block pills, the canvas sits
+   directly below it with full visibility and scrolling, and the PROPERTIES panel
+   docks underneath as a collapsible footer panel. */
+@media (max-width: 768px) {
   .te-editor { border-radius: 12px; }
-  .te-head { flex-direction: column; align-items: stretch; gap: 8px; padding: 10px 12px; }
-  .te-devices { flex-wrap: wrap; }
-  .te-body { display: flex; flex-direction: column; height: auto; min-height: 0; overflow: visible; }
+  .te-head { flex-direction: column; align-items: stretch; gap: 6px; padding: 8px 10px; }
+  .te-devices {
+    display: flex !important;
+    flex-direction: row !important;
+    align-items: center !important;
+    justify-content: space-between !important;
+    width: 100% !important;
+    gap: 4px !important;
+    flex-wrap: nowrap !important;
+  }
+  .te-devices .te-device-divider { display: none !important; }
+  .te-devices button {
+    padding: 5px 8px !important;
+    font-size: 11.5px !important;
+    white-space: nowrap !important;
+  }
+  .te-hint { display: none !important; }
+  .te-body {
+    display: flex !important;
+    flex-direction: column !important;
+    height: auto !important;
+    min-height: 0 !important;
+    overflow: visible !important;
+  }
 
-  /* CONTENT rail: full-width strip, blocks flow horizontally */
-  .te-blocks { order: 1; width: 100%; min-width: 0; border-right: none; border-bottom: 1px solid #E2E8F0; max-height: 200px; min-height: 0; }
-  .te-blocks-scroll { overflow-y: hidden; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  /* CONTENT rail: compact swipeable horizontal pill strip */
+  .te-blocks {
+    order: 1 !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    min-width: 0 !important;
+    border-right: none !important;
+    border-bottom: 1px solid #1E293B !important;
+    max-height: none !important;
+    height: auto !important;
+    min-height: 0 !important;
+    background: #111827 !important;
+    overflow: hidden !important;
+  }
+  .te-blocks-head {
+    padding: 6px 10px !important;
+    font-size: 10.5px !important;
+    font-weight: 800 !important;
+    letter-spacing: 0.1em !important;
+    background: #0B0F17 !important;
+    border-bottom: 1px solid #1E293B !important;
+    color: #94A3B8 !important;
+    cursor: pointer !important;
+  }
+  .te-blocks-scroll {
+    display: block !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    height: 52px !important;
+    max-height: 52px !important;
+    min-height: 52px !important;
+    overflow-x: auto !important;
+    overflow-y: hidden !important;
+    white-space: nowrap !important;
+    padding: 5px 8px !important;
+    box-sizing: border-box !important;
+    -webkit-overflow-scrolling: touch !important;
+    scrollbar-width: none !important;
+  }
+  .te-blocks-scroll::-webkit-scrollbar { display: none !important; }
   .te-blocks-scroll .gjs-blocks-cs,
   .te-blocks-scroll .gjs-one-bg,
   .te-blocks-scroll .gjs-one-bg .gjs-block-categories,
   .te-blocks-scroll .gjs-blocks-no-cat,
-  .te-blocks-scroll .gjs-block-categories { flex-direction: row; align-items: flex-start; width: max-content !important; max-width: none !important; min-width: 100%; }
-  .te-blocks-scroll .gjs-block-category { flex-direction: row; align-items: center; }
-  .te-blocks-scroll .gjs-blocks-c { flex-direction: row !important; align-items: center; gap: 6px !important; padding: 8px; }
-  .te-blocks-scroll .gjs-block { width: 118px; height: 52px; flex: 0 0 auto; margin: 0; }
+  .te-blocks-scroll .gjs-block-categories {
+    display: flex !important;
+    flex-direction: row !important;
+    flex-wrap: nowrap !important;
+    align-items: center !important;
+    justify-content: flex-start !important;
+    width: max-content !important;
+    max-width: none !important;
+    min-width: 100% !important;
+    gap: 6px !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    background: transparent !important;
+  }
+  .te-blocks-scroll .gjs-block-category {
+    display: flex !important;
+    flex-direction: row !important;
+    flex-wrap: nowrap !important;
+    align-items: center !important;
+    width: max-content !important;
+    max-width: none !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    background: transparent !important;
+  }
+  .te-blocks-scroll .gjs-blocks-c {
+    display: flex !important;
+    flex-direction: row !important;
+    flex-wrap: nowrap !important;
+    align-items: center !important;
+    justify-content: flex-start !important;
+    gap: 6px !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    width: max-content !important;
+    max-width: none !important;
+  }
+  .te-blocks-scroll .gjs-block {
+    display: inline-flex !important;
+    flex-direction: row !important;
+    align-items: center !important;
+    justify-content: flex-start !important;
+    width: auto !important;
+    min-width: 100px !important;
+    max-width: 145px !important;
+    height: 38px !important;
+    min-height: 38px !important;
+    max-height: 38px !important;
+    flex: 0 0 auto !important;
+    margin: 0 !important;
+    padding: 0 8px !important;
+    border: 1.5px solid #334155 !important;
+    border-radius: 8px !important;
+    background: #FFFFFF !important;
+    background-color: #FFFFFF !important;
+    box-sizing: border-box !important;
+    gap: 6px !important;
+    cursor: pointer !important;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.15) !important;
+  }
+  .te-blocks-scroll .gjs-block:active {
+    transform: scale(0.96) !important;
+    border-color: #2563EB !important;
+  }
+  .te-blocks-scroll .gjs-block__media {
+    width: 24px !important;
+    height: 24px !important;
+    min-width: 24px !important;
+    min-height: 24px !important;
+    max-width: 24px !important;
+    max-height: 24px !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    flex: none !important;
+  }
+  .te-blocks-scroll .gjs-block__media .te-blk {
+    width: 24px !important;
+    height: 24px !important;
+    font-size: 11px !important;
+    border-radius: 6px !important;
+    line-height: 24px !important;
+  }
+  .te-blocks-scroll .gjs-block-label {
+    font-size: 11.5px !important;
+    font-weight: 600 !important;
+    color: #0F172A !important;
+    text-align: left !important;
+    white-space: nowrap !important;
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
+    line-height: 1.2 !important;
+  }
 
   /* Canvas */
-  .te-canvas-wrap { order: 2; flex: 1 1 auto; min-height: 440px; }
+  .te-canvas-wrap {
+    order: 2 !important;
+    flex: 1 1 auto !important;
+    min-height: 480px !important;
+    max-width: 100% !important;
+    overflow: auto !important;
+    -webkit-overflow-scrolling: touch !important;
+    background: #F1F5F9 !important;
+  }
+  .te-canvas {
+    min-height: 480px !important;
+    max-width: 100% !important;
+    overflow: auto !important;
+  }
+  .te-editor.te-device-mobile .gjs-frame-wrapper {
+    box-shadow: 0 4px 16px rgba(15, 23, 42, 0.2) !important;
+    margin: 12px auto 20px !important;
+    max-width: 100% !important;
+  }
 
   /* PROPERTIES rail docks below the canvas */
-  .te-props { order: 3; width: 100%; min-width: 0; border-left: none; border-top: 1px solid #E2E8F0; max-height: 40vh; min-height: 42px; }
+  .te-props {
+    order: 3 !important;
+    width: 100% !important;
+    min-width: 0 !important;
+    border-left: none !important;
+    border-top: 1px solid #E2E8F0 !important;
+    max-height: 45vh !important;
+    min-height: 38px !important;
+    background: #FFFFFF !important;
+  }
+  .te-pane-head {
+    padding: 8px 12px !important;
+    font-size: 10px !important;
+  }
 
   /* Keep the collapsed rails compact inside the stacked layout */
   .te-editor.te-content-collapsed .te-body,
   .te-editor.te-props-collapsed .te-body,
-  .te-editor.te-content-collapsed.te-props-collapsed .te-body { grid-template-columns: none; }
-  .te-editor.te-content-collapsed .te-blocks { max-height: 44px; }
-  .te-editor.te-content-collapsed .te-blocks-scroll { display: none; }
-  .te-editor.te-props-collapsed .te-props { border-top: none; max-height: none; }
+  .te-editor.te-content-collapsed.te-props-collapsed .te-body { grid-template-columns: none !important; }
+  .te-editor.te-content-collapsed .te-blocks {
+    height: 32px !important;
+    max-height: 32px !important;
+  }
+  .te-editor.te-content-collapsed .te-blocks-scroll { display: none !important; }
+  .te-editor.te-props-collapsed .te-props {
+    border-top: none !important;
+    max-height: 38px !important;
+  }
 
   /* Empty-state hint must wrap instead of overflowing the canvas */
-  .te-empty-hint { white-space: normal; text-align: center; line-height: 1.45; max-width: calc(100% - 24px); padding: 7px 12px; }
+  .te-empty-hint {
+    white-space: normal !important;
+    text-align: center !important;
+    line-height: 1.35 !important;
+    max-width: calc(100% - 24px) !important;
+    padding: 6px 12px !important;
+    font-size: 11.5px !important;
+  }
 
   /* Full-screen mode: fill the viewport height; the canvas flexes to the
-     remaining space so all three regions stay visible without page scroll. */
-  .te-editor.te-fs .te-body { overflow: hidden; }
-  .te-editor.te-fs .te-canvas-wrap { min-height: 0; }
-  .te-editor.te-fs .te-blocks { max-height: 160px; }
-  .te-editor.te-fs .te-props { max-height: 34vh; }
+     remaining space so all regions stay accessible without page scroll. */
+  .te-editor.te-fs .te-body { overflow: hidden !important; }
+  .te-editor.te-fs .te-canvas-wrap { min-height: 0 !important; }
+  .te-editor.te-fs .te-blocks { max-height: none !important; }
+  .te-editor.te-fs .te-props { max-height: 34vh !important; }
 }
 
 .te-editor .gjs-pn-panel, .te-editor .gjs-pn-views-container { display: none; }
@@ -4911,6 +5104,7 @@ return (
               Mobile
             </button>
             <span
+              className="te-device-divider"
               style={{ width: 1, height: 20, background: '#E2E8F0', margin: '0 6px' }}
               aria-hidden="true"
             />
@@ -4931,6 +5125,7 @@ return (
               ↻ Redo
             </button>
             <span
+              className="te-device-divider"
               style={{ width: 1, height: 20, background: '#E2E8F0', margin: '0 6px' }}
               aria-hidden="true"
             />
