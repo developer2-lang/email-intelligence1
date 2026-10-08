@@ -1791,7 +1791,7 @@ setCompBody('');
             </div>
 
             {/* CARD 3: ACTIONS ROW */}
-            <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
+            <div style={{ display: 'flex', gap: '12px', alignItems: 'center', flexWrap: 'wrap' }}>
               <button
                 type="button"
                 onClick={() => handleSaveCampaign('sent')}
@@ -1957,7 +1957,7 @@ setCompBody('');
                       {templateLoadError}
                     </div>
                   )}
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                  <div className="campaign-template-picker-grid" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
                   {templates.map((tmpl) => {
                     const isActive = selectedTemplate?.id === tmpl.id;
                     const isLoading = templateLoadingId === tmpl.id;

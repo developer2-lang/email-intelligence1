@@ -2432,7 +2432,7 @@ const DELAY_OPTIONS = [
                       {templateLoadError}
                     </div>
                   )}
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                  <div className="campaign-template-picker-grid" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
                     {templates.map((tmpl) => {
                       const isActive = selectedTemplate?.id === tmpl.id
                       const isLoading = templateLoadingId === tmpl.id

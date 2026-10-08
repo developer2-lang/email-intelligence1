@@ -1192,7 +1192,7 @@ export default function LeadSearch() {
       )}
 
       {/* ─── Action Area ─── */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '18px' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap', marginBottom: '18px' }}>
         <button
           className="btn btn-primary"
           onClick={() => void handleSearch()}

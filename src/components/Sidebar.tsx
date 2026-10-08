@@ -140,6 +140,7 @@ const NAV_ICONS: Record<TabKey, ReactNode> = {
 interface SidebarProps {
   activeTab: TabKey
   onNavigate: (tab: TabKey) => void
+  onClose?: () => void
   prefFrom?: string
   userEmail?: string
   onSignOut?: () => void
@@ -171,7 +172,7 @@ function userNameFromEmail(email?: string): string {
     .join(' ')
 }
 
-export default function Sidebar({ activeTab, onNavigate, prefFrom, userEmail, onSignOut }: SidebarProps) {
+export default function Sidebar({ activeTab, onNavigate, onClose, prefFrom, userEmail, onSignOut }: SidebarProps) {
   const userName = displayName(prefFrom)
   const initials = userEmail ? getInitials(userNameFromEmail(userEmail)) : getInitials(userName)
 
@@ -182,15 +183,37 @@ export default function Sidebar({ activeTab, onNavigate, prefFrom, userEmail, on
   return (
     <aside className="sidebar" id="app-sidebar">
       <div className="side-brand">
-        <div className="side-logo" aria-hidden="true">
-          <Icon>
-            <path d="M8 5.5h8M12 5.5v13M8 18.5h8" />
-          </Icon>
+        <div className="side-brand-left">
+          <div className="side-logo" aria-hidden="true">
+            <Icon>
+              <path d="M8 5.5h8M12 5.5v13M8 18.5h8" />
+            </Icon>
+          </div>
+          <div>
+            <div className="side-brand-name">IUOVA</div>
+            <div className="side-brand-sub">Email Intelligence</div>
+          </div>
         </div>
-        <div>
-          <div className="side-brand-name">IUOVA</div>
-          <div className="side-brand-sub">Email Intelligence</div>
-        </div>
+        {onClose && (
+          <button
+            type="button"
+            className="side-close-btn"
+            onClick={onClose}
+            aria-label="Close navigation"
+          >
+            <svg
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              aria-hidden="true"
+            >
+              <line x1="18" y1="6" x2="6" y2="18" />
+              <line x1="6" y1="6" x2="18" y2="18" />
+            </svg>
+          </button>
+        )}
       </div>
 
       <nav className="side-nav" aria-label="Main navigation">

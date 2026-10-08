@@ -166,7 +166,7 @@ export default function SettingsTab({
 
   return (
     <div className="page active">
-      <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 1fr', gap: '16px' }}>
+      <div className="settings-grid" style={{ display: 'grid', gridTemplateColumns: '1.2fr 1fr', gap: '16px' }}>
         {/* Left Side: Integrations */}
         <div className="flex flex-col gap-4">
           {/* LUSHA API & PROSPECTING */}

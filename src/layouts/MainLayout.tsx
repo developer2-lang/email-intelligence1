@@ -35,7 +35,14 @@ export default function MainLayout({ activeTab, onNavigate, toasts, prefFrom, us
 
   return (
     <div className={`app${navOpen ? ' nav-open' : ''}`}>
-      <Sidebar activeTab={activeTab} onNavigate={handleNavigate} prefFrom={prefFrom} userEmail={userEmail} onSignOut={onSignOut} />
+      <Sidebar
+        activeTab={activeTab}
+        onNavigate={handleNavigate}
+        onClose={() => setNavOpen(false)}
+        prefFrom={prefFrom}
+        userEmail={userEmail}
+        onSignOut={onSignOut}
+      />
 
       <div className="nav-backdrop" onClick={() => setNavOpen(false)} aria-hidden="true" />
 
