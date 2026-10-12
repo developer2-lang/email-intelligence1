@@ -665,7 +665,6 @@ export default function LeadSearch() {
       }
 
       const saved = Number(data.savedCount) || 0
-      const found = Number(data.found) || 0
 
       // Map leads directly returned in response payload (Name, Job Title, Email, LinkedIn URL)
       const returnedLeads: Lead[] = Array.isArray(data.leads || data.data)

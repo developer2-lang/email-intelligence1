@@ -680,12 +680,12 @@ export function cleanUnlimitedHeight(raw: string): string {
   let cleaned = String(raw || '');
 
   // 1. In style attributes: on non-image elements, make height fluid/unlimited
-  cleaned = cleaned.replace(/<([a-z0-9]+)([^>]*?)>/gi, (_tagMatch, tagName, attrs) => {
+  cleaned = cleaned.replace(/<([a-z0-9]+)([^>]*?)>/gi, (_tagMatch: string, tagName: string, attrs: string) => {
     const isImage = tagName.toLowerCase() === 'img';
     let newAttrs = attrs;
 
     if (!isImage) {
-      newAttrs = newAttrs.replace(/style=(["'])([^"']*)\1/gi, (_m, quote, styleContent) => {
+      newAttrs = newAttrs.replace(/style=(["'])([^"']*)\1/gi, (_m: string, quote: string, styleContent: string) => {
         let s = styleContent;
         s = s.replace(/(?<![a-z-])min-height\s*:\s*[^;]+;?/gi, '');
         s = s.replace(/(?<![a-z-])max-height\s*:\s*[^;]+;?/gi, '');
@@ -702,7 +702,7 @@ export function cleanUnlimitedHeight(raw: string): string {
   });
 
   // 2. In <style> tags: neutralize fixed heights and overflow:hidden
-  cleaned = cleaned.replace(/<style\b[^>]*>([\s\S]*?)<\/style>/gi, (_match, css) => {
+  cleaned = cleaned.replace(/<style\b[^>]*>([\s\S]*?)<\/style>/gi, (_match: string, css: string) => {
     let c = css;
     c = c.replace(/(?<![a-z-])min-height\s*:\s*[^;]+;?/gi, '');
     c = c.replace(/(?<![a-z-])max-height\s*:\s*[^;]+;?/gi, '');
