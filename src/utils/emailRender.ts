@@ -672,6 +672,50 @@ function buildEmailScaffold(content: string, bg = '', width = EMAIL_SAFE_WIDTH):
 }
 
 /**
+ * Strip fixed pixel heights, min-heights, max-heights and overflow:hidden on
+ * container elements (tables, tds, divs, sections, paragraphs, spans) so
+ * email templates expand freely and fluidly on mobile devices without clipping.
+ */
+export function cleanUnlimitedHeight(raw: string): string {
+  let cleaned = String(raw || '');
+
+  // 1. In style attributes: on non-image elements, make height fluid/unlimited
+  cleaned = cleaned.replace(/<([a-z0-9]+)([^>]*?)>/gi, (_tagMatch, tagName, attrs) => {
+    const isImage = tagName.toLowerCase() === 'img';
+    let newAttrs = attrs;
+
+    if (!isImage) {
+      newAttrs = newAttrs.replace(/style=(["'])([^"']*)\1/gi, (_m, quote, styleContent) => {
+        let s = styleContent;
+        s = s.replace(/(?<![a-z-])min-height\s*:\s*[^;]+;?/gi, '');
+        s = s.replace(/(?<![a-z-])max-height\s*:\s*[^;]+;?/gi, '');
+        s = s.replace(/(?<![a-z-])height\s*:\s*[^;]+;?/gi, 'height:auto;');
+        s = s.replace(/(?<![a-z-])overflow\s*:\s*hidden;?/gi, 'overflow:visible;');
+        s = s.replace(/(?<![a-z-])overflow-y\s*:\s*hidden;?/gi, 'overflow-y:visible;');
+        return `style=${quote}${s}${quote}`;
+      });
+      // Remove HTML height attribute on non-images (e.g. height="500")
+      newAttrs = newAttrs.replace(/\s+height=(["'])\d+[^"']*\1/gi, '');
+    }
+
+    return `<${tagName}${newAttrs}>`;
+  });
+
+  // 2. In <style> tags: neutralize fixed heights and overflow:hidden
+  cleaned = cleaned.replace(/<style\b[^>]*>([\s\S]*?)<\/style>/gi, (_match, css) => {
+    let c = css;
+    c = c.replace(/(?<![a-z-])min-height\s*:\s*[^;]+;?/gi, '');
+    c = c.replace(/(?<![a-z-])max-height\s*:\s*[^;]+;?/gi, '');
+    c = c.replace(/(?<![a-z-])height\s*:\s*\d+px;?/gi, 'height:auto;');
+    c = c.replace(/(?<![a-z-])overflow\s*:\s*hidden;?/gi, 'overflow:visible;');
+    c = c.replace(/(?<![a-z-])overflow-y\s*:\s*hidden;?/gi, 'overflow-y:visible;');
+    return `<style>${c}</style>`;
+  });
+
+  return cleaned;
+}
+
+/**
  * Convert saved template HTML into Gmail-safe, centered email markup with ONE
  * content container. Mirrors the shared send-time renderer exactly.
  *
@@ -682,7 +726,9 @@ export function toEmailSafeHtml(html: string): string {
   const sourceRaw = String(html || '');
   if (!sourceRaw.trim()) return sourceRaw;
 
-  const source = normalizeCssInHtml(sourceRaw);
+  // Uncap all fixed heights so mobile email clients display the complete email
+  const unconstrained = cleanUnlimitedHeight(sourceRaw);
+  const source = normalizeCssInHtml(unconstrained);
 
   const bodyMatch = source.match(/<body([^>]*)>([\s\S]*?)<\/body>/i);
   const isFullDocument = !!bodyMatch;
@@ -725,11 +771,15 @@ export function toEmailSafeHtml(html: string): string {
     safeBody = buildEmailScaffold(safeBody, bg);
   }
 
+  // Ensure safeBody has all heights unlimited
+  safeBody = cleanUnlimitedHeight(safeBody);
+
   if (isFullDocument) {
-    return source.replace(
+    const result = source.replace(
       /(<body[^>]*>)([\s\S]*?)(<\/body>)/i,
       (_m: string, open: string, _inner: string, close: string) => `${open}\n${safeBody}\n${close}`,
     );
+    return cleanUnlimitedHeight(result);
   }
   return safeBody;
 }
@@ -738,7 +788,9 @@ export function toEmailSafeHtml(html: string): string {
 export function wrapHtmlDocument(html: string): string {
   const value = String(html || '');
   if (!value.trim()) return value;
-  if (/<!doctype\b|<\s*html\b|<\s*head\b/i.test(value)) return value;
+  if (/<!doctype\b|<\s*html\b|<\s*head\b/i.test(value)) return cleanUnlimitedHeight(value);
+
+  const safeContent = cleanUnlimitedHeight(value);
 
   return [
     '<!DOCTYPE html>',
@@ -746,10 +798,18 @@ export function wrapHtmlDocument(html: string): string {
     '<head>',
     '<meta charset="utf-8" />',
     '<meta name="viewport" content="width=device-width, initial-scale=1" />',
-    '<style>img{border:0;max-width:100%;}a{color:#1a73e8;}table{border-collapse:collapse;}</style>',
+    '<style>',
+    'img{border:0;max-width:100%;height:auto;}',
+    'a{color:#1a73e8;}',
+    'table{border-collapse:collapse;}',
+    '@media only screen and (max-width: 600px) {',
+    '  table, td, th, div, p, span, section { height: auto !important; max-height: none !important; }',
+    '  table[width="600"], td[style*="width: 594px"], td[style*="width:594px"] { width: 100% !important; max-width: 100% !important; }',
+    '}',
+    '</style>',
     '</head>',
     '<body style="margin:0;padding:0;font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:1.5;color:#333333;">',
-    value,
+    safeContent,
     '</body>',
     '</html>',
   ].join('\n');

@@ -160,37 +160,58 @@ export function matchesCurrentCompanies(item, targetCompanies) {
 }
 
 /**
- * Builds the Apify LinkedIn Search Actor payload according to required schema.
+ * Filter results strictly by target name if specified.
  */
-export function buildApifyPayload(filters = {}) {
-  const company = String(filters.company || '').trim();
-  const designation = String(filters.designation || '').trim();
-  const industry = String(filters.industry || '').trim();
-  const role = String(filters.role || '').trim();
-  const geography = String(filters.geography || '').trim();
-  const state = String(filters.state || '').trim();
-  const maxResults = Number(filters.maxResults || filters.maxItems || filters.numProfiles || 10);
+export function matchesName(item, targetName) {
+  if (!targetName || !String(targetName).trim()) return true;
+  const target = String(targetName).trim().toLowerCase();
+  const fullName = extractFullName(item).trim().toLowerCase();
+  if (!fullName || fullName === '—') return false;
 
-  // searchQuery: combine all non-empty values
-  const searchQuery = [company, designation, industry, role]
-    .filter(Boolean)
-    .join(' ')
-    .trim() || 'CEO';
+  // Direct substring match
+  if (fullName.includes(target)) return true;
 
-  // currentCompanies: only if company is provided
-  const currentCompanies = company ? [company] : [];
-
-  // LinkedIn accepts: "California", "United States", "California, United States"
-  // Send state alone, or fall back to country, or both as separate items
-  let locations = [];
-  if (Array.isArray(filters.locations) && filters.locations.length > 0) {
-    locations = [...filters.locations];
-  } else {
-    if (state) locations.push(state);         // e.g. "California"
-    if (geography) locations.push(geography); // e.g. "USA" → need "United States"
+  // Token matching (all parts of targetName must exist in fullName)
+  const tokens = target.split(/\s+/).filter(Boolean);
+  if (tokens.length > 0 && tokens.every((token) => fullName.includes(token))) {
+    return true;
   }
 
-  // Map common abbreviations to full country names
+  // Check first / last name
+  const first = String(item.firstName || '').trim().toLowerCase();
+  const last = String(item.lastName || '').trim().toLowerCase();
+  const combined = `${first} ${last}`.trim();
+  if (combined && (combined.includes(target) || (tokens.length > 0 && tokens.every((t) => combined.includes(t))))) {
+    return true;
+  }
+
+  return false;
+}
+
+export function postFilterByName(item, targetName) {
+  if (!targetName || !String(targetName).trim()) return true;
+  const target = String(targetName).trim().toLowerCase();
+  const fullName = extractFullName(item).trim().toLowerCase();
+  const nameField = String(item.name || '').trim().toLowerCase();
+  return (fullName !== '—' && fullName.includes(target)) || nameField.includes(target);
+}
+
+/**
+ * Builds tiered search payloads according to the fallback strategy:
+ * Tier 1: Full query: searchQuery="{Name} {Designation} {Industry}", locations=["{Geography}", "{State}"], currentCompanies=["{Company}"]
+ * Tier 2: Company filter removed: currentCompanies removed
+ * Tier 3: Name only with Geography: searchQuery="{Name}", locations=["{Geography}"]
+ * Tier 4: Company only with Geography (if Name is empty): searchQuery="{Company}", locations=["{Geography}"]
+ */
+export function getSearchTiers(filters = {}) {
+  const name = String(filters.name || filters.fullName || '').trim();
+  const designation = String(filters.designation || '').trim();
+  const industry = String(filters.industry || '').trim();
+  const company = String(filters.company || '').trim();
+  const geography = String(filters.geography || '').trim();
+  const state = String(filters.state || '').trim();
+  const maxItems = Number(filters.maxItems || filters.maxResults || filters.numProfiles || 5) || 5;
+
   const COUNTRY_MAP = {
     'USA': 'United States',
     'US': 'United States',
@@ -199,17 +220,80 @@ export function buildApifyPayload(filters = {}) {
     'CA': 'Canada',
     'AU': 'Australia',
   };
-  const normalizedLocations = locations
-    .map((loc) => COUNTRY_MAP[String(loc).toUpperCase()] || loc)
-    .filter(Boolean);
+  const normGeo = geography ? (COUNTRY_MAP[geography.toUpperCase()] || geography) : '';
+  const normState = state || '';
 
-  return {
-    searchQuery: searchQuery,
-    currentCompanies: currentCompanies,
-    locations: normalizedLocations,
-    maxItems: Number(maxResults),
-    profileScraperMode: 'Full',
-  };
+  const tier1Query = [name, designation, industry].filter(Boolean).join(' ').trim() || (company || 'CEO');
+  const tier1Locations = [normGeo, normState].filter(Boolean);
+  const tier1Companies = company ? [company] : [];
+
+  const tiers = [
+    {
+      tier: 1,
+      name: 'Tier 1',
+      description: 'Tier 1 — Full query with all filters',
+      shortDescription: 'Full query with all filters',
+      payload: {
+        searchQuery: tier1Query,
+        locations: tier1Locations,
+        ...(tier1Companies.length > 0 ? { currentCompanies: tier1Companies } : {}),
+        maxItems,
+        profileScraperMode: 'Full',
+      },
+    },
+  ];
+
+  if (tier1Companies.length > 0) {
+    tiers.push({
+      tier: 2,
+      name: 'Tier 2',
+      description: 'Tier 2 — Company filter removed',
+      shortDescription: 'Company filter removed',
+      payload: {
+        searchQuery: tier1Query,
+        locations: tier1Locations,
+        maxItems,
+        profileScraperMode: 'Full',
+      },
+    });
+  }
+
+  if (name) {
+    tiers.push({
+      tier: 3,
+      name: 'Tier 3',
+      description: 'Tier 3 — Name only with Geography',
+      shortDescription: 'Name only with Geography',
+      payload: {
+        searchQuery: name,
+        locations: normGeo ? [normGeo] : [],
+        maxItems,
+        profileScraperMode: 'Full',
+      },
+    });
+  }
+
+  if (!name && company) {
+    tiers.push({
+      tier: 4,
+      name: 'Tier 4',
+      description: 'Tier 4 — Company only with Geography',
+      shortDescription: 'Company only with Geography',
+      payload: {
+        searchQuery: company,
+        locations: normGeo ? [normGeo] : [],
+        maxItems,
+        profileScraperMode: 'Full',
+      },
+    });
+  }
+
+  return tiers;
+}
+
+export function buildApifyPayload(filters = {}) {
+  const tiers = getSearchTiers(filters);
+  return tiers[0]?.payload || {};
 }
 
 /**
@@ -217,17 +301,20 @@ export function buildApifyPayload(filters = {}) {
  * Temporary debug endpoint returning raw Apify output without any filters.
  */
 router.post('/debug-apify', async (req, res) => {
-  const token = process.env.APIFY_TOKEN || process.env.APIFY_API_KEY;
+  const token = process.env.APIFY_TOKEN;
   if (!token) {
-    return res.status(400).json({ error: 'APIFY_TOKEN is missing' });
+    return res.status(400).json({ error: 'Missing required env var: APIFY_TOKEN' });
+  }
+  const actorId = process.env.APIFY_ACTOR_ID;
+  if (!actorId) {
+    return res.status(400).json({ error: 'Missing required env var: APIFY_ACTOR_ID' });
   }
   const client = new ApifyClient({ token });
-  const actorId = process.env.APIFY_ACTOR_ID || 'harvestapi/linkedin-profile-search';
 
   const apifyInput = {
     searchQuery: 'Amazon Software Engineer',
     currentCompanies: ['Amazon'],
-    locations: ['United States'],       // ← Country only, no comma
+    locations: ['United States'],
     maxItems: 3,
     profileScraperMode: 'Full',
   };
@@ -259,7 +346,7 @@ router.post('/debug-apify', async (req, res) => {
 
 /**
  * POST /api/leads/search
- * Trigger Apify LinkedIn profile scraper with strict currentCompanies filtering.
+ * Trigger Apify LinkedIn profile scraper with Tiered fallback and post-filtering.
  */
 router.post('/search', async (req, res) => {
   console.log('[Route] POST /search called');
@@ -274,52 +361,111 @@ router.post('/search', async (req, res) => {
     const state = String(filters.state || '').trim();
     const industry = String(filters.industry || '').trim();
     const role = String(filters.role || '').trim();
+    const name = String(filters.name || filters.fullName || '').trim();
 
-    // Construct the exact Apify payload requested
-    const apifyInput = buildApifyPayload(filters);
-    console.log('[Apify] Payload:', JSON.stringify(apifyInput, null, 2));
-
-    const token = process.env.APIFY_TOKEN || process.env.APIFY_API_KEY;
+    const token = process.env.APIFY_TOKEN;
     if (!token) {
       return res.status(400).json({
         success: false,
-        error: 'APIFY_TOKEN is missing. Please set APIFY_TOKEN in your environment or backend/.env file.',
+        error: 'Missing required env var: APIFY_TOKEN. Please set APIFY_TOKEN in your environment or backend/.env file.',
+      });
+    }
+
+    const actorId = process.env.APIFY_ACTOR_ID;
+    if (!actorId) {
+      return res.status(400).json({
+        success: false,
+        error: 'Missing required env var: APIFY_ACTOR_ID. Please set APIFY_ACTOR_ID in your environment or backend/.env file.',
       });
     }
 
     const client = new ApifyClient({ token });
-    const actorId = process.env.APIFY_ACTOR_ID || 'harvestapi/linkedin-profile-search';
 
-    let items = [];
-    try {
-      console.log(`[Apify] Starting run for actor "${actorId}"...`);
-      const run = await client.actor(actorId).call(apifyInput);
-      console.log('[Apify] Run ID:', run.id);
-      console.log('[Apify] Run status:', run.status);
-      console.log('[Apify] Dataset ID:', run.defaultDatasetId);
+    const tiers = getSearchTiers(filters);
+    console.log(`[Apify] Prepared ${tiers.length} search tiers`);
 
-      const dataset = await client.dataset(run.defaultDatasetId).listItems();
-      items = dataset.items || [];
-      console.log('[Apify] Raw items count:', items.length);
-      if (items.length > 0) {
-        console.log('[Apify] First raw item:', JSON.stringify(items[0], null, 2));
+    let winningTier = null;
+    let winningItems = [];
+    const tierAttempts = [];
+    let lastApifyError = null;
+
+    for (const t of tiers) {
+      console.log(`[Apify] Running ${t.description} -> payload:`, JSON.stringify(t.payload, null, 2));
+
+      let run = null;
+      let rawItems = [];
+      let attemptError = null;
+
+      try {
+        run = await client.actor(actorId).call(t.payload);
+        console.log(`[Apify] ${t.name} Run ID:`, run.id, 'Status:', run.status, 'statusMessage:', run.statusMessage);
+
+        if (run.statusMessage) {
+          lastApifyError = run.statusMessage;
+        }
+
+        const dataset = await client.dataset(run.defaultDatasetId).listItems();
+        rawItems = dataset.items || [];
+        console.log(`[Apify] ${t.name} Raw items count:`, rawItems.length);
+      } catch (err) {
+        console.error(`[Apify] ${t.name} Actor call failed:`, err);
+        attemptError = err.message;
+        lastApifyError = err.message;
       }
-    } catch (apifyErr) {
-      console.error('[Apify] Actor call failed:', apifyErr);
-      return res.status(500).json({
-        success: false,
-        error: 'Apify call failed',
-        details: apifyErr?.message || 'Failed to execute Apify actor',
+
+      // Post-filter results by name
+      // Because the actor uses fuzzy search, keep only profiles whose name (or fullName) field
+      // contains the entered Name value (case-insensitive, trimmed). If Name is empty, skip this step.
+      let matchedItems = rawItems;
+      if (name) {
+        matchedItems = rawItems.filter((item) => postFilterByName(item, name));
+      }
+
+      tierAttempts.push({
+        tier: t.tier,
+        name: t.name,
+        description: t.description,
+        payload: t.payload,
+        status: run?.status || (attemptError ? 'FAILED' : 'UNKNOWN'),
+        statusMessage: run?.statusMessage || attemptError || null,
+        rawItemsCount: rawItems.length,
+        matchedItemsCount: matchedItems.length,
+        rawItemsSample: rawItems.slice(0, 3),
+      });
+
+      if (matchedItems.length > 0) {
+        winningTier = t;
+        winningItems = matchedItems;
+        console.log(`[Apify] ${t.description} SUCCEEDED with ${matchedItems.length} matching leads!`);
+        break; // Stop fallback immediately
+      } else {
+        console.log(`[Apify] ${t.description} returned 0 matching leads. Proceeding to next tier...`);
+      }
+    }
+
+    // Tier 5: If all tiers return 0, do NOT fabricate results. Return raw Apify request & response JSON.
+    if (!winningTier || winningItems.length === 0) {
+      const isLimit = lastApifyError && /limit|credit|quota|reach|exceed/i.test(lastApifyError);
+      const friendlyError = lastApifyError
+        ? (isLimit ? `Apify run limit reached: ${lastApifyError}` : `Apify error: ${lastApifyError}`)
+        : null;
+
+      return res.json({
+        success: true,
+        found: 0,
+        savedCount: 0,
+        tier: null,
+        tierDescription: friendlyError || 'All tiers returned 0 matching profiles',
+        tierAttempts,
+        leads: [],
+        data: [],
+        apifyError: friendlyError,
+        message: friendlyError || 'All search tiers returned 0 matching profiles.',
       });
     }
 
-    // Strictly filter results by currentCompanies array
-    const strictProfiles = apifyInput.currentCompanies.length > 0
-      ? items.filter((item) => matchesCurrentCompanies(item, apifyInput.currentCompanies))
-      : items;
-
-    console.log('[Apify] Filtered items count:', strictProfiles.length);
-    console.log('[Apify] Removed by filter:', items.length - strictProfiles.length);
+    const strictProfiles = winningItems;
+    console.log(`[Apify] Final profiles to process from ${winningTier.name}:`, strictProfiles.length);
 
     // Map and return results (Name, Job Title, Email, LinkedIn URL, Company, etc.)
     const leads = strictProfiles.map((item, idx) => {
@@ -333,6 +479,7 @@ router.post('/search', async (req, res) => {
 
       return {
         id: item.id || `lead-${Date.now()}-${idx}`,
+        name: full_name && full_name !== '—' ? full_name : (item.name || null),
         full_name,
         job_title,
         company_name,
@@ -395,22 +542,26 @@ router.post('/search', async (req, res) => {
 
         const rowsToSave = leads
           .filter((l) => l.linkedinUrl)
-          .map((l) => ({
-            user_id: userId,
-            full_name: l.full_name && l.full_name !== '—' ? l.full_name : null,
-            job_title: l.job_title && l.job_title !== '—' ? l.job_title : null,
-            company_name: l.company_name && l.company_name !== '—' ? l.company_name : null,
-            designation: l.designation && l.designation !== '—' ? l.designation : null,
-            email: l.email || null,
-            phone: l.phone || null,
-            linkedin_url: l.linkedinUrl,
-            role: l.role || '',
-            headline: l.designation && l.designation !== '—' ? l.designation : null,
-            location: l.geography && l.geography !== '—' ? l.geography : null,
-            geography: l.geography && l.geography !== '—' ? l.geography : null,
-            industry: l.industry || '',
-            source_query: apifyInput.searchQuery,
-          }));
+          .map((l) => {
+            const resolvedName = (l.name || l.full_name) && (l.name || l.full_name) !== '—' ? (l.name || l.full_name) : null;
+            return {
+              user_id: userId,
+              name: resolvedName,
+              full_name: resolvedName,
+              job_title: l.job_title && l.job_title !== '—' ? l.job_title : null,
+              company_name: l.company_name && l.company_name !== '—' ? l.company_name : null,
+              designation: l.designation && l.designation !== '—' ? l.designation : null,
+              email: l.email || null,
+              phone: l.phone || null,
+              linkedin_url: l.linkedinUrl,
+              role: l.role || '',
+              headline: l.designation && l.designation !== '—' ? l.designation : null,
+              location: l.geography && l.geography !== '—' ? l.geography : null,
+              geography: l.geography && l.geography !== '—' ? l.geography : null,
+              industry: l.industry || '',
+              source_query: winningTier?.payload?.searchQuery || '',
+            };
+          });
 
         // Deduplicate rowsToSave by linkedin_url so Postgres ON CONFLICT doesn't fail with 21000
         const seenUrls = new Set();
@@ -469,18 +620,23 @@ router.post('/search', async (req, res) => {
       });
     }
 
+    const tierDescription = `Found ${leads.length} lead${leads.length === 1 ? '' : 's'} on ${winningTier.name} — ${winningTier.shortDescription}`;
+
     console.log('[Response] Returning:', JSON.stringify({
       success: true,
       found: leads.length,
-      rawFound: items.length,
       savedCount,
+      tier: winningTier.tier,
+      tierDescription,
     }, null, 2));
 
     return res.json({
       success: true,
       found: leads.length,
-      rawFound: items.length,
       savedCount,
+      tier: winningTier.tier,
+      tierDescription,
+      tierAttempts,
       leads,
       data: leads,
     });

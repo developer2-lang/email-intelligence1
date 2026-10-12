@@ -7,6 +7,7 @@ export interface LeadRow {
   email: string | null
   phone: string | null
   linkedin_url: string | null
+  name?: string | null
   full_name: string | null
   headline: string | null
   company_name: string | null
@@ -57,6 +58,7 @@ export async function getLeadCount(): Promise<{ count: number; error: string | n
 export async function updateLead(
   id: string,
   input: {
+    name?: string | null
     full_name?: string
     email?: string | null
     phone?: string | null
@@ -67,7 +69,12 @@ export async function updateLead(
   }
 ): Promise<{ error: string | null }> {
   try {
-    const { error } = await supabase.from('leads').update(input).eq('id', id)
+    const payload = {
+      ...input,
+      ...(input.full_name ? { name: input.full_name } : {}),
+      ...(input.name ? { full_name: input.name } : {}),
+    }
+    const { error } = await supabase.from('leads').update(payload).eq('id', id)
     return { error: error?.message ?? null }
   } catch (err) {
     return { error: err instanceof Error ? err.message : 'Failed to update lead' }

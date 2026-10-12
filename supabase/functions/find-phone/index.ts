@@ -69,7 +69,19 @@ export default {
       if (!res.ok) {
         const errBody = await res.text();
         console.error(`Apify ${res.status}:`, errBody);
-        return respond({ success: false, found: false, reason: `Apify actor returned ${res.status}` });
+        let parsedMessage = errBody;
+        try {
+          const parsed = JSON.parse(errBody);
+          parsedMessage = parsed.error?.message || parsed.message || parsed.error || errBody;
+        } catch {}
+        const isLimit = res.status === 429 || res.status === 402 || /limit|quota|credit|reach|exceed|payment|usage/i.test(parsedMessage);
+        return respond({
+          success: false,
+          found: false,
+          isLimit,
+          apifyError: parsedMessage,
+          reason: isLimit ? `Apify limit reached: ${parsedMessage}` : `Apify error: ${parsedMessage}`,
+        });
       }
 
       const data = await res.json();
@@ -78,6 +90,21 @@ export default {
       // Response: [{ input_url, mobile_number, profile_url, ... }]
       const list  = Array.isArray(data) ? data : (Array.isArray(data?.data) ? data.data : [data]);
       const first = list[0] ?? {};
+
+      // Check if the actor output reported an explicit error / limit
+      const actorErr = first.error || (data && !Array.isArray(data) && (data.error || data.message || data.statusMessage));
+      if (actorErr && typeof actorErr === "string") {
+        const isLimit = /limit|quota|credit|reach|exceed|payment|usage/i.test(actorErr);
+        console.warn("Apify phone actor reported error/limit:", actorErr);
+        return respond({
+          success: false,
+          found: false,
+          isLimit,
+          apifyError: actorErr,
+          reason: isLimit ? `Apify limit reached: ${actorErr}` : `Apify error: ${actorErr}`,
+        });
+      }
+
       const phone = extractPhone(first); // reads mobile_number first
       console.log("phone found:", phone || "(none)");
 

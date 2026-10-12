@@ -2,6 +2,7 @@ import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useSta
 import grapesjs, { type Component, type Editor } from 'grapesjs';
 import 'grapesjs/dist/css/grapes.min.css';
 import { uploadEmailImage } from '../services/campaignService';
+import { cleanUnlimitedHeight } from '../utils/emailRender';
 import {
   SOCIAL_DATA_ATTR,
   SOCIAL_PLATFORMS,
@@ -481,6 +482,8 @@ const getDocumentHtml = (editor: Editor): string => {
   // which must survive so the container hierarchy is reconstructed on reload
   // and preserved verbatim on preview/send.
   html = html.replace(/\s+data-te-role=(?:"(?!container|image-wrapper|section|link")[^"]*"|'(?!container|image-wrapper|section|link')[^']*')/gi, '');
+  // Uncap all fixed heights so email renders completely without mobile clipping
+  html = cleanUnlimitedHeight(html);
   return html;
 }
 

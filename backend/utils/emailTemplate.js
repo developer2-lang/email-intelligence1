@@ -228,6 +228,53 @@ function buildTrackedHtml(html, trackingId, baseUrl, campaignId = null, recipien
 }
 
 /**
+ * Strip fixed pixel heights, min-heights, max-heights and overflow:hidden on
+ * container elements (tables, tds, divs, sections, paragraphs, spans) so
+ * email templates expand freely and fluidly on mobile devices without clipping.
+ *
+ * @param {string} raw
+ * @returns {string}
+ */
+function cleanUnlimitedHeight(raw) {
+  let cleaned = String(raw || '');
+
+  // 1. In style attributes: on non-image elements, make height fluid/unlimited
+  cleaned = cleaned.replace(/<([a-z0-9]+)([^>]*?)>/gi, (_tagMatch, tagName, attrs) => {
+    const isImage = tagName.toLowerCase() === 'img';
+    let newAttrs = attrs;
+
+    if (!isImage) {
+      newAttrs = newAttrs.replace(/style=(["'])([^"']*)\1/gi, (_m, quote, styleContent) => {
+        let s = styleContent;
+        s = s.replace(/(?<![a-z-])min-height\s*:\s*[^;]+;?/gi, '');
+        s = s.replace(/(?<![a-z-])max-height\s*:\s*[^;]+;?/gi, '');
+        s = s.replace(/(?<![a-z-])height\s*:\s*[^;]+;?/gi, 'height:auto;');
+        s = s.replace(/(?<![a-z-])overflow\s*:\s*hidden;?/gi, 'overflow:visible;');
+        s = s.replace(/(?<![a-z-])overflow-y\s*:\s*hidden;?/gi, 'overflow-y:visible;');
+        return `style=${quote}${s}${quote}`;
+      });
+      // Remove HTML height attribute on non-images (e.g. height="500")
+      newAttrs = newAttrs.replace(/\s+height=(["'])\d+[^"']*\1/gi, '');
+    }
+
+    return `<${tagName}${newAttrs}>`;
+  });
+
+  // 2. In <style> tags: neutralize fixed heights and overflow:hidden
+  cleaned = cleaned.replace(/<style\b[^>]*>([\s\S]*?)<\/style>/gi, (_match, css) => {
+    let c = css;
+    c = c.replace(/(?<![a-z-])min-height\s*:\s*[^;]+;?/gi, '');
+    c = c.replace(/(?<![a-z-])max-height\s*:\s*[^;]+;?/gi, '');
+    c = c.replace(/(?<![a-z-])height\s*:\s*\d+px;?/gi, 'height:auto;');
+    c = c.replace(/(?<![a-z-])overflow\s*:\s*hidden;?/gi, 'overflow:visible;');
+    c = c.replace(/(?<![a-z-])overflow-y\s*:\s*hidden;?/gi, 'overflow-y:visible;');
+    return `<style>${c}</style>`;
+  });
+
+  return cleaned;
+}
+
+/**
  * Wraps an email body fragment in a full, standards-compliant HTML document so
  * email clients render it consistently. If the fragment is already a complete
  * document (contains <!DOCTYPE>, <html> or <head>), it is returned unchanged.
@@ -241,7 +288,9 @@ function buildTrackedHtml(html, trackingId, baseUrl, campaignId = null, recipien
 function wrapHtmlDocument(html) {
   const value = String(html || '');
   if (!value.trim()) return value;
-  if (/<!doctype\b|<\s*html\b|<\s*head\b/i.test(value)) return value;
+  if (/<!doctype\b|<\s*html\b|<\s*head\b/i.test(value)) return cleanUnlimitedHeight(value);
+
+  const safeContent = cleanUnlimitedHeight(value);
 
   // A document that already contains a <body> (but no outer <html>/<head>) must
   // be COMPLETED into a single, well-formed document — NOT re-wrapped. Re-wrapping
@@ -255,9 +304,17 @@ function wrapHtmlDocument(html) {
       '<head>',
       '<meta charset="utf-8" />',
       '<meta name="viewport" content="width=device-width, initial-scale=1" />',
-      '<style>img{border:0;max-width:100%;}a{color:#1a73e8;}table{border-collapse:collapse;}</style>',
+      '<style>',
+      'img{border:0;max-width:100%;height:auto;}',
+      'a{color:#1a73e8;}',
+      'table{border-collapse:collapse;}',
+      '@media only screen and (max-width: 600px) {',
+      '  table, td, th, div, p, span, section { height: auto !important; max-height: none !important; }',
+      '  table[width="600"], td[style*="width: 594px"], td[style*="width:594px"] { width: 100% !important; max-width: 100% !important; }',
+      '}',
+      '</style>',
       '</head>',
-      value,
+      safeContent,
       '</html>',
     ].join('\n');
   }
@@ -268,10 +325,18 @@ function wrapHtmlDocument(html) {
     '<head>',
     '<meta charset="utf-8" />',
     '<meta name="viewport" content="width=device-width, initial-scale=1" />',
-    '<style>img{border:0;max-width:100%;}a{color:#1a73e8;}table{border-collapse:collapse;}</style>',
+    '<style>',
+    'img{border:0;max-width:100%;height:auto;}',
+    'a{color:#1a73e8;}',
+    'table{border-collapse:collapse;}',
+    '@media only screen and (max-width: 600px) {',
+    '  table, td, th, div, p, span, section { height: auto !important; max-height: none !important; }',
+    '  table[width="600"], td[style*="width: 594px"], td[style*="width:594px"] { width: 100% !important; max-width: 100% !important; }',
+    '}',
+    '</style>',
     '</head>',
     '<body style="margin:0;padding:0;font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:1.5;color:#333333;">',
-    value,
+    safeContent,
     '</body>',
     '</html>',
   ].join('\n');
@@ -990,9 +1055,9 @@ function toEmailSafeHtml(html) {
   const sourceRaw = String(html || '');
   if (!sourceRaw.trim()) return sourceRaw;
 
-  // Normalize camelCase CSS (Gmail ignores it) across inline styles AND
-  // <style> blocks FIRST, so max-width etc. survive Gmail's parser.
-  const source = normalizeCssInHtml(sourceRaw);
+  // Uncap all fixed heights so mobile email clients display the complete email
+  const unconstrained = cleanUnlimitedHeight(sourceRaw);
+  const source = normalizeCssInHtml(unconstrained);
 
   const bodyMatch = source.match(/<body([^>]*)>([\s\S]*?)<\/body>/i);
   const isFullDocument = !!bodyMatch;
@@ -1035,11 +1100,15 @@ function toEmailSafeHtml(html) {
     safeBody = buildEmailScaffold(safeBody, bg);
   }
 
+  // Ensure safeBody has all heights unlimited
+  safeBody = cleanUnlimitedHeight(safeBody);
+
   if (isFullDocument) {
-    return source.replace(
+    const result = source.replace(
       /(<body[^>]*>)([\s\S]*?)(<\/body>)/i,
       (_m, open, _inner, close) => `${open}\n${safeBody}\n${close}`
     );
+    return cleanUnlimitedHeight(result);
   }
   return safeBody;
 }

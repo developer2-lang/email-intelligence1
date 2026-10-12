@@ -37,10 +37,19 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 dotenv.config({ path: path.join(__dirname, '.env') });
 console.log('[Startup 1/6] dotenv loaded');
 
-console.log('[Env] CWD:', process.cwd());
-console.log('[Env] APIFY_TOKEN present:', !!process.env.APIFY_TOKEN);
-console.log('[Env] APIFY_TOKEN prefix:', process.env.APIFY_TOKEN?.slice(0, 15) || 'MISSING');
-console.log('[Env] APIFY_ACTOR_ID:', process.env.APIFY_ACTOR_ID || 'MISSING');
+if (!process.env.APIFY_TOKEN) {
+  console.error('[FATAL] Missing required env var: APIFY_TOKEN');
+  process.exit(1);
+}
+
+if (!process.env.APIFY_ACTOR_ID) {
+  console.error('[FATAL] Missing required env var: APIFY_ACTOR_ID');
+  process.exit(1);
+}
+
+const maskedToken = `${process.env.APIFY_TOKEN.slice(0, 12)}...${process.env.APIFY_TOKEN.slice(-4)}`;
+console.log(`APIFY_TOKEN loaded: ${maskedToken}`);
+console.log(`APIFY_ACTOR_ID loaded: ${process.env.APIFY_ACTOR_ID}`);
 
 import express from 'express';
 console.log('[Startup 2/6] express imported');

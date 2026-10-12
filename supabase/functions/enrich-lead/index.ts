@@ -54,7 +54,19 @@ export default {
       if (!res.ok) {
         const errBody = await res.text();
         console.error(`Apify ${res.status}:`, errBody);
-        return respond({ success: false, found: false, reason: `Apify actor returned ${res.status}` });
+        let parsedMessage = errBody;
+        try {
+          const parsed = JSON.parse(errBody);
+          parsedMessage = parsed.error?.message || parsed.message || parsed.error || errBody;
+        } catch {}
+        const isLimit = res.status === 429 || res.status === 402 || /limit|quota|credit|reach|exceed|payment|usage/i.test(parsedMessage);
+        return respond({
+          success: false,
+          found: false,
+          isLimit,
+          apifyError: parsedMessage,
+          reason: isLimit ? `Apify limit reached: ${parsedMessage}` : `Apify error: ${parsedMessage}`,
+        });
       }
 
       const data = await res.json();
@@ -63,6 +75,20 @@ export default {
       // Response: [{ linkedin_url, found, email, name, domain, company }]
       const list  = Array.isArray(data) ? data : (Array.isArray(data?.data) ? data.data : [data]);
       const first = list[0] ?? {};
+
+      // Check if the actor output reported an explicit error / limit
+      const actorErr = first.error || (data && !Array.isArray(data) && (data.error || data.message || data.statusMessage));
+      if (actorErr && typeof actorErr === "string") {
+        const isLimit = /limit|quota|credit|reach|exceed|payment|usage/i.test(actorErr);
+        console.warn("Apify email actor reported error/limit:", actorErr);
+        return respond({
+          success: false,
+          found: false,
+          isLimit,
+          apifyError: actorErr,
+          reason: isLimit ? `Apify limit reached: ${actorErr}` : `Apify error: ${actorErr}`,
+        });
+      }
 
       // Use the actor's own "found" field — it sets it explicitly to true/false.
       const emailFound = first.found === true && typeof first.email === "string" && first.email.trim().length > 0;
@@ -74,6 +100,10 @@ export default {
       // Never null-out a value a previous enrichment already wrote.
       const updatePayload: Record<string, any> = { email_attempted: true };
       if (email) updatePayload.email = email;
+      if (first.name && typeof first.name === "string" && first.name.trim().length > 0) {
+        updatePayload.name = first.name.trim();
+        updatePayload.full_name = first.name.trim();
+      }
 
       const serviceClient = createClient(
         Deno.env.get("SUPABASE_URL")!,

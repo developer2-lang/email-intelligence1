@@ -61,6 +61,7 @@ interface LeadRow {
   email: string | null;
   phone: string | null;
   linkedin_url: string | null;
+  name?: string | null;
   full_name: string | null;
   headline: string | null;
   company_name: string | null;
@@ -419,6 +420,7 @@ export default function LeadDatabase({ onToast }: LeadDatabaseProps) {
       const { error } = await supabase
         .from('leads')
         .update({
+          name: fName.trim(),
           full_name: fName.trim(),
           email: fEmail.trim() || null,
           phone: fPhone.trim() || null,

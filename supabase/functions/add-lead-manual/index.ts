@@ -189,7 +189,8 @@ export default {
         const f = body.fields ?? {};
         const row: Record<string, any> = {
           linkedin_url: url,
-          full_name: clean(f.full_name) ?? null,
+          name: clean(f.name ?? f.full_name) ?? null,
+          full_name: clean(f.name ?? f.full_name) ?? null,
           company_name: clean(f.company_name) ?? null,
           job_title: clean(f.job_title) ?? null,
           designation: clean(f.designation) ?? null,
@@ -216,7 +217,7 @@ export default {
 
         const { data: saved } = await serviceClient
           .from("leads")
-          .select("id, linkedin_url, full_name, company_name, job_title, designation, role, industry, geography, email, phone, created_at")
+          .select("id, linkedin_url, name, full_name, company_name, job_title, designation, role, industry, geography, email, phone, created_at")
           .eq("linkedin_url", url)
           .maybeSingle();
         return ok({ success: true, data: saved ?? row });

@@ -12,6 +12,8 @@ export interface Contact {
   lastContacted: string
   engagement: number
   enriched: boolean
+  phone?: string
+  createdAt?: string
 }
 
 export interface ContactRow {
@@ -26,6 +28,8 @@ export interface ContactRow {
   company_category: string | null
   notes: string | null
   created_at: string | null
+  phone?: string | null
+  contact_no?: string | null
 }
 
 export interface ContactInput {
@@ -38,4 +42,6 @@ export interface ContactInput {
   contact_type?: string
   company_category?: string
   notes?: string | null
+  phone?: string | null
+  contact_no?: string | null
 }

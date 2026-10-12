@@ -23,6 +23,7 @@ import { queueContactsForWeeklyEmail } from '../services/weeklyQueueService'
 
 interface Lead {
   id: string
+  name?: string
   email?: string
   phone?: string
   linkedinUrl?: string
@@ -38,6 +39,7 @@ interface Lead {
 }
 
 interface Filters {
+  name: string
   company: string
   industry: string
   designation: string
@@ -48,7 +50,7 @@ interface Filters {
   maxItems: number
 }
 
-const DEFAULT_FILTERS: Filters = { company: '', industry: '', designation: '', geography: '', state: '', role: '', companySize: '', maxItems: 5 }
+const DEFAULT_FILTERS: Filters = { name: '', company: '', industry: '', designation: '', geography: '', state: '', role: '', companySize: '', maxItems: 5 }
 
 function mergeUnique(lists: string[][]): string[] {
   const seen = new Set<string>()
@@ -89,6 +91,23 @@ function companyFromDesignation(designation?: string): string | null {
     }
   }
   return null
+}
+
+function leadMatchesName(lead: Lead, nameQuery: string): boolean {
+  if (!nameQuery || !nameQuery.trim()) return true
+  const q = nameQuery.trim().toLowerCase()
+  const nameVal = (lead.full_name || lead.name || '').trim().toLowerCase()
+  if (!nameVal) return false
+  if (nameVal.includes(q)) return true
+  const tokens = q.split(/\s+/).filter(Boolean)
+  return tokens.length > 0 && tokens.every((t) => nameVal.includes(t))
+}
+
+function leadMatchesCompany(lead: Lead, companyQuery: string): boolean {
+  if (!companyQuery || !companyQuery.trim()) return true
+  const q = companyQuery.trim().toLowerCase()
+  const compVal = (lead.company_name || companyFromDesignation(lead.designation) || '').trim().toLowerCase()
+  return compVal.includes(q)
 }
 
 function hasPhoneValue(phone?: string): boolean {
@@ -140,12 +159,14 @@ function cleanDesignation(
 }
 
 function leadFromRow(row: any): Lead {
+  const resolvedName = row.name || row.full_name || ''
   return {
     id: row.id,
     email: row.email,
     phone: row.phone,
     linkedinUrl: row.linkedin_url,
-    full_name: row.full_name,
+    name: resolvedName,
+    full_name: resolvedName,
     company_name: row.company_name,
     job_title: row.job_title || '',
     designation: row.designation,
@@ -193,8 +214,11 @@ export default function LeadSearch() {
       return raw ? new Set<string>(JSON.parse(raw)) : new Set<string>()
     } catch { return new Set<string>() }
   })
-  const [, setRowErrors] = useState<Record<string, string>>({})
+  const [rowErrors, setRowErrors] = useState<Record<string, string>>({})
   const [tableSearch, setTableSearch] = useState('')
+  const [tierAttempts, setTierAttempts] = useState<any[]>([])
+  const [showTierDebug, setShowTierDebug] = useState(false)
+  const [apifyError, setApifyError] = useState<string | null>(null)
 
   const [companySizes, setCompanySizes] = useState<FilterOption[]>([])
   const [profileCounts, setProfileCounts] = useState<ProfileCountOption[]>([])
@@ -350,7 +374,28 @@ export default function LeadSearch() {
   useEffect(() => {
     void (async () => {
       try {
-        setLeads(await fetchLeadsFromDb())
+        const fetched = await fetchLeadsFromDb()
+        setLeads(fetched)
+        setEmailNotFoundIds((prev) => {
+          const next = new Set(prev)
+          for (const l of fetched) {
+            if (l.email_attempted && !l.email) {
+              if (l.id) next.add(l.id)
+              if (l.linkedinUrl) next.add(l.linkedinUrl)
+            }
+          }
+          return next
+        })
+        setPhoneNotFoundIds((prev) => {
+          const next = new Set(prev)
+          for (const l of fetched) {
+            if (l.phone_attempted && !hasPhoneValue(l.phone)) {
+              if (l.id) next.add(l.id)
+              if (l.linkedinUrl) next.add(l.linkedinUrl)
+            }
+          }
+          return next
+        })
       } catch {
         // Leave the table empty; the search button reports its own errors.
       }
@@ -536,12 +581,23 @@ export default function LeadSearch() {
   const handleSearch = async () => {
     setLoading(true)
     setError(null)
+    setApifyError(null)
     setNotice(null)
     setSearched(true)
+    setTierAttempts([])
     const searchedQuery =
-      [filters.company, filters.designation, filters.industry, filters.role, filters.state].filter(Boolean).join(' ') || 'CEO'
+      [filters.name, filters.company, filters.designation, filters.industry, filters.role, filters.state].filter(Boolean).join(' ') || 'CEO'
 
     try {
+      // 1. Fetch latest stored leads from Supabase database
+      let freshLeads: Lead[] = []
+      try {
+        freshLeads = await fetchLeadsFromDb()
+      } catch (dbErr: any) {
+        console.warn('[LeadSearch] fetchLeadsFromDb failed:', dbErr?.message)
+      }
+
+      // 2. Call Apify lead-search integration with tiered fallback
       let data: any = null
       const session = (await supabase.auth.getSession()).data.session
 
@@ -566,6 +622,7 @@ export default function LeadSearch() {
       const searchPayload = {
         filters: {
           ...filters,
+          name: filters.name?.trim(),
           locations: searchLocations,
         },
         locations: searchLocations,
@@ -600,6 +657,13 @@ export default function LeadSearch() {
 
       if (!data?.success) throw new Error(data?.error || 'Search failed')
 
+      if (Array.isArray(data.tierAttempts)) {
+        setTierAttempts(data.tierAttempts)
+      }
+      if (data.apifyError) {
+        setApifyError(data.apifyError)
+      }
+
       const saved = Number(data.savedCount) || 0
       const found = Number(data.found) || 0
 
@@ -607,10 +671,11 @@ export default function LeadSearch() {
       const returnedLeads: Lead[] = Array.isArray(data.leads || data.data)
         ? (data.leads || data.data).map((l: any) => ({
             id: l.id || `lead-${Date.now()}-${Math.random()}`,
+            name: l.name || l.full_name,
             email: l.email || undefined,
             phone: l.phone || undefined,
             linkedinUrl: l.linkedinUrl || l.linkedin_url,
-            full_name: l.full_name,
+            full_name: l.full_name || l.name,
             company_name: l.company_name,
             job_title: l.job_title,
             designation: l.designation,
@@ -621,11 +686,10 @@ export default function LeadSearch() {
         : []
 
       // Re-fetch stored leads from database if available
-      let freshLeads: Lead[] = []
       try {
         freshLeads = await fetchLeadsFromDb()
       } catch {
-        freshLeads = []
+        // Keep whatever freshLeads was
       }
 
       // Merge returned leads with DB leads, prioritizing freshly returned leads
@@ -666,15 +730,25 @@ export default function LeadSearch() {
         )
       }
 
-      const totalFound = returnedLeads.length || found
-      if (saved > 0) {
+      const matchingFinal = finalLeads.filter((l) => {
+        if (filters.name && !leadMatchesName(l, filters.name)) return false
+        if (filters.company && !leadMatchesCompany(l, filters.company)) return false
+        return true
+      })
+
+      if (data.apifyError) {
+        setApifyError(data.apifyError)
+        setNotice(data.apifyError)
+      } else if (data.tierDescription) {
+        setNotice(data.tierDescription)
+      } else if (saved > 0) {
         setNotice(`${saved} new lead${saved === 1 ? '' : 's'} saved`)
-      } else if (totalFound > 0) {
-        setNotice(`Found ${totalFound} lead${totalFound === 1 ? '' : 's'} for "${searchedQuery}"`)
-      } else if (finalLeads.length > 0) {
-        setNotice(`0 new leads for "${searchedQuery}" — showing ${finalLeads.length} existing leads`)
+      } else if (matchingFinal.length > 0) {
+        setNotice(`Found ${matchingFinal.length} matching lead${matchingFinal.length === 1 ? '' : 's'} for "${searchedQuery}"`)
+      } else if (returnedLeads.length > 0) {
+        setNotice(`Found ${returnedLeads.length} lead${returnedLeads.length === 1 ? '' : 's'} for "${searchedQuery}"`)
       } else {
-        setNotice(`No leads found for "${searchedQuery}"`)
+        setNotice(data.message || `No leads found for "${searchedQuery}" across search tiers`)
       }
     } catch (e: any) {
       setError(e?.message || 'Search failed')
@@ -693,17 +767,71 @@ export default function LeadSearch() {
 
   const handleEnrichLead = async (lead: Lead) => {
     if (!lead.id) return
-    // Clear any previous "not found" state so Fetching... shows immediately
-    setEmailNotFoundIds((prev) => { const s = new Set(prev); s.delete(lead.id); return s })
+    // Clear any previous "not found" / error state so Fetching... shows immediately
+    setEmailNotFoundIds((prev) => { const s = new Set(prev); s.delete(lead.id); if (lead.linkedinUrl) s.delete(lead.linkedinUrl); return s })
+    setRowErrors((prev) => { const next = { ...prev }; delete next[`email_${lead.id}`]; return next })
     setEnriching((prev) => new Set(prev).add(lead.id))
-    setRowErrors((prev) => { const next = { ...prev }; delete next[lead.id]; return next })
     try {
       const { data, error } = await supabase.functions.invoke('enrich-lead', {
         body: { leadId: lead.id, linkedinUrl: lead.linkedinUrl },
       })
-      if (error) throw error
-      // enrich-lead now always returns 200; check success flag
-      if (!data?.success) throw new Error(data?.reason || data?.error || 'Enrichment failed')
+      if (error) {
+        let errText = error.message || 'Email lookup failed'
+        let isLimit = false
+        try {
+          if ('context' in error && typeof (error as any).context?.json === 'function') {
+            const ctxJson = await (error as any).context.json()
+            if (ctxJson?.apifyError || ctxJson?.reason || ctxJson?.error) {
+              errText = ctxJson.apifyError || ctxJson.reason || ctxJson.error
+            }
+            if (ctxJson?.isLimit) isLimit = true
+          }
+        } catch {}
+        if (!isLimit) {
+          isLimit = /limit|quota|credit|reach|exceed|payment|usage/i.test(errText)
+        }
+        if (isLimit) {
+          const limitMsg = `Email Scraper limit reached: ${errText}`
+          setApifyError(limitMsg)
+          setRowErrors((prev) => ({ ...prev, [`email_${lead.id}`]: limitMsg }))
+        } else {
+          setRowErrors((prev) => ({ ...prev, [`email_${lead.id}`]: errText }))
+          setEmailNotFoundIds((prev) => {
+            const next = new Set(prev)
+            next.add(lead.id)
+            if (lead.linkedinUrl) next.add(lead.linkedinUrl)
+            return next
+          })
+          if (lead.id) {
+            void supabase.from('leads').update({ email_attempted: true }).eq('id', lead.id)
+          }
+          setLeads((prev) => prev.map((l) => (l.id === lead.id ? { ...l, email_attempted: true } : l)))
+        }
+        return
+      }
+
+      if (!data?.success) {
+        const errorMsg = data?.apifyError || data?.reason || data?.error || 'Email lookup failed'
+        const isLimit = data?.isLimit || /limit|quota|credit|reach|exceed|payment|usage/i.test(errorMsg)
+        if (isLimit) {
+          const limitMsg = `Email Scraper limit reached: ${errorMsg}`
+          setApifyError(limitMsg)
+          setRowErrors((prev) => ({ ...prev, [`email_${lead.id}`]: limitMsg }))
+        } else {
+          setRowErrors((prev) => ({ ...prev, [`email_${lead.id}`]: errorMsg }))
+          setEmailNotFoundIds((prev) => {
+            const next = new Set(prev)
+            next.add(lead.id)
+            if (lead.linkedinUrl) next.add(lead.linkedinUrl)
+            return next
+          })
+          if (lead.id) {
+            void supabase.from('leads').update({ email_attempted: true }).eq('id', lead.id)
+          }
+          setLeads((prev) => prev.map((l) => (l.id === lead.id ? { ...l, email_attempted: true } : l)))
+        }
+        return
+      }
 
       const emailFound = typeof data.email === 'string' && data.email.trim().length > 0
       const phoneFound = hasPhoneValue(data?.phone)
@@ -722,8 +850,16 @@ export default function LeadSearch() {
       }
 
       if (!emailFound) {
-        // Mark this lead as "email not found" in local state
-        setEmailNotFoundIds((prev) => new Set(prev).add(lead.id))
+        // Mark this lead as "email not found" in local state and DB
+        setEmailNotFoundIds((prev) => {
+          const next = new Set(prev)
+          next.add(lead.id)
+          if (lead.linkedinUrl) next.add(lead.linkedinUrl)
+          return next
+        })
+        if (lead.id) {
+          void supabase.from('leads').update({ email_attempted: true }).eq('id', lead.id)
+        }
       }
 
       setLeads((prev) =>
@@ -732,25 +868,43 @@ export default function LeadSearch() {
             ? {
                 ...l,
                 // Only overwrite if something was returned — keep existing value otherwise
-                email:        emailFound ? data.email        : l.email,
-                phone:        phoneFound ? data.phone        : l.phone,
-                full_name:    data.full_name    || l.full_name,
-                company_name: data.company_name || l.company_name,
-                designation:  data.designation  || l.designation,
+                email:           emailFound ? data.email        : l.email,
+                phone:           phoneFound ? data.phone        : l.phone,
+                full_name:       data.full_name    || l.full_name,
+                company_name:    data.company_name || l.company_name,
+                designation:     data.designation  || l.designation,
+                email_attempted: true,
               }
             : l,
         ),
       )
     } catch (e: any) {
-      // On any error, show "Not Found" so the user knows the attempt was made
-      setEmailNotFoundIds((prev) => new Set(prev).add(lead.id))
-      setRowErrors((prev) => ({ ...prev, [lead.id]: e?.message || 'Enrichment failed' }))
+      const errorMsg = e?.message || 'Email lookup failed'
+      const isLimit = /limit|quota|credit|reach|exceed|payment|usage/i.test(errorMsg)
+      if (isLimit) {
+        const limitMsg = `Email Scraper limit reached: ${errorMsg}`
+        setApifyError(limitMsg)
+        setRowErrors((prev) => ({ ...prev, [`email_${lead.id}`]: limitMsg }))
+      } else {
+        setRowErrors((prev) => ({ ...prev, [`email_${lead.id}`]: errorMsg }))
+        setEmailNotFoundIds((prev) => {
+          const next = new Set(prev)
+          next.add(lead.id)
+          if (lead.linkedinUrl) next.add(lead.linkedinUrl)
+          return next
+        })
+        if (lead.id) {
+          void supabase.from('leads').update({ email_attempted: true }).eq('id', lead.id)
+        }
+        setLeads((prev) => prev.map((l) => (l.id === lead.id ? { ...l, email_attempted: true } : l)))
+      }
     } finally {
       setEnriching((prev) => { const next = new Set(prev); next.delete(lead.id); return next })
     }
   }
 
   const hasFilters =
+    filters.name !== '' ||
     filters.company !== '' ||
     filters.industry !== '' ||
     filters.designation !== '' ||
@@ -760,14 +914,17 @@ export default function LeadSearch() {
     filters.companySize !== ''
 
   const tableQuery = tableSearch.trim().toLowerCase()
-  // The company dropdown and table search narrow displayed rows; the other
+  // The name, company dropdown and table search narrow displayed rows; the other
   // dropdowns are inputs to the Apify search only.
   // So a search that returns 0 new leads still renders every existing lead, and
   // the table can only be empty when the database is empty or the user typed a
   // search term that matches nothing.
-  const companyFilteredLeads = filters.company
-    ? leads.filter((lead) => lead.company_name?.toLowerCase().includes(filters.company.toLowerCase()))
+  const nameFilteredLeads = filters.name.trim()
+    ? leads.filter((lead) => leadMatchesName(lead, filters.name))
     : leads
+  const companyFilteredLeads = filters.company.trim()
+    ? nameFilteredLeads.filter((lead) => leadMatchesCompany(lead, filters.company))
+    : nameFilteredLeads
   const filteredLeads = tableQuery
     ? companyFilteredLeads.filter((lead) =>
         Object.values(lead).some((v) => String(v ?? '').toLowerCase().includes(tableQuery)),
@@ -1019,8 +1176,9 @@ export default function LeadSearch() {
       alert('No LinkedIn profile for this lead')
       return
     }
-    // Clear any previous "not found" state so Fetching... shows immediately
-    setPhoneNotFoundIds((prev) => { const s = new Set(prev); s.delete(leadId); return s })
+    // Clear any previous "not found" / error state so Fetching... shows immediately
+    setPhoneNotFoundIds((prev) => { const s = new Set(prev); s.delete(leadId); if (linkedinUrl) s.delete(linkedinUrl); return s })
+    setRowErrors((prev) => { const next = { ...prev }; delete next[`phone_${leadId}`]; return next })
     setFetchingPhoneId(leadId)
 
     try {
@@ -1029,23 +1187,104 @@ export default function LeadSearch() {
       })
 
       if (error) {
-        // Network / invocation error
-        setPhoneNotFoundIds((prev) => new Set(prev).add(leadId))
+        let errText = error.message || 'Phone lookup failed'
+        let isLimit = false
+        try {
+          if ('context' in error && typeof (error as any).context?.json === 'function') {
+            const ctxJson = await (error as any).context.json()
+            if (ctxJson?.apifyError || ctxJson?.reason || ctxJson?.error) {
+              errText = ctxJson.apifyError || ctxJson.reason || ctxJson.error
+            }
+            if (ctxJson?.isLimit) isLimit = true
+          }
+        } catch {}
+        if (!isLimit) {
+          isLimit = /limit|quota|credit|reach|exceed|payment|usage/i.test(errText)
+        }
+        if (isLimit) {
+          const limitMsg = `Phone Scraper limit reached: ${errText}`
+          setApifyError(limitMsg)
+          setRowErrors((prev) => ({ ...prev, [`phone_${leadId}`]: limitMsg }))
+        } else {
+          setRowErrors((prev) => ({ ...prev, [`phone_${leadId}`]: errText }))
+          setPhoneNotFoundIds((prev) => {
+            const next = new Set(prev)
+            next.add(leadId)
+            if (linkedinUrl) next.add(linkedinUrl)
+            return next
+          })
+          if (leadId) {
+            void supabase.from('leads').update({ phone_attempted: true }).eq('id', leadId)
+          }
+          setLeads((prev) => prev.map((l) => (l.id === leadId ? { ...l, phone_attempted: true } : l)))
+        }
+        return
+      }
+
+      if (!data?.success) {
+        const errorMsg = data?.apifyError || data?.reason || data?.error || 'Phone lookup failed'
+        const isLimit = data?.isLimit || /limit|quota|credit|reach|exceed|payment|usage/i.test(errorMsg)
+        if (isLimit) {
+          const limitMsg = `Phone Scraper limit reached: ${errorMsg}`
+          setApifyError(limitMsg)
+          setRowErrors((prev) => ({ ...prev, [`phone_${leadId}`]: limitMsg }))
+        } else {
+          setRowErrors((prev) => ({ ...prev, [`phone_${leadId}`]: errorMsg }))
+          setPhoneNotFoundIds((prev) => {
+            const next = new Set(prev)
+            next.add(leadId)
+            if (linkedinUrl) next.add(linkedinUrl)
+            return next
+          })
+          if (leadId) {
+            void supabase.from('leads').update({ phone_attempted: true }).eq('id', leadId)
+          }
+          setLeads((prev) => prev.map((l) => (l.id === leadId ? { ...l, phone_attempted: true } : l)))
+        }
         return
       }
 
       if (!hasPhoneValue(data?.phone)) {
         // Actor returned no phone
-        setPhoneNotFoundIds((prev) => new Set(prev).add(leadId))
+        setPhoneNotFoundIds((prev) => {
+          const next = new Set(prev)
+          next.add(leadId)
+          if (linkedinUrl) next.add(linkedinUrl)
+          return next
+        })
+        if (leadId) {
+          void supabase.from('leads').update({ phone_attempted: true }).eq('id', leadId)
+        }
+        setLeads((prev) =>
+          prev.map((l) => (l.id === leadId ? { ...l, phone_attempted: true } : l)),
+        )
         return
       }
 
       // Success — update local state so the number shows immediately
       setLeads((prev) =>
-        prev.map((l) => (l.id === leadId ? { ...l, phone: data.phone } : l)),
+        prev.map((l) => (l.id === leadId ? { ...l, phone: data.phone, phone_attempted: true } : l)),
       )
-    } catch (err) {
-      setPhoneNotFoundIds((prev) => new Set(prev).add(leadId))
+    } catch (err: any) {
+      const errorMsg = err?.message || 'Phone lookup failed'
+      const isLimit = /limit|quota|credit|reach|exceed|payment|usage/i.test(errorMsg)
+      if (isLimit) {
+        const limitMsg = `Phone Scraper limit reached: ${errorMsg}`
+        setApifyError(limitMsg)
+        setRowErrors((prev) => ({ ...prev, [`phone_${leadId}`]: limitMsg }))
+      } else {
+        setRowErrors((prev) => ({ ...prev, [`phone_${leadId}`]: errorMsg }))
+        setPhoneNotFoundIds((prev) => {
+          const next = new Set(prev)
+          next.add(leadId)
+          if (linkedinUrl) next.add(linkedinUrl)
+          return next
+        })
+        if (leadId) {
+          void supabase.from('leads').update({ phone_attempted: true }).eq('id', leadId)
+        }
+        setLeads((prev) => prev.map((l) => (l.id === leadId ? { ...l, phone_attempted: true } : l)))
+      }
     } finally {
       setFetchingPhoneId(null)
     }
@@ -1083,6 +1322,51 @@ export default function LeadSearch() {
           }}
         >
           {error}
+        </div>
+      )}
+
+      {apifyError && (
+        <div
+          style={{
+            background: '#fff1f2',
+            border: '1px solid #fecdd3',
+            color: '#9f1239',
+            padding: '12px 16px',
+            borderRadius: 'var(--r)',
+            marginBottom: 16,
+            fontSize: '13px',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: '12px',
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+            <span style={{ fontSize: '18px' }}>⚠️</span>
+            <div>
+              <div style={{ fontWeight: 700 }}>
+                {/limit|credit|quota|reach|exceed/i.test(apifyError)
+                  ? 'Apify Scraper Limit Reached'
+                  : 'Apify Scraper Service Error'}
+              </div>
+              <div style={{ marginTop: '2px', color: '#881337' }}>{apifyError}</div>
+            </div>
+          </div>
+          <button
+            onClick={() => setApifyError(null)}
+            style={{
+              background: 'none',
+              border: 'none',
+              color: '#9f1239',
+              cursor: 'pointer',
+              fontSize: '16px',
+              fontWeight: 'bold',
+              padding: '2px 6px',
+            }}
+            title="Dismiss error"
+          >
+            ✕
+          </button>
         </div>
       )}
 
@@ -1131,6 +1415,35 @@ export default function LeadSearch() {
             gap: '14px',
           }}
         >
+          <div className="form-group" style={{ marginBottom: 0 }}>
+            <label className="ss-label" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <span>Name</span>
+              {filters.name && (
+                <span
+                  onClick={() => setFilters({ ...filters, name: '' })}
+                  style={{ cursor: 'pointer', fontSize: '11px', color: 'var(--text4)', fontWeight: 'normal' }}
+                  title="Clear name"
+                >
+                  ✕ Clear
+                </span>
+              )}
+            </label>
+            <input
+              type="text"
+              className="ss-trigger"
+              style={{
+                cursor: 'text',
+                boxSizing: 'border-box',
+                height: '38px',
+              }}
+              placeholder="e.g. Rajiv Sharma..."
+              value={filters.name}
+              onChange={(e) => setFilters({ ...filters, name: e.target.value })}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') void handleSearch()
+              }}
+            />
+          </div>
           {comboboxFields.map((field) => (
             <SearchableSelect
               key={field.key}
@@ -1252,6 +1565,77 @@ export default function LeadSearch() {
         )}
       </div>
 
+      {/* ─── Tier Fallback Execution History & Raw JSON Inspector ─── */}
+      {tierAttempts && tierAttempts.length > 0 && (
+        <div
+          style={{
+            marginBottom: 16,
+            border: '1px solid var(--border)',
+            borderRadius: 'var(--r)',
+            padding: '12px 16px',
+            background: 'var(--card-bg, #fafafa)',
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8 }}>
+            <div style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text1)' }}>
+              Tier Fallback Execution History ({tierAttempts.length} Tier{tierAttempts.length === 1 ? '' : 's'} Attempted)
+            </div>
+            <button
+              className="btn"
+              type="button"
+              onClick={() => setShowTierDebug(!showTierDebug)}
+              style={{ fontSize: '11.5px', padding: '4px 10px' }}
+            >
+              {showTierDebug ? 'Hide Raw JSON' : 'View Raw Apify Request & Response JSON'}
+            </button>
+          </div>
+          <div style={{ marginTop: 8, fontSize: '12px', display: 'flex', flexDirection: 'column', gap: 4 }}>
+            {tierAttempts.map((att: any, idx: number) => (
+              <div key={idx} style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                <span
+                  style={{
+                    display: 'inline-block',
+                    padding: '2px 6px',
+                    borderRadius: 4,
+                    fontSize: '11px',
+                    fontWeight: 600,
+                    background: att.matchedItemsCount > 0 ? '#dcfce7' : '#f3f4f6',
+                    color: att.matchedItemsCount > 0 ? '#15803d' : '#6b7280',
+                  }}
+                >
+                  {att.name}
+                </span>
+                <span style={{ color: 'var(--text2)', fontWeight: 500 }}>{att.description}:</span>
+                <span style={{ color: 'var(--text3)' }}>
+                  {att.rawItemsCount} raw items from Apify,{' '}
+                  <strong style={{ color: att.matchedItemsCount > 0 ? '#15803d' : 'inherit' }}>
+                    {att.matchedItemsCount} name-matched
+                  </strong>
+                  {att.statusMessage ? ` — ${att.statusMessage}` : ''}
+                </span>
+              </div>
+            ))}
+          </div>
+          {showTierDebug && (
+            <div style={{ marginTop: 12 }}>
+              <pre
+                style={{
+                  background: '#0f172a',
+                  color: '#f8fafc',
+                  padding: '12px',
+                  borderRadius: 6,
+                  fontSize: '11.5px',
+                  overflowX: 'auto',
+                  maxHeight: '350px',
+                }}
+              >
+                {JSON.stringify(tierAttempts, null, 2)}
+              </pre>
+            </div>
+          )}
+        </div>
+      )}
+
       {/* ─── Results ─── */}
       {leads.length > 0 && (
         <div
@@ -1312,6 +1696,50 @@ export default function LeadSearch() {
           )}
         </div>
       )}
+      {apifyError && (
+        <div
+          style={{
+            background: '#fff1f2',
+            border: '1px solid #fecdd3',
+            color: '#9f1239',
+            padding: '10px 16px',
+            borderRadius: 'var(--r)',
+            marginBottom: 12,
+            fontSize: '13px',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: '12px',
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <span style={{ fontSize: '16px' }}>⚠️</span>
+            <div>
+              <strong>
+                {/limit|credit|quota|reach|exceed|payment|usage/i.test(apifyError)
+                  ? 'Apify Scraper Limit Reached'
+                  : 'Apify Service Error'}
+              </strong>
+              <div style={{ marginTop: '2px', color: '#881337', fontSize: '12.5px' }}>{apifyError}</div>
+            </div>
+          </div>
+          <button
+            onClick={() => setApifyError(null)}
+            style={{
+              background: 'none',
+              border: 'none',
+              color: '#9f1239',
+              cursor: 'pointer',
+              fontWeight: 'bold',
+              fontSize: '16px',
+              padding: '2px 6px',
+            }}
+            title="Dismiss error"
+          >
+            ✕
+          </button>
+        </div>
+      )}
       <div className="table-wrap">
         {filteredLeads.length > 0 ? (
           <table>
@@ -1333,12 +1761,77 @@ export default function LeadSearch() {
                       <span style={{ fontSize: '12.5px' }}>{lead.email}</span>
                     ) : enriching.has(lead.id) ? (
                       <span style={{ fontSize: '12.5px', opacity: 0.6 }}>Fetching...</span>
-                    ) : emailNotFoundIds.has(lead.id) ? (
+                    ) : rowErrors[`email_${lead.id}`] ? (
+                      <span
+                        style={{
+                          fontSize: '11.5px',
+                          color: '#dc2626',
+                          background: '#fef2f2',
+                          border: '1px solid #fecaca',
+                          padding: '2px 7px',
+                          borderRadius: '4px',
+                          fontWeight: 600,
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: '4px',
+                        }}
+                      >
+                        <span
+                          style={{ cursor: 'pointer' }}
+                          title={rowErrors[`email_${lead.id}`]}
+                          onClick={() => alert(`Email Scraper: ${rowErrors[`email_${lead.id}`]}`)}
+                        >
+                          {/limit|credit|quota|reach|exceed|payment|usage/i.test(rowErrors[`email_${lead.id}`])
+                            ? '⚠️ Limit Reached'
+                            : '⚠️ Error'}
+                        </span>
+                        <button
+                          style={{
+                            fontSize: '11px',
+                            color: '#b91c1c',
+                            background: 'none',
+                            border: 'none',
+                            cursor: 'pointer',
+                            padding: 0,
+                            textDecoration: 'underline',
+                            fontWeight: 600,
+                            marginLeft: '2px',
+                          }}
+                          onClick={() => {
+                            setRowErrors((prev) => {
+                              const next = { ...prev }
+                              delete next[`email_${lead.id}`]
+                              return next
+                            })
+                            void handleEnrichLead(lead)
+                          }}
+                        >
+                          Retry
+                        </button>
+                      </span>
+                    ) : (!lead.email && (emailNotFoundIds.has(lead.id) || (lead.linkedinUrl && emailNotFoundIds.has(lead.linkedinUrl)) || lead.email_attempted === true)) ? (
                       <span style={{ fontSize: '12.5px', color: '#9ca3af', fontStyle: 'italic' }}>
                         Not Found&nbsp;
                         <button
                           style={{ fontSize: '11px', color: 'var(--accent)', background: 'none', border: 'none', cursor: 'pointer', padding: 0, textDecoration: 'underline' }}
-                          onClick={() => setEmailNotFoundIds((prev) => { const s = new Set(prev); s.delete(lead.id); return s })}
+                          onClick={() => {
+                            setEmailNotFoundIds((prev) => {
+                              const s = new Set(prev)
+                              s.delete(lead.id)
+                              if (lead.linkedinUrl) s.delete(lead.linkedinUrl)
+                              return s
+                            })
+                            setRowErrors((prev) => {
+                              const next = { ...prev }
+                              delete next[`email_${lead.id}`]
+                              return next
+                            })
+                            setLeads((prev) => prev.map((l) => (l.id === lead.id ? { ...l, email_attempted: false } : l)))
+                            if (lead.id) {
+                              void supabase.from('leads').update({ email_attempted: false }).eq('id', lead.id)
+                            }
+                            void handleEnrichLead(lead)
+                          }}
                         >Retry</button>
                       </span>
                     ) : (
@@ -1357,12 +1850,81 @@ export default function LeadSearch() {
                       <span style={{ fontSize: '12.5px' }}>{lead.phone}</span>
                     ) : fetchingPhoneId === lead.id ? (
                       <span style={{ fontSize: '12.5px', opacity: 0.6 }}>Fetching...</span>
-                    ) : phoneNotFoundIds.has(lead.id) ? (
+                    ) : rowErrors[`phone_${lead.id}`] ? (
+                      <span
+                        style={{
+                          fontSize: '11.5px',
+                          color: '#dc2626',
+                          background: '#fef2f2',
+                          border: '1px solid #fecaca',
+                          padding: '2px 7px',
+                          borderRadius: '4px',
+                          fontWeight: 600,
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: '4px',
+                        }}
+                      >
+                        <span
+                          style={{ cursor: 'pointer' }}
+                          title={rowErrors[`phone_${lead.id}`]}
+                          onClick={() => alert(`Phone Scraper: ${rowErrors[`phone_${lead.id}`]}`)}
+                        >
+                          {/limit|credit|quota|reach|exceed|payment|usage/i.test(rowErrors[`phone_${lead.id}`])
+                            ? '⚠️ Limit Reached'
+                            : '⚠️ Error'}
+                        </span>
+                        <button
+                          style={{
+                            fontSize: '11px',
+                            color: '#b91c1c',
+                            background: 'none',
+                            border: 'none',
+                            cursor: 'pointer',
+                            padding: 0,
+                            textDecoration: 'underline',
+                            fontWeight: 600,
+                            marginLeft: '2px',
+                          }}
+                          onClick={() => {
+                            setRowErrors((prev) => {
+                              const next = { ...prev }
+                              delete next[`phone_${lead.id}`]
+                              return next
+                            })
+                            if (lead.linkedinUrl) {
+                              void handleFindPhone(lead.id, lead.linkedinUrl)
+                            }
+                          }}
+                        >
+                          Retry
+                        </button>
+                      </span>
+                    ) : (!hasPhoneValue(lead.phone) && (phoneNotFoundIds.has(lead.id) || (lead.linkedinUrl && phoneNotFoundIds.has(lead.linkedinUrl)) || lead.phone_attempted === true)) ? (
                       <span style={{ fontSize: '12.5px', color: '#9ca3af', fontStyle: 'italic' }}>
                         Not Found&nbsp;
                         <button
                           style={{ fontSize: '11px', color: 'var(--accent)', background: 'none', border: 'none', cursor: 'pointer', padding: 0, textDecoration: 'underline' }}
-                          onClick={() => setPhoneNotFoundIds((prev) => { const s = new Set(prev); s.delete(lead.id); return s })}
+                          onClick={() => {
+                            setPhoneNotFoundIds((prev) => {
+                              const s = new Set(prev)
+                              s.delete(lead.id)
+                              if (lead.linkedinUrl) s.delete(lead.linkedinUrl)
+                              return s
+                            })
+                            setRowErrors((prev) => {
+                              const next = { ...prev }
+                              delete next[`phone_${lead.id}`]
+                              return next
+                            })
+                            setLeads((prev) => prev.map((l) => (l.id === lead.id ? { ...l, phone_attempted: false } : l)))
+                            if (lead.id) {
+                              void supabase.from('leads').update({ phone_attempted: false }).eq('id', lead.id)
+                            }
+                            if (lead.linkedinUrl) {
+                              void handleFindPhone(lead.id, lead.linkedinUrl)
+                            }
+                          }}
                         >Retry</button>
                       </span>
                     ) : (
@@ -1421,8 +1983,16 @@ export default function LeadSearch() {
         ) : leads.length > 0 ? (
           <div className="empty-state" style={{ padding: '44px 28px' }}>
             <div className="empty-icon">🔍</div>
-            <div className="empty-title">No matches</div>
-            <div className="empty-sub">No leads match "{tableSearch}".</div>
+            <div className="empty-title">No matches found</div>
+            <div className="empty-sub">
+              {tableSearch.trim()
+                ? `No leads match "${tableSearch.trim()}".`
+                : filters.name.trim()
+                ? `No leads in database match the name "${filters.name.trim()}". Click "Search Leads" to search LinkedIn via Apify.`
+                : filters.company.trim()
+                ? `No leads in database match the company "${filters.company.trim()}".`
+                : 'No leads match the selected filters.'}
+            </div>
           </div>
         ) : (
           <div className="empty-state" style={{ padding: '44px 28px' }}>

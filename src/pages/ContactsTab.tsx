@@ -332,8 +332,8 @@ export default function ContactsTab({
 
   // ─── FILTERS & PAGINATION ───
   const [cPage, setCPage] = useState(1);
-  const [cSortKey, setCSortKey] = useState('name');
-  const [cSortDir, setCSortDir] = useState<1 | -1>(1); // 1 = asc, -1 = desc
+  const [cSortKey, setCSortKey] = useState('createdAt');
+  const [cSortDir, setCSortDir] = useState<1 | -1>(-1); // -1 = desc (newest first)
   const [cTypeFilter, setCTypeFilter] = useState('all');
   const [cCatFilter, setCCatFilter] = useState('');
   const [cSearchVal, setCSearchVal] = useState('');
@@ -345,6 +345,7 @@ export default function ContactsTab({
   const [submitting, setSubmitting] = useState(false);
   const [afName, setAfName] = useState('');
   const [afEmail, setAfEmail] = useState('');
+  const [afPhone, setAfPhone] = useState('');
   const [afCompany, setAfCompany] = useState('');
   const [afDesig, setAfDesig] = useState('');
   const [afIndustry, setAfIndustry] = useState('');
@@ -518,7 +519,8 @@ export default function ContactsTab({
         (c.name || '').toLowerCase().includes(search) ||
         (c.company || '').toLowerCase().includes(search) ||
         (c.email || '').toLowerCase().includes(search) ||
-        (c.designation || '').toLowerCase().includes(search)
+        (c.designation || '').toLowerCase().includes(search) ||
+        (c.phone || '').toLowerCase().includes(search)
       );
     }
 
@@ -548,13 +550,22 @@ export default function ContactsTab({
       result = result.filter(c => c.category === cCatFilter);
     }
 
-    result.sort((a, b) => {
-      const valA = (a[cSortKey as keyof Contact] ?? '').toString().toLowerCase();
-      const valB = (b[cSortKey as keyof Contact] ?? '').toString().toLowerCase();
-      if (valA < valB) return -1 * cSortDir;
-      if (valA > valB) return 1 * cSortDir;
-      return 0;
-    });
+    if (cSortKey === 'createdAt') {
+      result.sort((a, b) => {
+        const timeA = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+        const timeB = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+        if (timeA !== timeB) return (timeA - timeB) * cSortDir;
+        return 0;
+      });
+    } else {
+      result.sort((a, b) => {
+        const valA = (a[cSortKey as keyof Contact] ?? '').toString().toLowerCase();
+        const valB = (b[cSortKey as keyof Contact] ?? '').toString().toLowerCase();
+        if (valA < valB) return -1 * cSortDir;
+        if (valA > valB) return 1 * cSortDir;
+        return 0;
+      });
+    }
 
     return result;
   }, [contacts, cSearchVal, cTypeFilter, cCatFilter, cSortKey, cSortDir, leadMirrorTabName]);
@@ -669,6 +680,7 @@ export default function ContactsTab({
     setEditingId(null);
     setAfName('');
     setAfEmail('');
+    setAfPhone('');
     setAfCompany('');
     setAfDesig('');
     setAfIndustry('');
@@ -685,6 +697,7 @@ export default function ContactsTab({
     setEditingId(id);
     setAfName(c.name || '');
     setAfEmail(c.email || '');
+    setAfPhone(c.phone || (c as any).contact_no || '');
     setAfCompany(c.company || '');
     setAfDesig(c.designation || '');
     setAfIndustry(c.industry || '');
@@ -718,6 +731,7 @@ export default function ContactsTab({
       contact_type: afType,
       company_category: afCat,
       notes: afNotes.trim(),
+      phone: afPhone.trim() || null,
     };
 
     setSubmitting(true);
@@ -730,6 +744,9 @@ export default function ContactsTab({
         }
         setIsContactModalOpen(false);
         onToast('Contact updated successfully', 'success');
+        setCSortKey('createdAt');
+        setCSortDir(-1);
+        setCPage(1);
         setLoading(true);
         await refreshContacts();
         return;
@@ -761,6 +778,9 @@ export default function ContactsTab({
 
       setIsContactModalOpen(false);
       onToast(`${(data?.name || payload.full_name)} added to contacts`, 'success');
+      setCSortKey('createdAt');
+      setCSortDir(-1);
+      setCPage(1);
       setLoading(true);
       await refreshContacts();
     } finally {
@@ -1164,6 +1184,7 @@ export default function ContactsTab({
         designation: pickRowValue(row, ['Designation', 'Role', 'Title']),
         industry: pickRowValue(row, ['Industry']),
         city: pickRowValue(row, ['City']),
+        phone: pickRowValue(row, ['Contact Number 1', 'Contact Number', 'Phone', 'Phone Number', 'Mobile', 'Mobile Number', 'Contact No', 'Contact No.']) || undefined,
         contact_type: importType,
         company_category: pickRowValue(row, ['Company Category', 'Category']) || 'Domestic',
         notes: pickRowValue(row, ['Notes']),
@@ -1533,6 +1554,9 @@ export default function ContactsTab({
                   Company {cSortKey === 'company' && <span className="ct-sort-arrow">{cSortDir === 1 ? '↑' : '↓'}</span>}
                 </th>
                 <th>Email</th>
+                <th className="ct-sortable" onClick={() => handleSort('phone')}>
+                  Phone {cSortKey === 'phone' && <span className="ct-sort-arrow">{cSortDir === 1 ? '↑' : '↓'}</span>}
+                </th>
                 <th>Designation</th>
                 <th>Type</th>
                 <th>Category</th>
@@ -1542,7 +1566,7 @@ export default function ContactsTab({
             <tbody>
               {loading ? (
                 <tr>
-                  <td colSpan={9}>
+                  <td colSpan={10}>
                     <div className="empty-state">
                       <div style={{ display: 'inline-flex', alignItems: 'center', gap: 10 }}>
                         <span className="spinner"></span>
@@ -1553,7 +1577,7 @@ export default function ContactsTab({
                 </tr>
               ) : paginatedContacts.length === 0 ? (
                 <tr>
-                  <td colSpan={9}>
+                  <td colSpan={10}>
                     <div className="empty-state">
                       <div className="empty-icon">🔍</div>
                       <div className="empty-title">No contacts found</div>
@@ -1632,6 +1656,23 @@ export default function ContactsTab({
                       </td>
                       <td>
                         <span className="ct-email">{c.email}</span>
+                      </td>
+                      <td>
+                        {c.phone ? (
+                          <span
+                            className="ct-phone"
+                            style={{
+                              fontFamily: 'var(--mono, monospace)',
+                              fontSize: '12px',
+                              color: 'var(--text2)',
+                              whiteSpace: 'nowrap',
+                            }}
+                          >
+                            {c.phone}
+                          </span>
+                        ) : (
+                          <span style={{ color: 'var(--text4)' }}>—</span>
+                        )}
                       </td>
                       <td>
                         <div className="ct-desig">{c.designation || '—'}</div>
@@ -1790,6 +1831,15 @@ export default function ContactsTab({
                   />
                 </div>
                 <div className="form-group">
+                  <label>Contact No.</label>
+                  <input
+                    type="tel"
+                    placeholder="e.g. +91 98765 43210"
+                    value={afPhone}
+                    onChange={(e) => setAfPhone(e.target.value)}
+                  />
+                </div>
+                <div className="form-group">
                   <label>Company *</label>
                   <input
                     type="text"
@@ -1833,7 +1883,7 @@ export default function ContactsTab({
                     ))}
                   </select>
                 </div>
-                <div className="form-group">
+                <div className="form-group" style={{ gridColumn: 'span 2' }}>
                   <label>Company Category</label>
                   <select value={afCat} onChange={(e) => setAfCat(e.target.value)}>
                     <option value="OEM">OEM</option>
