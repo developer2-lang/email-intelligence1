@@ -103,11 +103,48 @@ function leadMatchesName(lead: Lead, nameQuery: string): boolean {
   return tokens.length > 0 && tokens.every((t) => nameVal.includes(t))
 }
 
+const COMPANY_STOPWORDS = new Set([
+  'ltd', 'limited', 'pvt', 'private', 'inc', 'incorporated', 'corp', 'corporation',
+  'llc', 'co', 'company', 'group', 'holdings', 'enterprises', 'solutions', 'technologies', 'services', 'jv', 'between'
+])
+
+function cleanCompanyTokens(str: string): string[] {
+  return str
+    .toLowerCase()
+    .replace(/[()[\]{},.;:/\-_+&|~`!@#$%^*=]/g, ' ')
+    .split(/\s+/)
+    .map((t) => t.trim())
+    .filter((t) => t.length > 1 && !COMPANY_STOPWORDS.has(t))
+}
+
 function leadMatchesCompany(lead: Lead, companyQuery: string): boolean {
   if (!companyQuery || !companyQuery.trim()) return true
   const q = companyQuery.trim().toLowerCase()
-  const compVal = (lead.company_name || companyFromDesignation(lead.designation) || '').trim().toLowerCase()
-  return compVal.includes(q)
+  const compVal = (
+    lead.company_name ||
+    companyFromDesignation(lead.designation) ||
+    lead.job_title ||
+    lead.designation ||
+    ''
+  ).trim().toLowerCase()
+  if (!compVal) return false
+
+  // 1. Direct substring match
+  if (compVal.includes(q)) return true
+
+  // 2. Tokenized match (e.g. "Hindware Limited" matches "JV between Hindware Home Innovation Limited")
+  const queryTokens = cleanCompanyTokens(companyQuery)
+  if (queryTokens.length > 0 && queryTokens.some((t) => compVal.includes(t))) {
+    return true
+  }
+
+  // 3. Lead tokens present in query
+  const leadTokens = cleanCompanyTokens(compVal)
+  if (leadTokens.length > 0 && leadTokens.some((t) => q.includes(t))) {
+    return true
+  }
+
+  return false
 }
 
 function hasPhoneValue(phone?: string): boolean {
@@ -206,6 +243,7 @@ export default function LeadSearch({ onNavigate, onBack }: LeadSearchProps = {})
   const [error, setError] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
   const [searched, setSearched] = useState(false)
+  const [searchResultLeadIds, setSearchResultLeadIds] = useState<Set<string> | null>(null)
   const [enriching, setEnriching] = useState<Set<string>>(new Set())
   const [deletingId, setDeletingId] = useState<string | null>(null)
   const [fetchingPhoneId, setFetchingPhoneId] = useState<string | null>(null)
@@ -229,9 +267,13 @@ export default function LeadSearch({ onNavigate, onBack }: LeadSearchProps = {})
   const [isEmailLimitReached, setIsEmailLimitReached] = useState(false)
   const [emailLimitMessage, setEmailLimitMessage] = useState<string>('')
   const [emailLimitRunUrl, setEmailLimitRunUrl] = useState<string>('https://console.apify.com/actors/bfH8Ermocz8oYKQVO/runs')
-  const [isPhoneLimitReached, setIsPhoneLimitReached] = useState(false)
-  const [phoneLimitMessage, setPhoneLimitMessage] = useState<string>('')
   const [phoneLimitRunUrl, setPhoneLimitRunUrl] = useState<string>('https://console.apify.com/actors/J9mf98b4CIZpW72Ue/runs')
+  const [lookupLogs, setLookupLogs] = useState<Record<string, { message: string; runUrl?: string }>>(() => {
+    try {
+      const raw = localStorage.getItem('leadLookupLogs')
+      return raw ? JSON.parse(raw) : {}
+    } catch { return {} }
+  })
   const [limitModal, setLimitModal] = useState<{
     isOpen: boolean
     title: string
@@ -279,6 +321,12 @@ export default function LeadSearch({ onNavigate, onBack }: LeadSearchProps = {})
   useEffect(() => {
     localStorage.setItem('emailNotFoundIds', JSON.stringify([...emailNotFoundIds]))
   }, [emailNotFoundIds])
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('leadLookupLogs', JSON.stringify(lookupLogs))
+    } catch {}
+  }, [lookupLogs])
 
   useEffect(() => {
     localStorage.setItem('custom_industries', JSON.stringify(customIndustries))
@@ -605,17 +653,6 @@ export default function LeadSearch({ onNavigate, onBack }: LeadSearchProps = {})
   }
 
   const handleBack = () => {
-    // If search results are showing, reset the results and return to the fresh Lead Generation search filters
-    if (leads.length > 0 || searched) {
-      setLeads([])
-      setSearched(false)
-      setError(null)
-      setNotice(null)
-      setTableSearch('')
-      return
-    }
-
-    // Otherwise navigate back to previous page or Lead Database
     if (onBack) {
       onBack()
     } else if (onNavigate) {
@@ -623,6 +660,15 @@ export default function LeadSearch({ onNavigate, onBack }: LeadSearchProps = {})
     } else if (window.history.length > 1) {
       window.history.back()
     }
+  }
+
+  const handleResetSearch = () => {
+    setLeads([])
+    setSearched(false)
+    setSearchResultLeadIds(null)
+    setError(null)
+    setNotice(null)
+    setTableSearch('')
   }
 
   const handleSearch = async () => {
@@ -753,6 +799,13 @@ export default function LeadSearch({ onNavigate, onBack }: LeadSearchProps = {})
         }
       }
 
+      const returnedKeys = new Set<string>()
+      for (const l of returnedLeads) {
+        if (l.id) returnedKeys.add(l.id.toLowerCase())
+        if (l.linkedinUrl) returnedKeys.add(l.linkedinUrl.toLowerCase())
+      }
+      setSearchResultLeadIds(returnedKeys.size > 0 ? returnedKeys : null)
+
       const finalLeads = Array.from(mergedMap.values())
       if (finalLeads.length > 0) {
         setLeads(finalLeads)
@@ -777,6 +830,10 @@ export default function LeadSearch({ onNavigate, onBack }: LeadSearchProps = {})
       }
 
       const matchingFinal = finalLeads.filter((l) => {
+        const idKey = (l.id || '').toLowerCase()
+        const urlKey = (l.linkedinUrl || '').toLowerCase()
+        const isFromSearch = (idKey && returnedKeys.has(idKey)) || (urlKey && returnedKeys.has(urlKey))
+        if (isFromSearch) return true
         if (filters.name && !leadMatchesName(l, filters.name)) return false
         if (filters.company && !leadMatchesCompany(l, filters.company)) return false
         return true
@@ -917,6 +974,17 @@ export default function LeadSearch({ onNavigate, onBack }: LeadSearchProps = {})
       }
 
       if (!emailFound) {
+        const notFoundMsg = data?.rawLog || data?.reason || 'Actor completed search cleanly on Apify but found no verified email for this profile.'
+        const runUrl = data?.runUrl || emailLimitRunUrl
+        setLookupLogs((prev) => ({ ...prev, [`email_${lead.id}`]: { message: notFoundMsg, runUrl } }))
+        setLimitModal({
+          isOpen: true,
+          title: 'Email Not Found',
+          message: notFoundMsg,
+          type: 'email',
+          runUrl: runUrl,
+          leadToRetry: lead,
+        })
         // Genuinely not found: actor completed search cleanly but found no email
         setEmailNotFoundIds((prev) => {
           const next = new Set(prev)
@@ -985,11 +1053,18 @@ export default function LeadSearch({ onNavigate, onBack }: LeadSearchProps = {})
   // So a search that returns 0 new leads still renders every existing lead, and
   // the table can only be empty when the database is empty or the user typed a
   // search term that matches nothing.
+  const isFromCurrentSearch = (lead: Lead) => {
+    if (!searchResultLeadIds || searchResultLeadIds.size === 0) return false
+    const idKey = (lead.id || '').toLowerCase()
+    const urlKey = (lead.linkedinUrl || '').toLowerCase()
+    return (idKey && searchResultLeadIds.has(idKey)) || (urlKey && searchResultLeadIds.has(urlKey))
+  }
+
   const nameFilteredLeads = filters.name.trim()
-    ? leads.filter((lead) => leadMatchesName(lead, filters.name))
+    ? leads.filter((lead) => isFromCurrentSearch(lead) || leadMatchesName(lead, filters.name))
     : leads
   const companyFilteredLeads = filters.company.trim()
-    ? nameFilteredLeads.filter((lead) => leadMatchesCompany(lead, filters.company))
+    ? nameFilteredLeads.filter((lead) => isFromCurrentSearch(lead) || leadMatchesCompany(lead, filters.company))
     : nameFilteredLeads
   const filteredLeads = tableQuery
     ? companyFilteredLeads.filter((lead) =>
@@ -1236,23 +1311,14 @@ export default function LeadSearch({ onNavigate, onBack }: LeadSearchProps = {})
     },
   ]
 
-  const handleFindPhone = async (leadId: string, linkedinUrl: string, forceRetry = false) => {
+  const handleFindPhone = async (leadId: string, linkedinUrl: string, _forceRetry = false) => {
     if (fetchingPhoneId) return // prevent concurrent fetches
     if (!leadId || !linkedinUrl) {
       alert('No LinkedIn profile for this lead')
       return
     }
 
-    if (isPhoneLimitReached && !forceRetry) {
-      setLimitModal({
-        isOpen: true,
-        title: 'Phone Limit Reached',
-        message: phoneLimitMessage || 'Apify Phone Scraper limit reached. Upgrade to continue.',
-        type: 'phone',
-        runUrl: phoneLimitRunUrl || 'https://console.apify.com/actors/J9mf98b4CIZpW72Ue/runs',
-      })
-      return
-    }
+    const currentLead = leads.find((l) => l.id === leadId)
 
     // Clear any previous "not found" / error state so Fetching... shows immediately
     setPhoneNotFoundIds((prev) => { const s = new Set(prev); s.delete(leadId); if (linkedinUrl) s.delete(linkedinUrl); return s })
@@ -1286,18 +1352,15 @@ export default function LeadSearch({ onNavigate, onBack }: LeadSearchProps = {})
         }
         if (isLimit) {
           const limitMsg = `Phone Scraper limit reached: ${errText}`
-          setIsPhoneLimitReached(true)
-          setPhoneLimitMessage(errText)
-          setPhoneLimitRunUrl(errorRunUrl)
-          setApifyError(limitMsg)
-          setRowErrors((prev) => ({ ...prev, [`phone_${leadId}`]: limitMsg }))
           setLimitModal({
             isOpen: true,
             title: 'Phone Limit Reached',
             message: errText,
             type: 'phone',
             runUrl: errorRunUrl,
+            leadToRetry: currentLead,
           })
+          setRowErrors((prev) => ({ ...prev, [`phone_${leadId}`]: limitMsg }))
         } else {
           setRowErrors((prev) => ({ ...prev, [`phone_${leadId}`]: errText }))
         }
@@ -1313,30 +1376,37 @@ export default function LeadSearch({ onNavigate, onBack }: LeadSearchProps = {})
         }
         if (isLimit) {
           const limitMsg = `Phone Scraper limit reached: ${errorMsg}`
-          setIsPhoneLimitReached(true)
-          setPhoneLimitMessage(errorMsg)
-          setPhoneLimitRunUrl(runUrl)
-          setApifyError(limitMsg)
-          setRowErrors((prev) => ({ ...prev, [`phone_${leadId}`]: limitMsg }))
           setLimitModal({
             isOpen: true,
             title: 'Phone Limit Reached',
             message: errorMsg,
             type: 'phone',
             runUrl: runUrl,
+            leadToRetry: currentLead,
           })
+          setRowErrors((prev) => ({ ...prev, [`phone_${leadId}`]: limitMsg }))
         } else {
           setRowErrors((prev) => ({ ...prev, [`phone_${leadId}`]: errorMsg }))
         }
         return
       }
 
-      setIsPhoneLimitReached(false)
       if (data?.runUrl) {
         setPhoneLimitRunUrl(data.runUrl)
       }
 
       if (!hasPhoneValue(data?.phone)) {
+        const notFoundMsg = data?.rawLog || data?.reason || 'Actor completed search cleanly on Apify but found no registered phone number for this profile.'
+        const runUrl = data?.runUrl || phoneLimitRunUrl
+        setLookupLogs((prev) => ({ ...prev, [`phone_${leadId}`]: { message: notFoundMsg, runUrl } }))
+        setLimitModal({
+          isOpen: true,
+          title: 'Phone Not Found',
+          message: notFoundMsg,
+          type: 'phone',
+          runUrl: runUrl,
+          leadToRetry: currentLead,
+        })
         // Actor returned no phone
         setPhoneNotFoundIds((prev) => {
           const next = new Set(prev)
@@ -1359,25 +1429,17 @@ export default function LeadSearch({ onNavigate, onBack }: LeadSearchProps = {})
       )
     } catch (err: any) {
       const errorMsg = err?.message || 'Phone lookup failed'
-      const isLimit = /free plan limit|limit of \d+|15\/15|upgrade to a paid|usage limit|insufficient credit|quota/i.test(errorMsg)
       const runUrl = phoneLimitRunUrl || 'https://console.apify.com/actors/J9mf98b4CIZpW72Ue/runs'
-      if (isLimit) {
-        const limitMsg = `Phone Scraper limit reached: ${errorMsg}`
-        setIsPhoneLimitReached(true)
-        setPhoneLimitMessage(errorMsg)
-        setPhoneLimitRunUrl(runUrl)
-        setApifyError(limitMsg)
-        setRowErrors((prev) => ({ ...prev, [`phone_${leadId}`]: limitMsg }))
-        setLimitModal({
-          isOpen: true,
-          title: 'Phone Limit Reached',
-          message: errorMsg,
-          type: 'phone',
-          runUrl: runUrl,
-        })
-      } else {
-        setRowErrors((prev) => ({ ...prev, [`phone_${leadId}`]: errorMsg }))
-      }
+      setPhoneLimitRunUrl(runUrl)
+      setRowErrors((prev) => ({ ...prev, [`phone_${leadId}`]: errorMsg }))
+      setLimitModal({
+        isOpen: true,
+        title: 'Phone Limit Reached',
+        message: errorMsg,
+        type: 'phone',
+        runUrl: runUrl,
+        leadToRetry: currentLead,
+      })
     } finally {
       setFetchingPhoneId(null)
     }
@@ -1463,22 +1525,6 @@ export default function LeadSearch({ onNavigate, onBack }: LeadSearchProps = {})
         </div>
       )}
 
-      {notice && (
-        <div
-          style={{
-            background: '#eff6ff',
-            border: '1px solid #bfdbfe',
-            color: '#1d4ed8',
-            padding: '10px 14px',
-            borderRadius: 'var(--r)',
-            marginBottom: 16,
-            fontSize: '12.5px',
-          }}
-        >
-          {notice}
-        </div>
-      )}
-
       {/* ─── Header ─── */}
       <div
         style={{
@@ -1511,8 +1557,8 @@ export default function LeadSearch({ onNavigate, onBack }: LeadSearchProps = {})
               transition: 'all 0.15s ease',
               flexShrink: 0,
             }}
-            title={leads.length > 0 || searched ? 'Back to Lead Generation search filters' : 'Back to previous page'}
-            aria-label="Back to Lead Generation"
+            title="Back to previous page"
+            aria-label="Back to previous page"
           >
             <svg
               width="18"
@@ -1548,6 +1594,22 @@ export default function LeadSearch({ onNavigate, onBack }: LeadSearchProps = {})
           </button>
         )}
       </div>
+
+      {notice && (
+        <div
+          style={{
+            background: '#eff6ff',
+            border: '1px solid #bfdbfe',
+            color: '#1d4ed8',
+            padding: '10px 14px',
+            borderRadius: 'var(--r)',
+            marginBottom: 16,
+            fontSize: '12.5px',
+          }}
+        >
+          {notice}
+        </div>
+      )}
 
       {/* ─── Filter Dropdowns ─── */}
       <div className="card" style={{ padding: '16px', marginBottom: '16px' }}>
@@ -1661,7 +1723,10 @@ export default function LeadSearch({ onNavigate, onBack }: LeadSearchProps = {})
         {hasFilters && (
           <button
             className="btn"
-            onClick={() => setFilters({ ...DEFAULT_FILTERS })}
+            onClick={() => {
+              setFilters({ ...DEFAULT_FILTERS })
+              setSearchResultLeadIds(null)
+            }}
             style={{ fontSize: '12.5px' }}
           >
             Clear filters
@@ -1670,7 +1735,7 @@ export default function LeadSearch({ onNavigate, onBack }: LeadSearchProps = {})
         {leads.length > 0 && (
           <button
             className="btn"
-            onClick={handleBack}
+            onClick={handleResetSearch}
             style={{ fontSize: '12.5px', display: 'inline-flex', alignItems: 'center', gap: '4px' }}
             title="Reset results and return to Lead Generation search filters"
           >
@@ -1973,8 +2038,37 @@ export default function LeadSearch({ onNavigate, onBack }: LeadSearchProps = {})
                         </button>
                       </span>
                     ) : (!lead.email && (emailNotFoundIds.has(lead.id) || (lead.linkedinUrl && emailNotFoundIds.has(lead.linkedinUrl)) || lead.email_attempted === true)) ? (
-                      <span style={{ fontSize: '12.5px', color: '#9ca3af', fontStyle: 'italic' }}>
-                        Not Found&nbsp;
+                      <span style={{ fontSize: '12.5px', display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+                        <span
+                          style={{
+                            color: '#64748b',
+                            background: '#f8fafc',
+                            border: '1px solid #cbd5e1',
+                            padding: '2px 7px',
+                            borderRadius: '4px',
+                            cursor: 'pointer',
+                            fontSize: '11.5px',
+                            fontWeight: 500,
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: '4px',
+                          }}
+                          title="Click to view Apify log output and details"
+                          onClick={() => {
+                            const stored = lookupLogs[`email_${lead.id}`]
+                            setLimitModal({
+                              isOpen: true,
+                              title: 'Email Not Found in Apify',
+                              message: stored?.message || 'Actor completed search on Apify but found no verified email for this profile in Apify database.',
+                              type: 'email',
+                              runUrl: stored?.runUrl || (emailLimitRunUrl || 'https://console.apify.com/actors/bfH8Ermocz8oYKQVO/runs'),
+                              leadToRetry: lead,
+                            })
+                          }}
+                        >
+                          <span>Not Found</span>
+                          <span style={{ fontSize: '11px', color: 'var(--accent)' }}>📋</span>
+                        </span>
                         <button
                           style={{ fontSize: '11px', color: 'var(--accent)', background: 'none', border: 'none', cursor: 'pointer', padding: 0, textDecoration: 'underline' }}
                           onClick={() => {
@@ -2073,8 +2167,37 @@ export default function LeadSearch({ onNavigate, onBack }: LeadSearchProps = {})
                         </button>
                       </span>
                     ) : (!hasPhoneValue(lead.phone) && (phoneNotFoundIds.has(lead.id) || (lead.linkedinUrl && phoneNotFoundIds.has(lead.linkedinUrl)) || lead.phone_attempted === true)) ? (
-                      <span style={{ fontSize: '12.5px', color: '#9ca3af', fontStyle: 'italic' }}>
-                        Not Found&nbsp;
+                      <span style={{ fontSize: '12.5px', display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+                        <span
+                          style={{
+                            color: '#64748b',
+                            background: '#f8fafc',
+                            border: '1px solid #cbd5e1',
+                            padding: '2px 7px',
+                            borderRadius: '4px',
+                            cursor: 'pointer',
+                            fontSize: '11.5px',
+                            fontWeight: 500,
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: '4px',
+                          }}
+                          title="Click to view Apify log output and details"
+                          onClick={() => {
+                            const stored = lookupLogs[`phone_${lead.id}`]
+                            setLimitModal({
+                              isOpen: true,
+                              title: 'Phone Not Found in Apify',
+                              message: stored?.message || 'Actor completed search on Apify but found no registered phone number for this profile in Apify database.',
+                              type: 'phone',
+                              runUrl: stored?.runUrl || (phoneLimitRunUrl || 'https://console.apify.com/actors/J9mf98b4CIZpW72Ue/runs'),
+                              leadToRetry: lead,
+                            })
+                          }}
+                        >
+                          <span>Not Found</span>
+                          <span style={{ fontSize: '11px', color: 'var(--accent)' }}>📋</span>
+                        </span>
                         <button
                           style={{ fontSize: '11px', color: 'var(--accent)', background: 'none', border: 'none', cursor: 'pointer', padding: 0, textDecoration: 'underline' }}
                           onClick={() => {
@@ -2094,7 +2217,7 @@ export default function LeadSearch({ onNavigate, onBack }: LeadSearchProps = {})
                               void supabase.from('leads').update({ phone_attempted: false }).eq('id', lead.id)
                             }
                             if (lead.linkedinUrl) {
-                              void handleFindPhone(lead.id, lead.linkedinUrl)
+                              void handleFindPhone(lead.id, lead.linkedinUrl, true)
                             }
                           }}
                         >Retry</button>
@@ -2177,179 +2300,240 @@ export default function LeadSearch({ onNavigate, onBack }: LeadSearchProps = {})
         )}
       </div>
 
-      {/* ─── LIMIT REACHED MODAL POPUP ─── */}
-      {limitModal.isOpen && (
-        <div
-          className="modal-overlay"
-          style={{ zIndex: 1000 }}
-          onClick={() => setLimitModal((prev) => ({ ...prev, isOpen: false }))}
-        >
+      {/* ─── LIMIT REACHED / NOT FOUND / RUN LOG MODAL POPUP ─── */}
+      {limitModal.isOpen && (() => {
+        const isNotFound = (limitModal.title || '').toLowerCase().includes('not found')
+        return (
           <div
-            className="modal"
-            onClick={(e) => e.stopPropagation()}
-            style={{
-              maxWidth: '490px',
-              border: '1px solid #fecdd3',
-              boxShadow: '0 25px 50px -12px rgba(159, 18, 57, 0.25)',
-              overflow: 'hidden',
-            }}
+            className="modal-overlay"
+            style={{ zIndex: 1000 }}
+            onClick={() => setLimitModal((prev) => ({ ...prev, isOpen: false }))}
           >
             <div
-              className="modal-header"
+              className="modal"
+              onClick={(e) => e.stopPropagation()}
               style={{
-                background: '#fff1f2',
-                borderBottom: '1px solid #fecdd3',
-                padding: '16px 20px',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'space-between',
+                maxWidth: '520px',
+                border: isNotFound ? '1px solid #cbd5e1' : '1px solid #fecdd3',
+                boxShadow: isNotFound
+                  ? '0 25px 50px -12px rgba(15, 23, 42, 0.2)'
+                  : '0 25px 50px -12px rgba(159, 18, 57, 0.25)',
+                overflow: 'hidden',
               }}
             >
-              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                <div
-                  style={{
-                    width: '36px',
-                    height: '36px',
-                    borderRadius: '8px',
-                    background: '#ffe4e6',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    fontSize: '20px',
-                  }}
-                >
-                  ⚠️
-                </div>
-                <div>
-                  <h3 style={{ margin: 0, fontSize: '16px', fontWeight: 700, color: '#9f1239' }}>
-                    {limitModal.title || 'Email Limit Reached'}
-                  </h3>
-                  <p style={{ margin: 0, fontSize: '12px', color: '#be123c', marginTop: '2px' }}>
-                    Apify Scraper Limit / Usage Exceeded
-                  </p>
-                </div>
-              </div>
-              <button
-                onClick={() => setLimitModal((prev) => ({ ...prev, isOpen: false }))}
-                className="modal-close"
-                style={{
-                  background: 'none',
-                  border: 'none',
-                  fontSize: '18px',
-                  cursor: 'pointer',
-                  color: '#9f1239',
-                  fontWeight: 'bold',
-                  padding: '4px 8px',
-                  borderRadius: '4px',
-                }}
-              >
-                ✕
-              </button>
-            </div>
-
-            <div className="modal-body" style={{ padding: '20px' }}>
               <div
+                className="modal-header"
                 style={{
-                  background: '#fff',
-                  border: '1px solid #fecdd3',
-                  borderRadius: '8px',
-                  padding: '14px',
-                  fontSize: '13px',
-                  lineHeight: 1.5,
-                  color: '#881337',
-                  marginBottom: '16px',
-                  wordBreak: 'break-word',
-                }}
-              >
-                <div style={{ fontWeight: 700, marginBottom: '6px', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                  <span>Apify Log Output:</span>
-                </div>
-                <div
-                  style={{
-                    fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace',
-                    fontSize: '12.5px',
-                    color: '#9f1239',
-                    whiteSpace: 'pre-wrap',
-                    background: '#fff1f2',
-                    padding: '10px 12px',
-                    borderRadius: '6px',
-                    border: '1px solid #fecdd3',
-                    lineHeight: '1.45',
-                  }}
-                >
-                  {limitModal.message || 'Free plan: 15/15 requests used, 0 remaining\nFree plan limit of 15 requests reached. Upgrade to a paid Apify plan to continue.'}
-                </div>
-              </div>
-
-              <p style={{ fontSize: '13px', color: 'var(--text2, #475569)', margin: 0, lineHeight: 1.5 }}>
-                {limitModal.type === 'email'
-                  ? 'Your Apify email scraper run limit has been reached. Please upgrade your Apify plan or add credits to continue discovering email addresses.'
-                  : 'Your Apify scraper run limit has been reached. Please upgrade your Apify plan or add credits to continue.'}
-              </p>
-            </div>
-
-            <div
-              className="modal-footer"
-              style={{
-                padding: '14px 20px',
-                borderTop: '1px solid var(--border)',
-                display: 'flex',
-                justifyContent: 'space-between',
-                alignItems: 'center',
-                background: 'var(--surface2, #fafafa)',
-              }}
-            >
-              <a
-                href={
-                  limitModal.runUrl ||
-                  (limitModal.type === 'phone'
-                    ? (phoneLimitRunUrl || 'https://console.apify.com/actors/J9mf98b4CIZpW72Ue/runs')
-                    : (emailLimitRunUrl || 'https://console.apify.com/actors/bfH8Ermocz8oYKQVO/runs'))
-                }
-                target="_blank"
-                rel="noopener noreferrer"
-                className="btn"
-                style={{
-                  textDecoration: 'none',
-                  display: 'inline-flex',
+                  background: isNotFound ? '#f8fafc' : '#fff1f2',
+                  borderBottom: isNotFound ? '1px solid #e2e8f0' : '1px solid #fecdd3',
+                  padding: '16px 20px',
+                  display: 'flex',
                   alignItems: 'center',
-                  gap: '6px',
-                  fontSize: '12.5px',
-                  padding: '6px 12px',
-                  background: '#f1f5f9',
-                  borderColor: '#cbd5e1',
-                  color: '#0f172a',
-                  fontWeight: 600,
+                  justifyContent: 'space-between',
                 }}
               >
-                Open Apify Log ↗
-              </a>
-              <div style={{ display: 'flex', gap: '8px' }}>
-                {limitModal.leadToRetry && (
-                  <button
-                    className="btn"
-                    style={{ fontSize: '12.5px', padding: '6px 14px' }}
-                    onClick={() => {
-                      const lead = limitModal.leadToRetry
-                      setLimitModal((prev) => ({ ...prev, isOpen: false }))
-                      if (lead) void handleEnrichLead(lead, true)
+                <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                  <div
+                    style={{
+                      width: '36px',
+                      height: '36px',
+                      borderRadius: '8px',
+                      background: isNotFound ? '#e2e8f0' : '#ffe4e6',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      fontSize: '20px',
                     }}
                   >
-                    Try Anyway
-                  </button>
-                )}
+                    {isNotFound ? '📋' : '⚠️'}
+                  </div>
+                  <div>
+                    <h3
+                      style={{
+                        margin: 0,
+                        fontSize: '16px',
+                        fontWeight: 700,
+                        color: isNotFound ? '#0f172a' : '#9f1239',
+                      }}
+                    >
+                      {limitModal.title || 'Apify Result'}
+                    </h3>
+                    <p
+                      style={{
+                        margin: 0,
+                        fontSize: '12px',
+                        color: isNotFound ? '#64748b' : '#be123c',
+                        marginTop: '2px',
+                      }}
+                    >
+                      {isNotFound
+                        ? 'Apify Search Completed — Not Recorded in Apify Database'
+                        : 'Apify Scraper Limit / Usage Exceeded'}
+                    </p>
+                  </div>
+                </div>
                 <button
-                  className="btn btn-primary"
                   onClick={() => setLimitModal((prev) => ({ ...prev, isOpen: false }))}
-                  style={{ fontSize: '12.5px', padding: '6px 16px' }}
+                  className="modal-close"
+                  style={{
+                    background: 'none',
+                    border: 'none',
+                    fontSize: '18px',
+                    cursor: 'pointer',
+                    color: isNotFound ? '#64748b' : '#9f1239',
+                    fontWeight: 'bold',
+                    padding: '4px 8px',
+                    borderRadius: '4px',
+                  }}
                 >
-                  Close
+                  ✕
                 </button>
+              </div>
+
+              <div className="modal-body" style={{ padding: '20px' }}>
+                <div
+                  style={{
+                    background: '#fff',
+                    border: isNotFound ? '1px solid #e2e8f0' : '1px solid #fecdd3',
+                    borderRadius: '8px',
+                    padding: '14px',
+                    fontSize: '13px',
+                    lineHeight: 1.5,
+                    color: isNotFound ? '#1e293b' : '#881337',
+                    marginBottom: '16px',
+                    wordBreak: 'break-word',
+                  }}
+                >
+                  <div
+                    style={{
+                      fontWeight: 700,
+                      marginBottom: '6px',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                    }}
+                  >
+                    <span>Apify Run Output / Issue:</span>
+                    {limitModal.leadToRetry && (
+                      <span style={{ fontSize: '11px', color: '#64748b', fontWeight: 500 }}>
+                        {limitModal.leadToRetry.full_name || limitModal.leadToRetry.company_name}
+                      </span>
+                    )}
+                  </div>
+                  <div
+                    style={{
+                      fontFamily:
+                        'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace',
+                      fontSize: '12.5px',
+                      color: isNotFound ? '#334155' : '#9f1239',
+                      whiteSpace: 'pre-wrap',
+                      background: isNotFound ? '#f8fafc' : '#fff1f2',
+                      padding: '10px 12px',
+                      borderRadius: '6px',
+                      border: isNotFound ? '1px solid #e2e8f0' : '1px solid #fecdd3',
+                      lineHeight: '1.45',
+                      maxHeight: '220px',
+                      overflowY: 'auto',
+                    }}
+                  >
+                    {limitModal.message ||
+                      (isNotFound
+                        ? 'Actor ran on Apify but found no matching record in database for this contact profile.'
+                        : 'Free plan: 15/15 requests used, 0 remaining\nFree plan limit of 15 requests reached. Upgrade to a paid Apify plan to continue.')}
+                  </div>
+                </div>
+
+                <p
+                  style={{
+                    fontSize: '13px',
+                    color: 'var(--text2, #475569)',
+                    margin: 0,
+                    lineHeight: 1.5,
+                  }}
+                >
+                  {isNotFound
+                    ? limitModal.type === 'email'
+                      ? 'Apify searched its database for this LinkedIn profile, but found no verified email address. You can click "Open Apify Log ↗" below to review the full actor execution log on Apify Console.'
+                      : limitModal.type === 'phone'
+                      ? 'Apify searched its database for this LinkedIn profile, but found no registered mobile number. You can click "Open Apify Log ↗" below to review the full actor execution log on Apify Console.'
+                      : 'Apify searched for this contact, but found no record in its database. You can click "Open Apify Log ↗" below to inspect the run log.'
+                    : limitModal.type === 'email'
+                    ? 'Your Apify email scraper run limit has been reached. Please upgrade your Apify plan or add credits to continue discovering email addresses.'
+                    : limitModal.type === 'phone'
+                    ? 'Your Apify phone scraper run limit has been reached. Please upgrade your Apify plan or add credits to continue discovering phone numbers.'
+                    : 'Your Apify scraper run limit has been reached. Please upgrade your Apify plan or add credits to continue.'}
+                </p>
+              </div>
+
+              <div
+                className="modal-footer"
+                style={{
+                  padding: '14px 20px',
+                  borderTop: '1px solid var(--border)',
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  alignItems: 'center',
+                  background: 'var(--surface2, #fafafa)',
+                }}
+              >
+                <a
+                  href={
+                    limitModal.runUrl ||
+                    (limitModal.type === 'phone'
+                      ? (phoneLimitRunUrl || 'https://console.apify.com/actors/J9mf98b4CIZpW72Ue/runs')
+                      : (emailLimitRunUrl || 'https://console.apify.com/actors/bfH8Ermocz8oYKQVO/runs'))
+                  }
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="btn"
+                  style={{
+                    textDecoration: 'none',
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '6px',
+                    fontSize: '12.5px',
+                    padding: '6px 12px',
+                    background: '#f1f5f9',
+                    borderColor: '#cbd5e1',
+                    color: '#0f172a',
+                    fontWeight: 600,
+                  }}
+                >
+                  Open Apify Log ↗
+                </a>
+                <div style={{ display: 'flex', gap: '8px' }}>
+                  {limitModal.leadToRetry && (
+                    <button
+                      className="btn"
+                      style={{ fontSize: '12.5px', padding: '6px 14px' }}
+                      onClick={() => {
+                        const lead = limitModal.leadToRetry
+                        setLimitModal((prev) => ({ ...prev, isOpen: false }))
+                        if (lead) {
+                          if (limitModal.type === 'phone' && lead.linkedinUrl) {
+                            void handleFindPhone(lead.id, lead.linkedinUrl, true)
+                          } else {
+                            void handleEnrichLead(lead, true)
+                          }
+                        }
+                      }}
+                    >
+                      {isNotFound ? 'Retry Search' : 'Try Anyway'}
+                    </button>
+                  )}
+                  <button
+                    className="btn btn-primary"
+                    onClick={() => setLimitModal((prev) => ({ ...prev, isOpen: false }))}
+                    style={{ fontSize: '12.5px', padding: '6px 16px' }}
+                  >
+                    Close
+                  </button>
+                </div>
               </div>
             </div>
           </div>
-        </div>
-      )}
+        )
+      })()}
     </div>
   )
 }

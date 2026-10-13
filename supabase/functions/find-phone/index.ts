@@ -21,6 +21,16 @@ function extractPhone(item: any): string {
   return "";
 }
 
+function normalizeLinkedInUrl(url: string): string {
+  let u = url.trim();
+  if (!/^https?:\/\//i.test(u)) {
+    u = "https://" + u;
+  }
+  u = u.replace(/^http:\/\//i, "https://");
+  u = u.split("?")[0].split("#")[0];
+  return u.replace(/\/+$/, "");
+}
+
 export default {
   fetch: withSupabase({ auth: ["user", "publishable", "secret"] }, async (req) => {
     const corsHeaders = {
@@ -66,8 +76,8 @@ export default {
     let runUrl = `https://console.apify.com/actors/${cleanActor}/runs`;
 
     try {
-      // Actor input: { linkedinUrl: "https://www.linkedin.com/in/..." }
-      const apifyInput = { linkedinUrl: linkedinUrl };
+      const normalizedUrl = normalizeLinkedInUrl(linkedinUrl);
+      const apifyInput = { linkedinUrl: normalizedUrl };
       console.log("Calling phone actor", cleanActor, "input:", JSON.stringify(apifyInput));
 
       // Start run (fast POST, returns in <500ms with run ID) to prevent 502 Gateway Timeouts
@@ -146,36 +156,40 @@ export default {
         }
       }
 
-      // If dataset is empty, inspect run log
+      let logText = "";
+      if (runId) {
+        try {
+          const logRes = await fetch(
+            `https://api.apify.com/v2/actor-runs/${runId}/log?token=${APIFY_TOKEN}`
+          );
+          if (logRes.ok) {
+            logText = await logRes.text();
+          }
+        } catch (logErr) {
+          console.error("Failed to read run log:", logErr);
+        }
+      }
+
+      // If dataset is empty, check why:
       if (list.length === 0) {
         console.warn(`Apify phone run ${runId} yielded 0 items. Inspecting run log...`);
-        let logText = "";
 
-        if (runId) {
-          try {
-            const logRes = await fetch(
-              `https://api.apify.com/v2/actor-runs/${runId}/log?token=${APIFY_TOKEN}`
-            );
-            if (logRes.ok) {
-              logText = await logRes.text();
-            }
-          } catch (logErr) {
-            console.error("Failed to read run log:", logErr);
-          }
-        }
-
-        const logLines = logText
+        // Only true plan/rate/quota limits trigger isLimit
+        const limitLines = logText
           .split('\n')
-          .filter((l) => /Free plan limit|limit of \d+ requests|15\/15 requests used|Upgrade to a paid|usage limit reached|monthly spend limit/i.test(l))
+          .filter((l) => /free plan limit|limit of \d+ requests|15\/15 requests used|upgrade to a paid|usage limit reached|monthly spend limit/i.test(l))
           .map((l) => l.replace(/.*\[apify\]\s*(?:INFO|WARN|ERROR)\s*/i, '').trim())
           .filter(Boolean);
 
         const isLimit =
-          logLines.length > 0 ||
+          limitLines.length > 0 ||
           /free plan limit|limit of \d+ requests|15\/15 requests used|upgrade to a paid|usage limit reached|monthly spend limit/i.test(logText);
 
         if (isLimit) {
-          const displayMsg = logLines.join('\n') || "Apify plan limit reached. Upgrade to continue.";
+          const displayMsg =
+            limitLines.join('\n') ||
+            "Free plan: 15/15 requests used, 0 remaining\nFree plan limit of 15 requests reached. Upgrade to a paid Apify plan to continue.";
+
           return respond({
             success: false,
             found: false,
@@ -188,7 +202,7 @@ export default {
           });
         }
 
-        // Check if the run simply found no phone number
+        // Otherwise, the actor ran cleanly and found no phone for this specific profile
         const serviceClient = createClient(
           Deno.env.get("SUPABASE_URL")!,
           Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
@@ -201,6 +215,7 @@ export default {
           phone: "",
           runId,
           runUrl,
+          rawLog: logText.slice(-1000) || `Actor finished search cleanly with status: ${currentStatus}.\nNo registered mobile phone number was found in Apify's database for this LinkedIn profile.`,
           reason: "No phone number found for this profile",
         });
       }
@@ -210,8 +225,14 @@ export default {
       const first = list[0] ?? {};
 
       // Check if the actor output reported an explicit error / limit
-      const rawErr = first.error || (first.message && !first.mobile_number && !first.phone ? first.message : null);
-      const errStr = typeof rawErr === "object" ? (rawErr.message || JSON.stringify(rawErr)) : (typeof rawErr === "string" ? rawErr : "");
+      let errStr = "";
+      if (first.error && typeof first.error === "object") {
+        errStr = first.error.message || JSON.stringify(first.error);
+      } else if (typeof first.error === "string") {
+        errStr = first.error;
+      } else if (first.message && !first.mobile_number && !first.phone) {
+        errStr = typeof first.message === "object" ? (first.message.message || JSON.stringify(first.message)) : String(first.message);
+      }
       if (errStr && !/no (?:mobile )?phone/i.test(errStr)) {
         const isLimit = /free plan limit|limit of \d+|15\/15|upgrade to a paid|usage limit|insufficient credit|quota/i.test(errStr);
         console.warn("Apify phone actor reported error/limit:", errStr);
@@ -221,6 +242,7 @@ export default {
           isLimit,
           apifyError: errStr,
           reason: isLimit ? `Apify limit reached: ${errStr}` : `Apify error: ${errStr}`,
+          rawLog: logText.slice(-1000) || errStr,
           runId,
           runUrl,
         });
@@ -235,9 +257,18 @@ export default {
       );
 
       if (!phone) {
-        // Mark attempted so we know a lookup was run (UI will show Not Found with Retry).
         await serviceClient.from("leads").update({ phone_attempted: true }).eq("id", leadId);
-        return respond({ success: true, found: false, reason: "No phone number found for this profile", phone: "", runId, runUrl });
+        const itemMsg = first.message ? (typeof first.message === "object" ? JSON.stringify(first.message) : String(first.message)) : "";
+        const notFoundText = logText.slice(-1000) || itemMsg || `Actor finished search cleanly with status: ${currentStatus}.\nNo registered mobile phone number was found in Apify's database for this LinkedIn profile.`;
+        return respond({
+          success: true,
+          found: false,
+          reason: itemMsg || "No phone number found for this profile",
+          rawLog: notFoundText,
+          phone: "",
+          runId,
+          runUrl,
+        });
       }
 
       // Save phone to the leads row.

@@ -135,23 +135,23 @@ export default {
         }
       }
 
+      let logText = "";
+      if (runId) {
+        try {
+          const logRes = await fetch(
+            `https://api.apify.com/v2/actor-runs/${runId}/log?token=${APIFY_TOKEN}`
+          );
+          if (logRes.ok) {
+            logText = await logRes.text();
+          }
+        } catch (logErr) {
+          console.error("Failed to read run log:", logErr);
+        }
+      }
+
       // If dataset is empty, check run log to see why 0 items were produced (e.g. Free plan limit reached)
       if (list.length === 0) {
         console.warn(`Apify email run ${runId} yielded 0 items. Inspecting run log...`);
-        let logText = "";
-
-        if (runId) {
-          try {
-            const logRes = await fetch(
-              `https://api.apify.com/v2/actor-runs/${runId}/log?token=${APIFY_TOKEN}`
-            );
-            if (logRes.ok) {
-              logText = await logRes.text();
-            }
-          } catch (logErr) {
-            console.error("Failed to read run log:", logErr);
-          }
-        }
 
         // Extract key warning/limit lines from the Apify log
         const logLines = logText
@@ -194,6 +194,7 @@ export default {
           email: "",
           runId,
           runUrl,
+          rawLog: logText.slice(-1000) || `Actor finished search cleanly with status: ${currentStatus}.\nNo verified email address was found in Apify's database for this LinkedIn profile.`,
           reason: "Actor returned no email for this profile",
         });
       }
@@ -203,8 +204,14 @@ export default {
       const first = list[0] ?? {};
 
       // Check if the actor output reported an explicit error / limit
-      const rawErr = first.error || (first.message && !first.email ? first.message : null);
-      const errStr = typeof rawErr === "object" ? (rawErr.message || JSON.stringify(rawErr)) : (typeof rawErr === "string" ? rawErr : "");
+      let errStr = "";
+      if (first.error && typeof first.error === "object") {
+        errStr = first.error.message || JSON.stringify(first.error);
+      } else if (typeof first.error === "string") {
+        errStr = first.error;
+      } else if (first.message && !first.email) {
+        errStr = typeof first.message === "object" ? (first.message.message || JSON.stringify(first.message)) : String(first.message);
+      }
       if (errStr && !/no (?:email|contact)/i.test(errStr)) {
         const isLimit = /free plan limit|limit of \d+|15\/15|upgrade to a paid|usage limit|insufficient credit|quota/i.test(errStr);
         console.warn("Apify email actor reported error/limit:", errStr);
@@ -214,6 +221,7 @@ export default {
           isLimit,
           apifyError: errStr,
           reason: isLimit ? `Apify limit reached: ${errStr}` : `Apify error: ${errStr}`,
+          rawLog: logText.slice(-1000) || errStr,
           runId,
           runUrl,
         });
@@ -261,10 +269,14 @@ export default {
         if (mirrorError) console.error("Contact mirror error:", mirrorError);
       }
 
+      const itemMsg = first.message ? (typeof first.message === "object" ? JSON.stringify(first.message) : String(first.message)) : "";
+      const notFoundLog = logText.slice(-1000) || itemMsg || `Actor finished search cleanly with status: ${currentStatus}.\nNo verified email address was found in Apify's database for this LinkedIn profile.`;
+
       return respond({
         success: true,
         found: emailFound,
-        reason: emailFound ? "" : "Actor returned no email for this profile",
+        reason: emailFound ? "" : (itemMsg || "Actor returned no email for this profile"),
+        rawLog: emailFound ? "" : notFoundLog,
         email,
         full_name:    first.name    || "",
         company_name: first.company || "",
