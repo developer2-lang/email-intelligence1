@@ -1,9 +1,18 @@
 import { withSupabase } from "jsr:@supabase/server@^1";
 import { createClient } from "npm:@supabase/supabase-js@2";
 
-// Email actor (APIFY_EMAIL_ACTOR_ID = bfH8Ermocz8oYKQVO) response shape:
-// [{ linkedin_url, found: true, email: "amit@airpay.co.in", name: "Amit Bavdhankar",
-//    domain: "airpay.co.in", company: "Airpay Payment Services" }]
+function extractEmail(item: any): string {
+  const candidates = [
+    item.email,
+    item.work_email,
+    item.personal_email,
+    Array.isArray(item.emails) ? item.emails[0] : item.emails,
+  ];
+  for (const c of candidates) {
+    if (typeof c === "string" && c.includes("@")) return c.trim();
+  }
+  return "";
+}
 
 export default {
   fetch: withSupabase({ auth: ["user", "publishable", "secret"] }, async (req) => {
@@ -16,7 +25,7 @@ export default {
       return new Response("ok", { headers: corsHeaders });
     }
 
-    // Always HTTP 200 so the frontend can read the JSON body.
+    // Always respond HTTP 200 so the frontend can read the JSON body.
     const respond = (body: object) =>
       new Response(JSON.stringify(body), {
         headers: { ...corsHeaders, "Content-Type": "application/json" },
@@ -27,23 +36,32 @@ export default {
       return respond({ success: false, found: false, reason: "leadId and linkedinUrl are required" });
     }
 
+    // Read Apify credentials purely from Supabase Secrets
+    const APIFY_TOKEN = Deno.env.get("APIFY_TOKEN") || Deno.env.get("APIFY_API_TOKEN");
+    const EMAIL_ACTOR = Deno.env.get("APIFY_EMAIL_ACTOR_ID") || "bfH8Ermocz8oYKQVO";
+
+    if (!APIFY_TOKEN || !EMAIL_ACTOR) {
+      console.error("Missing APIFY_TOKEN or APIFY_EMAIL_ACTOR_ID in Supabase Secrets");
+      return respond({
+        success: false,
+        found: false,
+        reason: "Server config error: missing Apify credentials (check APIFY_TOKEN and APIFY_EMAIL_ACTOR_ID in Supabase Secrets)",
+        runUrl: "https://console.apify.com/actors/bfH8Ermocz8oYKQVO/runs",
+      });
+    }
+
+    const cleanActor = EMAIL_ACTOR.trim().replace('/', '~');
+    let runId = "";
+    let runUrl = `https://console.apify.com/actors/${cleanActor}/runs`;
+
     try {
-      const APIFY_TOKEN   = Deno.env.get("APIFY_TOKEN");
-      const EMAIL_ACTOR   = Deno.env.get("APIFY_EMAIL_ACTOR_ID"); // bfH8Ermocz8oYKQVO
-
-      if (!APIFY_TOKEN || !EMAIL_ACTOR) {
-        console.error("Missing APIFY_TOKEN or APIFY_EMAIL_ACTOR_ID");
-        return respond({ success: false, found: false, reason: "Server config error: missing Apify credentials" });
-      }
-
       // Actor input: { urls: ["https://www.linkedin.com/in/..."] }
-      // Confirmed working from live logs:
-      //   "Working input schema: {"urls":["https://www.linkedin.com/in/mohantysanjib"]}"
       const apifyInput = { urls: [linkedinUrl] };
-      console.log("Calling email actor", EMAIL_ACTOR, "input:", JSON.stringify(apifyInput));
+      console.log("Calling email actor", cleanActor, "input:", JSON.stringify(apifyInput));
 
-      const res = await fetch(
-        `https://api.apify.com/v2/acts/${EMAIL_ACTOR}/run-sync-get-dataset-items?token=${APIFY_TOKEN}`,
+      // Start run (fast POST, returns in <500ms with run ID) to prevent 502 Gateway Timeouts
+      const startRes = await fetch(
+        `https://api.apify.com/v2/acts/${cleanActor}/runs?token=${APIFY_TOKEN}`,
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -51,53 +69,164 @@ export default {
         }
       );
 
-      if (!res.ok) {
-        const errBody = await res.text();
-        console.error(`Apify ${res.status}:`, errBody);
+      if (!startRes.ok) {
+        const errBody = await startRes.text();
+        console.error(`Apify start error ${startRes.status}:`, errBody);
         let parsedMessage = errBody;
         try {
           const parsed = JSON.parse(errBody);
           parsedMessage = parsed.error?.message || parsed.message || parsed.error || errBody;
         } catch {}
-        const isLimit = res.status === 429 || res.status === 402 || /limit|quota|credit|reach|exceed|payment|usage/i.test(parsedMessage);
+        const isLimit =
+          startRes.status === 429 ||
+          startRes.status === 402 ||
+          /free plan limit|limit of \d+|15\/15|upgrade to a paid|usage limit|insufficient credit|quota/i.test(parsedMessage);
+
         return respond({
           success: false,
           found: false,
           isLimit,
           apifyError: parsedMessage,
           reason: isLimit ? `Apify limit reached: ${parsedMessage}` : `Apify error: ${parsedMessage}`,
+          runUrl: `https://console.apify.com/actors/${cleanActor}/runs`,
         });
       }
 
-      const data = await res.json();
-      console.log("Apify email raw:", JSON.stringify(data).slice(0, 600));
+      const runStartJson = await startRes.json();
+      const run = runStartJson?.data || runStartJson;
+      runId = run?.id || "";
+      const defaultDatasetId = run?.defaultDatasetId;
+      if (runId) {
+        runUrl = `https://console.apify.com/view/runs/${runId}#/log`;
+      }
 
-      // Response: [{ linkedin_url, found, email, name, domain, company }]
-      const list  = Array.isArray(data) ? data : (Array.isArray(data?.data) ? data.data : [data]);
+      console.log(`Apify email run started: ${runId}. Polling status...`);
+
+      // Poll status every 2 seconds until finished or timeout
+      let currentStatus = run?.status || "RUNNING";
+      const pollStart = Date.now();
+      const maxWaitMs = 50_000;
+
+      while (["READY", "RUNNING"].includes(currentStatus) && Date.now() - pollStart < maxWaitMs) {
+        await new Promise((resolve) => setTimeout(resolve, 2000));
+        try {
+          const statusRes = await fetch(
+            `https://api.apify.com/v2/actor-runs/${runId}?token=${APIFY_TOKEN}`
+          );
+          if (statusRes.ok) {
+            const statusJson = await statusRes.json();
+            currentStatus = statusJson?.data?.status || currentStatus;
+          }
+        } catch (e) {
+          console.warn("Poll status check error:", e);
+        }
+      }
+
+      console.log(`Apify email run ${runId} completed with status: ${currentStatus}`);
+
+      let list: any[] = [];
+      if (defaultDatasetId) {
+        const dsRes = await fetch(
+          `https://api.apify.com/v2/datasets/${defaultDatasetId}/items?token=${APIFY_TOKEN}`
+        );
+        if (dsRes.ok) {
+          const dsData = await dsRes.json();
+          list = Array.isArray(dsData) ? dsData : (Array.isArray(dsData?.data) ? dsData.data : []);
+        }
+      }
+
+      // If dataset is empty, check run log to see why 0 items were produced (e.g. Free plan limit reached)
+      if (list.length === 0) {
+        console.warn(`Apify email run ${runId} yielded 0 items. Inspecting run log...`);
+        let logText = "";
+
+        if (runId) {
+          try {
+            const logRes = await fetch(
+              `https://api.apify.com/v2/actor-runs/${runId}/log?token=${APIFY_TOKEN}`
+            );
+            if (logRes.ok) {
+              logText = await logRes.text();
+            }
+          } catch (logErr) {
+            console.error("Failed to read run log:", logErr);
+          }
+        }
+
+        // Extract key warning/limit lines from the Apify log
+        const logLines = logText
+          .split('\n')
+          .filter((l) => /Free plan limit|limit of \d+ requests|15\/15 requests used|Upgrade to a paid|usage limit reached|monthly spend limit/i.test(l))
+          .map((l) => l.replace(/.*\[apify\]\s*(?:INFO|WARN|ERROR)\s*/i, '').trim())
+          .filter(Boolean);
+
+        const isLimit =
+          logLines.length > 0 ||
+          /free plan limit|limit of \d+ requests|15\/15 requests used|upgrade to a paid|usage limit reached|monthly spend limit/i.test(logText);
+
+        if (isLimit) {
+          const displayMsg =
+            logLines.join('\n') ||
+            "Free plan: 15/15 requests used, 0 remaining\nFree plan limit of 15 requests reached. Upgrade to a paid Apify plan to continue.";
+
+          return respond({
+            success: false,
+            found: false,
+            isLimit: true,
+            apifyError: displayMsg,
+            rawLog: logText.slice(-1000),
+            runId,
+            runUrl,
+            reason: `Apify limit reached: ${displayMsg}`,
+          });
+        }
+
+        // Run succeeded but returned no items (no email found)
+        const serviceClient = createClient(
+          Deno.env.get("SUPABASE_URL")!,
+          Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
+        );
+        await serviceClient.from("leads").update({ email_attempted: true }).eq("id", leadId);
+
+        return respond({
+          success: true,
+          found: false,
+          email: "",
+          runId,
+          runUrl,
+          reason: "Actor returned no email for this profile",
+        });
+      }
+
+      console.log("Apify email raw item:", JSON.stringify(list[0]).slice(0, 600));
+
       const first = list[0] ?? {};
 
       // Check if the actor output reported an explicit error / limit
-      const actorErr = first.error || (data && !Array.isArray(data) && (data.error || data.message || data.statusMessage));
-      if (actorErr && typeof actorErr === "string") {
-        const isLimit = /limit|quota|credit|reach|exceed|payment|usage/i.test(actorErr);
-        console.warn("Apify email actor reported error/limit:", actorErr);
+      const rawErr = first.error || (first.message && !first.email ? first.message : null);
+      const errStr = typeof rawErr === "object" ? (rawErr.message || JSON.stringify(rawErr)) : (typeof rawErr === "string" ? rawErr : "");
+      if (errStr && !/no (?:email|contact)/i.test(errStr)) {
+        const isLimit = /free plan limit|limit of \d+|15\/15|upgrade to a paid|usage limit|insufficient credit|quota/i.test(errStr);
+        console.warn("Apify email actor reported error/limit:", errStr);
         return respond({
           success: false,
           found: false,
           isLimit,
-          apifyError: actorErr,
-          reason: isLimit ? `Apify limit reached: ${actorErr}` : `Apify error: ${actorErr}`,
+          apifyError: errStr,
+          reason: isLimit ? `Apify limit reached: ${errStr}` : `Apify error: ${errStr}`,
+          runId,
+          runUrl,
         });
       }
 
-      // Use the actor's own "found" field — it sets it explicitly to true/false.
-      const emailFound = first.found === true && typeof first.email === "string" && first.email.trim().length > 0;
-      const email      = emailFound ? first.email.trim() : "";
+      // Extract email using actor's found flag or presence of a valid email field
+      const candidateEmail = extractEmail(first);
+      const emailFound = (first.found === true || (first.found !== false && Boolean(candidateEmail))) && Boolean(candidateEmail);
+      const email      = emailFound ? candidateEmail : "";
 
       console.log("found flag:", first.found, "| email:", email || "(none)");
 
       // Only write email when the actor confirmed it found one.
-      // Never null-out a value a previous enrichment already wrote.
       const updatePayload: Record<string, any> = { email_attempted: true };
       if (email) updatePayload.email = email;
       if (first.name && typeof first.name === "string" && first.name.trim().length > 0) {
@@ -118,14 +247,13 @@ export default {
 
       if (updateError) {
         console.error("DB update error:", updateError);
-        return respond({ success: false, found: emailFound, reason: updateError.message, email });
+        return respond({ success: false, found: emailFound, reason: updateError.message, email, runId, runUrl });
       }
 
       console.log("Saved lead", leadId, "email:", email || "(none)");
 
       if (email) {
         // Mirror into contacts — best-effort update (only if contact already exists).
-        // Using upsert would fail if the contact doesn't exist yet because user_id is NOT NULL.
         const { error: mirrorError } = await serviceClient
           .from("contacts")
           .update({ email })
@@ -138,15 +266,22 @@ export default {
         found: emailFound,
         reason: emailFound ? "" : "Actor returned no email for this profile",
         email,
-        // Pass through profile data for UI display
         full_name:    first.name    || "",
         company_name: first.company || "",
         designation:  "",
+        runId,
+        runUrl,
       });
 
     } catch (err: any) {
       console.error("Unhandled error:", err?.message);
-      return respond({ success: false, found: false, reason: err?.message || "Enrichment failed" });
+      return respond({
+        success: false,
+        found: false,
+        reason: err?.message || "Enrichment failed",
+        runId,
+        runUrl,
+      });
     }
   }),
 };

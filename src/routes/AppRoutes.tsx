@@ -29,6 +29,7 @@ export interface AppRoutesProps {
   onPersistSequences: (sequences: any[]) => void
   onPersistApiKeys: (keys: StoredApiKeys) => void
   onNavigate: (tab: TabKey) => void
+  onBack?: () => void
   onToast: (msg: string, type?: string) => void
   isUploadModalOpen: boolean
   setIsUploadModalOpen: (open: boolean) => void
@@ -165,7 +166,7 @@ export default function AppRoutes(props: AppRoutesProps) {
       return <ContactTypesTab onToast={props.onToast} />
 
     case 'lead-search':
-      return <LeadSearch />
+      return <LeadSearch onNavigate={props.onNavigate} onBack={props.onBack} />
 
     case 'lead-database':
       return <LeadDatabase onToast={props.onToast} />

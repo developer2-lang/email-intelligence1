@@ -178,6 +178,8 @@ function leadFromRow(row: any): Lead {
   }
 }
 
+import type { TabKey } from '../types'
+
 function loadCustomValues(key: string): string[] {
   try {
     const raw = localStorage.getItem(key)
@@ -189,7 +191,12 @@ function loadCustomValues(key: string): string[] {
   }
 }
 
-export default function LeadSearch() {
+interface LeadSearchProps {
+  onNavigate?: (tab: TabKey) => void
+  onBack?: () => void
+}
+
+export default function LeadSearch({ onNavigate, onBack }: LeadSearchProps = {}) {
   const [filters, setFilters] = useState<Filters>(() => {
     const saved = localStorage.getItem('leadSearchFilters')
     return saved ? { ...DEFAULT_FILTERS, ...JSON.parse(saved) } : DEFAULT_FILTERS
@@ -219,6 +226,25 @@ export default function LeadSearch() {
   const [tierAttempts, setTierAttempts] = useState<any[]>([])
   const [showTierDebug, setShowTierDebug] = useState(false)
   const [apifyError, setApifyError] = useState<string | null>(null)
+  const [isEmailLimitReached, setIsEmailLimitReached] = useState(false)
+  const [emailLimitMessage, setEmailLimitMessage] = useState<string>('')
+  const [emailLimitRunUrl, setEmailLimitRunUrl] = useState<string>('https://console.apify.com/actors/bfH8Ermocz8oYKQVO/runs')
+  const [isPhoneLimitReached, setIsPhoneLimitReached] = useState(false)
+  const [phoneLimitMessage, setPhoneLimitMessage] = useState<string>('')
+  const [phoneLimitRunUrl, setPhoneLimitRunUrl] = useState<string>('https://console.apify.com/actors/J9mf98b4CIZpW72Ue/runs')
+  const [limitModal, setLimitModal] = useState<{
+    isOpen: boolean
+    title: string
+    message: string
+    type: 'email' | 'phone' | 'scraper'
+    runUrl?: string
+    leadToRetry?: Lead
+  }>({
+    isOpen: false,
+    title: '',
+    message: '',
+    type: 'email',
+  })
 
   const [companySizes, setCompanySizes] = useState<FilterOption[]>([])
   const [profileCounts, setProfileCounts] = useState<ProfileCountOption[]>([])
@@ -578,6 +604,27 @@ export default function LeadSearch() {
     setCustomCompanies((prev) => prev.filter((company) => company !== value))
   }
 
+  const handleBack = () => {
+    // If search results are showing, reset the results and return to the fresh Lead Generation search filters
+    if (leads.length > 0 || searched) {
+      setLeads([])
+      setSearched(false)
+      setError(null)
+      setNotice(null)
+      setTableSearch('')
+      return
+    }
+
+    // Otherwise navigate back to previous page or Lead Database
+    if (onBack) {
+      onBack()
+    } else if (onNavigate) {
+      onNavigate('lead-database')
+    } else if (window.history.length > 1) {
+      window.history.back()
+    }
+  }
+
   const handleSearch = async () => {
     setLoading(true)
     setError(null)
@@ -764,8 +811,22 @@ export default function LeadSearch() {
     if (!error) setLeads([])
   }
 
-  const handleEnrichLead = async (lead: Lead) => {
+  const handleEnrichLead = async (lead: Lead, forceRetry = false) => {
     if (!lead.id) return
+
+    // If limit was already reached, show popup immediately when clicking Find Email
+    if (isEmailLimitReached && !forceRetry) {
+      setLimitModal({
+        isOpen: true,
+        title: 'Email Limit Reached',
+        message: emailLimitMessage || 'Apify Email Scraper limit reached. Upgrade to a paid Apify plan to continue.',
+        type: 'email',
+        runUrl: emailLimitRunUrl,
+        leadToRetry: lead,
+      })
+      return
+    }
+
     // Clear any previous "not found" / error state so Fetching... shows immediately
     setEmailNotFoundIds((prev) => { const s = new Set(prev); s.delete(lead.id); if (lead.linkedinUrl) s.delete(lead.linkedinUrl); return s })
     setRowErrors((prev) => { const next = { ...prev }; delete next[`email_${lead.id}`]; return next })
@@ -777,6 +838,7 @@ export default function LeadSearch() {
       if (error) {
         let errText = error.message || 'Email lookup failed'
         let isLimit = false
+        let errorRunUrl = 'https://console.apify.com'
         try {
           if ('context' in error && typeof (error as any).context?.json === 'function') {
             const ctxJson = await (error as any).context.json()
@@ -784,6 +846,7 @@ export default function LeadSearch() {
               errText = ctxJson.apifyError || ctxJson.reason || ctxJson.error
             }
             if (ctxJson?.isLimit) isLimit = true
+            if (ctxJson?.runUrl) errorRunUrl = ctxJson.runUrl
           }
         } catch {}
         if (!isLimit) {
@@ -791,20 +854,21 @@ export default function LeadSearch() {
         }
         if (isLimit) {
           const limitMsg = `Email Scraper limit reached: ${errText}`
+          setIsEmailLimitReached(true)
+          setEmailLimitMessage(errText)
+          setEmailLimitRunUrl(errorRunUrl)
           setApifyError(limitMsg)
           setRowErrors((prev) => ({ ...prev, [`email_${lead.id}`]: limitMsg }))
+          setLimitModal({
+            isOpen: true,
+            title: 'Email Limit Reached',
+            message: errText,
+            type: 'email',
+            runUrl: errorRunUrl,
+            leadToRetry: lead,
+          })
         } else {
           setRowErrors((prev) => ({ ...prev, [`email_${lead.id}`]: errText }))
-          setEmailNotFoundIds((prev) => {
-            const next = new Set(prev)
-            next.add(lead.id)
-            if (lead.linkedinUrl) next.add(lead.linkedinUrl)
-            return next
-          })
-          if (lead.id) {
-            void supabase.from('leads').update({ email_attempted: true }).eq('id', lead.id)
-          }
-          setLeads((prev) => prev.map((l) => (l.id === lead.id ? { ...l, email_attempted: true } : l)))
         }
         return
       }
@@ -812,26 +876,30 @@ export default function LeadSearch() {
       if (!data?.success) {
         const errorMsg = data?.apifyError || data?.reason || data?.error || 'Email lookup failed'
         const isLimit = data?.isLimit || /limit|quota|credit|reach|exceed|payment|usage/i.test(errorMsg)
+        const runUrl = data?.runUrl || 'https://console.apify.com'
         if (isLimit) {
           const limitMsg = `Email Scraper limit reached: ${errorMsg}`
+          setIsEmailLimitReached(true)
+          setEmailLimitMessage(errorMsg)
+          setEmailLimitRunUrl(runUrl)
           setApifyError(limitMsg)
           setRowErrors((prev) => ({ ...prev, [`email_${lead.id}`]: limitMsg }))
+          setLimitModal({
+            isOpen: true,
+            title: 'Email Limit Reached',
+            message: errorMsg,
+            type: 'email',
+            runUrl: runUrl,
+            leadToRetry: lead,
+          })
         } else {
           setRowErrors((prev) => ({ ...prev, [`email_${lead.id}`]: errorMsg }))
-          setEmailNotFoundIds((prev) => {
-            const next = new Set(prev)
-            next.add(lead.id)
-            if (lead.linkedinUrl) next.add(lead.linkedinUrl)
-            return next
-          })
-          if (lead.id) {
-            void supabase.from('leads').update({ email_attempted: true }).eq('id', lead.id)
-          }
-          setLeads((prev) => prev.map((l) => (l.id === lead.id ? { ...l, email_attempted: true } : l)))
         }
         return
       }
 
+      // Success from Apify
+      setIsEmailLimitReached(false)
       const emailFound = typeof data.email === 'string' && data.email.trim().length > 0
       const phoneFound = hasPhoneValue(data?.phone)
 
@@ -849,7 +917,7 @@ export default function LeadSearch() {
       }
 
       if (!emailFound) {
-        // Mark this lead as "email not found" in local state and DB
+        // Genuinely not found: actor completed search cleanly but found no email
         setEmailNotFoundIds((prev) => {
           const next = new Set(prev)
           next.add(lead.id)
@@ -882,20 +950,19 @@ export default function LeadSearch() {
       const isLimit = /limit|quota|credit|reach|exceed|payment|usage/i.test(errorMsg)
       if (isLimit) {
         const limitMsg = `Email Scraper limit reached: ${errorMsg}`
+        setIsEmailLimitReached(true)
+        setEmailLimitMessage(errorMsg)
         setApifyError(limitMsg)
         setRowErrors((prev) => ({ ...prev, [`email_${lead.id}`]: limitMsg }))
+        setLimitModal({
+          isOpen: true,
+          title: 'Email Limit Reached',
+          message: errorMsg,
+          type: 'email',
+          leadToRetry: lead,
+        })
       } else {
         setRowErrors((prev) => ({ ...prev, [`email_${lead.id}`]: errorMsg }))
-        setEmailNotFoundIds((prev) => {
-          const next = new Set(prev)
-          next.add(lead.id)
-          if (lead.linkedinUrl) next.add(lead.linkedinUrl)
-          return next
-        })
-        if (lead.id) {
-          void supabase.from('leads').update({ email_attempted: true }).eq('id', lead.id)
-        }
-        setLeads((prev) => prev.map((l) => (l.id === lead.id ? { ...l, email_attempted: true } : l)))
       }
     } finally {
       setEnriching((prev) => { const next = new Set(prev); next.delete(lead.id); return next })
@@ -1169,12 +1236,24 @@ export default function LeadSearch() {
     },
   ]
 
-  const handleFindPhone = async (leadId: string, linkedinUrl: string) => {
+  const handleFindPhone = async (leadId: string, linkedinUrl: string, forceRetry = false) => {
     if (fetchingPhoneId) return // prevent concurrent fetches
     if (!leadId || !linkedinUrl) {
       alert('No LinkedIn profile for this lead')
       return
     }
+
+    if (isPhoneLimitReached && !forceRetry) {
+      setLimitModal({
+        isOpen: true,
+        title: 'Phone Limit Reached',
+        message: phoneLimitMessage || 'Apify Phone Scraper limit reached. Upgrade to continue.',
+        type: 'phone',
+        runUrl: phoneLimitRunUrl || 'https://console.apify.com/actors/J9mf98b4CIZpW72Ue/runs',
+      })
+      return
+    }
+
     // Clear any previous "not found" / error state so Fetching... shows immediately
     setPhoneNotFoundIds((prev) => { const s = new Set(prev); s.delete(leadId); if (linkedinUrl) s.delete(linkedinUrl); return s })
     setRowErrors((prev) => { const next = { ...prev }; delete next[`phone_${leadId}`]; return next })
@@ -1188,6 +1267,7 @@ export default function LeadSearch() {
       if (error) {
         let errText = error.message || 'Phone lookup failed'
         let isLimit = false
+        let errorRunUrl = phoneLimitRunUrl || 'https://console.apify.com/actors/J9mf98b4CIZpW72Ue/runs'
         try {
           if ('context' in error && typeof (error as any).context?.json === 'function') {
             const ctxJson = await (error as any).context.json()
@@ -1195,52 +1275,65 @@ export default function LeadSearch() {
               errText = ctxJson.apifyError || ctxJson.reason || ctxJson.error
             }
             if (ctxJson?.isLimit) isLimit = true
+            if (ctxJson?.runUrl) {
+              errorRunUrl = ctxJson.runUrl
+              setPhoneLimitRunUrl(ctxJson.runUrl)
+            }
           }
         } catch {}
         if (!isLimit) {
-          isLimit = /limit|quota|credit|reach|exceed|payment|usage/i.test(errText)
+          isLimit = /free plan limit|limit of \d+|15\/15|upgrade to a paid|usage limit|insufficient credit|quota/i.test(errText)
         }
         if (isLimit) {
           const limitMsg = `Phone Scraper limit reached: ${errText}`
+          setIsPhoneLimitReached(true)
+          setPhoneLimitMessage(errText)
+          setPhoneLimitRunUrl(errorRunUrl)
           setApifyError(limitMsg)
           setRowErrors((prev) => ({ ...prev, [`phone_${leadId}`]: limitMsg }))
+          setLimitModal({
+            isOpen: true,
+            title: 'Phone Limit Reached',
+            message: errText,
+            type: 'phone',
+            runUrl: errorRunUrl,
+          })
         } else {
           setRowErrors((prev) => ({ ...prev, [`phone_${leadId}`]: errText }))
-          setPhoneNotFoundIds((prev) => {
-            const next = new Set(prev)
-            next.add(leadId)
-            if (linkedinUrl) next.add(linkedinUrl)
-            return next
-          })
-          if (leadId) {
-            void supabase.from('leads').update({ phone_attempted: true }).eq('id', leadId)
-          }
-          setLeads((prev) => prev.map((l) => (l.id === leadId ? { ...l, phone_attempted: true } : l)))
         }
         return
       }
 
       if (!data?.success) {
         const errorMsg = data?.apifyError || data?.reason || data?.error || 'Phone lookup failed'
-        const isLimit = data?.isLimit || /limit|quota|credit|reach|exceed|payment|usage/i.test(errorMsg)
+        const isLimit = data?.isLimit || /free plan limit|limit of \d+|15\/15|upgrade to a paid|usage limit|insufficient credit|quota/i.test(errorMsg)
+        const runUrl = data?.runUrl || phoneLimitRunUrl || 'https://console.apify.com/actors/J9mf98b4CIZpW72Ue/runs'
+        if (data?.runUrl) {
+          setPhoneLimitRunUrl(data.runUrl)
+        }
         if (isLimit) {
           const limitMsg = `Phone Scraper limit reached: ${errorMsg}`
+          setIsPhoneLimitReached(true)
+          setPhoneLimitMessage(errorMsg)
+          setPhoneLimitRunUrl(runUrl)
           setApifyError(limitMsg)
           setRowErrors((prev) => ({ ...prev, [`phone_${leadId}`]: limitMsg }))
+          setLimitModal({
+            isOpen: true,
+            title: 'Phone Limit Reached',
+            message: errorMsg,
+            type: 'phone',
+            runUrl: runUrl,
+          })
         } else {
           setRowErrors((prev) => ({ ...prev, [`phone_${leadId}`]: errorMsg }))
-          setPhoneNotFoundIds((prev) => {
-            const next = new Set(prev)
-            next.add(leadId)
-            if (linkedinUrl) next.add(linkedinUrl)
-            return next
-          })
-          if (leadId) {
-            void supabase.from('leads').update({ phone_attempted: true }).eq('id', leadId)
-          }
-          setLeads((prev) => prev.map((l) => (l.id === leadId ? { ...l, phone_attempted: true } : l)))
         }
         return
+      }
+
+      setIsPhoneLimitReached(false)
+      if (data?.runUrl) {
+        setPhoneLimitRunUrl(data.runUrl)
       }
 
       if (!hasPhoneValue(data?.phone)) {
@@ -1266,23 +1359,24 @@ export default function LeadSearch() {
       )
     } catch (err: any) {
       const errorMsg = err?.message || 'Phone lookup failed'
-      const isLimit = /limit|quota|credit|reach|exceed|payment|usage/i.test(errorMsg)
+      const isLimit = /free plan limit|limit of \d+|15\/15|upgrade to a paid|usage limit|insufficient credit|quota/i.test(errorMsg)
+      const runUrl = phoneLimitRunUrl || 'https://console.apify.com/actors/J9mf98b4CIZpW72Ue/runs'
       if (isLimit) {
         const limitMsg = `Phone Scraper limit reached: ${errorMsg}`
+        setIsPhoneLimitReached(true)
+        setPhoneLimitMessage(errorMsg)
+        setPhoneLimitRunUrl(runUrl)
         setApifyError(limitMsg)
         setRowErrors((prev) => ({ ...prev, [`phone_${leadId}`]: limitMsg }))
+        setLimitModal({
+          isOpen: true,
+          title: 'Phone Limit Reached',
+          message: errorMsg,
+          type: 'phone',
+          runUrl: runUrl,
+        })
       } else {
         setRowErrors((prev) => ({ ...prev, [`phone_${leadId}`]: errorMsg }))
-        setPhoneNotFoundIds((prev) => {
-          const next = new Set(prev)
-          next.add(leadId)
-          if (linkedinUrl) next.add(linkedinUrl)
-          return next
-        })
-        if (leadId) {
-          void supabase.from('leads').update({ phone_attempted: true }).eq('id', leadId)
-        }
-        setLeads((prev) => prev.map((l) => (l.id === leadId ? { ...l, phone_attempted: true } : l)))
       }
     } finally {
       setFetchingPhoneId(null)
@@ -1389,20 +1483,70 @@ export default function LeadSearch() {
       <div
         style={{
           display: 'flex',
-          alignItems: 'flex-start',
+          alignItems: 'center',
           justifyContent: 'space-between',
           gap: '14px',
           flexWrap: 'wrap',
           marginBottom: '18px',
         }}
       >
-        <div>
-          <div style={{ fontSize: '20px', fontWeight: 700, color: 'var(--text1)' }}>Lead Search</div>
-          <div style={{ fontSize: '12.5px', color: 'var(--text4)', marginTop: '2px' }}>
-            Find B2B leads by filters
+        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+          <button
+            type="button"
+            onClick={handleBack}
+            className="btn btn-ghost"
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              width: '36px',
+              height: '36px',
+              padding: 0,
+              borderRadius: '9px',
+              border: '1px solid var(--border2)',
+              background: 'var(--surface)',
+              color: 'var(--text1)',
+              cursor: 'pointer',
+              boxShadow: '0 1px 2px rgba(15, 23, 42, 0.05)',
+              transition: 'all 0.15s ease',
+              flexShrink: 0,
+            }}
+            title={leads.length > 0 || searched ? 'Back to Lead Generation search filters' : 'Back to previous page'}
+            aria-label="Back to Lead Generation"
+          >
+            <svg
+              width="18"
+              height="18"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2.2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              <line x1="19" y1="12" x2="5" y2="12" />
+              <polyline points="12 19 5 12 12 5" />
+            </svg>
+          </button>
+          <div>
+            <div style={{ fontSize: '20px', fontWeight: 700, color: 'var(--text1)' }}>Lead Search</div>
+            <div style={{ fontSize: '12.5px', color: 'var(--text4)', marginTop: '2px' }}>
+              Find B2B leads by filters
+            </div>
           </div>
         </div>
 
+        {onNavigate && (
+          <button
+            type="button"
+            className="btn btn-ghost"
+            onClick={() => onNavigate('lead-database')}
+            style={{ fontSize: '12.5px', display: 'inline-flex', alignItems: 'center', gap: '6px' }}
+          >
+            <span>Lead Database</span>
+            <span>→</span>
+          </button>
+        )}
       </div>
 
       {/* ─── Filter Dropdowns ─── */}
@@ -1521,6 +1665,17 @@ export default function LeadSearch() {
             style={{ fontSize: '12.5px' }}
           >
             Clear filters
+          </button>
+        )}
+        {leads.length > 0 && (
+          <button
+            className="btn"
+            onClick={handleBack}
+            style={{ fontSize: '12.5px', display: 'inline-flex', alignItems: 'center', gap: '4px' }}
+            title="Reset results and return to Lead Generation search filters"
+          >
+            <span>←</span>
+            <span>Back to search</span>
           </button>
         )}
         {leads.length > 0 && (
@@ -1778,7 +1933,16 @@ export default function LeadSearch() {
                         <span
                           style={{ cursor: 'pointer' }}
                           title={rowErrors[`email_${lead.id}`]}
-                          onClick={() => alert(`Email Scraper: ${rowErrors[`email_${lead.id}`]}`)}
+                          onClick={() => {
+                            const isLimit = /limit|credit|quota|reach|exceed|payment|usage/i.test(rowErrors[`email_${lead.id}`])
+                            setLimitModal({
+                              isOpen: true,
+                              title: isLimit ? 'Email Limit Reached' : 'Email Lookup Error',
+                              message: rowErrors[`email_${lead.id}`],
+                              type: 'email',
+                              leadToRetry: lead,
+                            })
+                          }}
                         >
                           {/limit|credit|quota|reach|exceed|payment|usage/i.test(rowErrors[`email_${lead.id}`])
                             ? '⚠️ Limit Reached'
@@ -1802,7 +1966,7 @@ export default function LeadSearch() {
                               delete next[`email_${lead.id}`]
                               return next
                             })
-                            void handleEnrichLead(lead)
+                            void handleEnrichLead(lead, true)
                           }}
                         >
                           Retry
@@ -1829,7 +1993,7 @@ export default function LeadSearch() {
                             if (lead.id) {
                               void supabase.from('leads').update({ email_attempted: false }).eq('id', lead.id)
                             }
-                            void handleEnrichLead(lead)
+                            void handleEnrichLead(lead, true)
                           }}
                         >Retry</button>
                       </span>
@@ -1867,7 +2031,16 @@ export default function LeadSearch() {
                         <span
                           style={{ cursor: 'pointer' }}
                           title={rowErrors[`phone_${lead.id}`]}
-                          onClick={() => alert(`Phone Scraper: ${rowErrors[`phone_${lead.id}`]}`)}
+                          onClick={() => {
+                            const isLimit = /limit|credit|quota|reach|exceed|payment|usage/i.test(rowErrors[`phone_${lead.id}`])
+                            setLimitModal({
+                              isOpen: true,
+                              title: isLimit ? 'Phone Limit Reached' : 'Phone Lookup Error',
+                              message: rowErrors[`phone_${lead.id}`],
+                              type: 'phone',
+                              runUrl: phoneLimitRunUrl || 'https://console.apify.com/actors/J9mf98b4CIZpW72Ue/runs',
+                            })
+                          }}
                         >
                           {/limit|credit|quota|reach|exceed|payment|usage/i.test(rowErrors[`phone_${lead.id}`])
                             ? '⚠️ Limit Reached'
@@ -1892,7 +2065,7 @@ export default function LeadSearch() {
                               return next
                             })
                             if (lead.linkedinUrl) {
-                              void handleFindPhone(lead.id, lead.linkedinUrl)
+                              void handleFindPhone(lead.id, lead.linkedinUrl, true)
                             }
                           }}
                         >
@@ -2003,6 +2176,180 @@ export default function LeadSearch() {
           </div>
         )}
       </div>
+
+      {/* ─── LIMIT REACHED MODAL POPUP ─── */}
+      {limitModal.isOpen && (
+        <div
+          className="modal-overlay"
+          style={{ zIndex: 1000 }}
+          onClick={() => setLimitModal((prev) => ({ ...prev, isOpen: false }))}
+        >
+          <div
+            className="modal"
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              maxWidth: '490px',
+              border: '1px solid #fecdd3',
+              boxShadow: '0 25px 50px -12px rgba(159, 18, 57, 0.25)',
+              overflow: 'hidden',
+            }}
+          >
+            <div
+              className="modal-header"
+              style={{
+                background: '#fff1f2',
+                borderBottom: '1px solid #fecdd3',
+                padding: '16px 20px',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                <div
+                  style={{
+                    width: '36px',
+                    height: '36px',
+                    borderRadius: '8px',
+                    background: '#ffe4e6',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    fontSize: '20px',
+                  }}
+                >
+                  ⚠️
+                </div>
+                <div>
+                  <h3 style={{ margin: 0, fontSize: '16px', fontWeight: 700, color: '#9f1239' }}>
+                    {limitModal.title || 'Email Limit Reached'}
+                  </h3>
+                  <p style={{ margin: 0, fontSize: '12px', color: '#be123c', marginTop: '2px' }}>
+                    Apify Scraper Limit / Usage Exceeded
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => setLimitModal((prev) => ({ ...prev, isOpen: false }))}
+                className="modal-close"
+                style={{
+                  background: 'none',
+                  border: 'none',
+                  fontSize: '18px',
+                  cursor: 'pointer',
+                  color: '#9f1239',
+                  fontWeight: 'bold',
+                  padding: '4px 8px',
+                  borderRadius: '4px',
+                }}
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="modal-body" style={{ padding: '20px' }}>
+              <div
+                style={{
+                  background: '#fff',
+                  border: '1px solid #fecdd3',
+                  borderRadius: '8px',
+                  padding: '14px',
+                  fontSize: '13px',
+                  lineHeight: 1.5,
+                  color: '#881337',
+                  marginBottom: '16px',
+                  wordBreak: 'break-word',
+                }}
+              >
+                <div style={{ fontWeight: 700, marginBottom: '6px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  <span>Apify Log Output:</span>
+                </div>
+                <div
+                  style={{
+                    fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace',
+                    fontSize: '12.5px',
+                    color: '#9f1239',
+                    whiteSpace: 'pre-wrap',
+                    background: '#fff1f2',
+                    padding: '10px 12px',
+                    borderRadius: '6px',
+                    border: '1px solid #fecdd3',
+                    lineHeight: '1.45',
+                  }}
+                >
+                  {limitModal.message || 'Free plan: 15/15 requests used, 0 remaining\nFree plan limit of 15 requests reached. Upgrade to a paid Apify plan to continue.'}
+                </div>
+              </div>
+
+              <p style={{ fontSize: '13px', color: 'var(--text2, #475569)', margin: 0, lineHeight: 1.5 }}>
+                {limitModal.type === 'email'
+                  ? 'Your Apify email scraper run limit has been reached. Please upgrade your Apify plan or add credits to continue discovering email addresses.'
+                  : 'Your Apify scraper run limit has been reached. Please upgrade your Apify plan or add credits to continue.'}
+              </p>
+            </div>
+
+            <div
+              className="modal-footer"
+              style={{
+                padding: '14px 20px',
+                borderTop: '1px solid var(--border)',
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+                background: 'var(--surface2, #fafafa)',
+              }}
+            >
+              <a
+                href={
+                  limitModal.runUrl ||
+                  (limitModal.type === 'phone'
+                    ? (phoneLimitRunUrl || 'https://console.apify.com/actors/J9mf98b4CIZpW72Ue/runs')
+                    : (emailLimitRunUrl || 'https://console.apify.com/actors/bfH8Ermocz8oYKQVO/runs'))
+                }
+                target="_blank"
+                rel="noopener noreferrer"
+                className="btn"
+                style={{
+                  textDecoration: 'none',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '6px',
+                  fontSize: '12.5px',
+                  padding: '6px 12px',
+                  background: '#f1f5f9',
+                  borderColor: '#cbd5e1',
+                  color: '#0f172a',
+                  fontWeight: 600,
+                }}
+              >
+                Open Apify Log ↗
+              </a>
+              <div style={{ display: 'flex', gap: '8px' }}>
+                {limitModal.leadToRetry && (
+                  <button
+                    className="btn"
+                    style={{ fontSize: '12.5px', padding: '6px 14px' }}
+                    onClick={() => {
+                      const lead = limitModal.leadToRetry
+                      setLimitModal((prev) => ({ ...prev, isOpen: false }))
+                      if (lead) void handleEnrichLead(lead, true)
+                    }}
+                  >
+                    Try Anyway
+                  </button>
+                )}
+                <button
+                  className="btn btn-primary"
+                  onClick={() => setLimitModal((prev) => ({ ...prev, isOpen: false }))}
+                  style={{ fontSize: '12.5px', padding: '6px 16px' }}
+                >
+                  Close
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

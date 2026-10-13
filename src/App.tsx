@@ -148,12 +148,29 @@ export default function App() {
   }, [])
 
   // ─── NAVIGATION ───
+  const tabHistoryRef = useRef<TabKey[]>(['dashboard'])
+
   const onNavigate = useCallback((tab: TabKey) => {
+    const history = tabHistoryRef.current
+    if (history[history.length - 1] !== tab) {
+      history.push(tab)
+    }
     setActiveTab(tab)
     if (tab === 'template-editor' || tab === 'lead-database' || tab === 'weekly-queue') {
       window.location.hash = `/${tab}`
     } else if (window.location.hash) {
       window.location.hash = ''
+    }
+  }, [])
+
+  const onBack = useCallback(() => {
+    const history = tabHistoryRef.current
+    if (history.length > 1) {
+      history.pop()
+      const prev = history[history.length - 1] || 'lead-database'
+      setActiveTab(prev)
+    } else {
+      setActiveTab('lead-database')
     }
   }, [])
 
@@ -224,6 +241,7 @@ export default function App() {
         onPersistSequences={setSequences}
         onPersistApiKeys={setStoredApiKeys}
         onNavigate={onNavigate}
+        onBack={onBack}
         onToast={onToast}
         isUploadModalOpen={isUploadModalOpen}
         setIsUploadModalOpen={setIsUploadModalOpen}

@@ -88,12 +88,12 @@ function extractFullName(item: any): string {
 }
 
 async function fetchProfile(url: string): Promise<any> {
-  const APIFY_TOKEN = Deno.env.get("APIFY_TOKEN");
-  const APIFY_STAGE2_ACTOR_ID = Deno.env.get("APIFY_STAGE2_ACTOR_ID");
-  if (!APIFY_TOKEN || !APIFY_STAGE2_ACTOR_ID) {
-    throw new Error("Missing APIFY secrets");
+  const APIFY_TOKEN = Deno.env.get("APIFY_TOKEN") || Deno.env.get("APIFY_API_TOKEN");
+  const APIFY_ACTOR_ID = Deno.env.get("APIFY_Phone_ACTOR_ID") || Deno.env.get("APIFY_PHONE_ACTOR_ID") || Deno.env.get("APIFY_EMAIL_ACTOR_ID") || Deno.env.get("APIFY_STAGE2_ACTOR_ID");
+  if (!APIFY_TOKEN || !APIFY_ACTOR_ID) {
+    throw new Error("Missing APIFY secrets (APIFY_TOKEN or actor ID)");
   }
-  const apiUrl = `https://api.apify.com/v2/acts/${APIFY_STAGE2_ACTOR_ID}/run-sync-get-dataset-items?token=${APIFY_TOKEN}`;
+  const apiUrl = `https://api.apify.com/v2/acts/${APIFY_ACTOR_ID}/run-sync-get-dataset-items?token=${APIFY_TOKEN}`;
   console.log("[add-lead-manual] calling Stage 2 Apify actor:", url);
 
   // Same input shapes enrich-lead tries, in order of likelihood.
