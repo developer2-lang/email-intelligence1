@@ -2,7 +2,7 @@
 -- Company Master Table (public.lb_company_master)
 -- ============================================================================
 -- Source of truth for companies used by the Lead Generation company dropdown.
--- Safe and idempotent: creates table, unique constraint on normalized_name,
+-- Safe and idempotent: creates table, unique index on normalized_name,
 -- indexes, and RLS policies if not already present.
 
 create table if not exists public.lb_company_master (
@@ -12,17 +12,10 @@ create table if not exists public.lb_company_master (
   created_at      timestamptz not null default now()
 );
 
--- Unique constraint on normalized_name to prevent case-insensitive duplicates
-do $$
-begin
-  if not exists (
-    select 1 from pg_constraint
-    where conname = 'company_master_normalized_name_unique'
-  ) then
-    alter table public.lb_company_master
-      add constraint company_master_normalized_name_unique unique (normalized_name);
-  end if;
-end $$;
+-- A prior partial run may leave the unique index without a table constraint.
+-- IF NOT EXISTS handles both that state and a normal constraint-backed index.
+create unique index if not exists company_master_normalized_name_unique
+  on public.lb_company_master (normalized_name);
 
 -- Indexes for fast lookup, filtering, and sorting
 create index if not exists lb_company_master_normalized_name_idx

@@ -675,6 +675,7 @@ function buildEmailScaffold(content: string, bg = '', width = EMAIL_SAFE_WIDTH):
  * Strip fixed pixel heights, min-heights, max-heights and overflow:hidden on
  * container elements (tables, tds, divs, sections, paragraphs, spans) so
  * email templates expand freely and fluidly on mobile devices without clipping.
+ * The editor's explicitly marked editable section keeps its user-set height.
  */
 export function cleanUnlimitedHeight(raw: string): string {
   let cleaned = String(raw || '');
@@ -682,9 +683,10 @@ export function cleanUnlimitedHeight(raw: string): string {
   // 1. In style attributes: on non-image elements, make height fluid/unlimited
   cleaned = cleaned.replace(/<([a-z0-9]+)([^>]*?)>/gi, (_tagMatch: string, tagName: string, attrs: string) => {
     const isImage = tagName.toLowerCase() === 'img';
+    const preserveSectionHeight = /\bdata-te-role\s*=\s*(["'])editable-section\1/i.test(attrs);
     let newAttrs = attrs;
 
-    if (!isImage) {
+    if (!isImage && !preserveSectionHeight) {
       newAttrs = newAttrs.replace(/style=(["'])([^"']*)\1/gi, (_m: string, quote: string, styleContent: string) => {
         let s = styleContent;
         s = s.replace(/(?<![a-z-])min-height\s*:\s*[^;]+;?/gi, '');

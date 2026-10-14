@@ -76,12 +76,37 @@ export async function updateContactType(id: string, input: Partial<ContactTypeIn
   }
 }
 
-export async function deleteContactType(id: string): Promise<{ error: string | null }> {
+export async function deleteContactType(id: string): Promise<{ deletedContacts: number | null; error: string | null }> {
   try {
-    const { error } = await supabase.from(TABLE).delete().eq('id', id)
-    return { error: error?.message ?? null }
+    const { data: contactType, error: lookupError } = await supabase
+      .from(TABLE)
+      .select('name')
+      .eq('id', id)
+      .maybeSingle()
+    if (lookupError) return { deletedContacts: null, error: lookupError.message }
+    if (!contactType) return { deletedContacts: null, error: 'Contact type not found' }
+
+    const { data: deletedContacts, error: contactsError } = await supabase
+      .from('contacts')
+      .delete()
+      .eq('contact_type', contactType.name)
+      .select('id')
+    if (contactsError) return { deletedContacts: null, error: contactsError.message }
+
+    const { error: deleteTypeError } = await supabase.from(TABLE).delete().eq('id', id)
+    if (deleteTypeError) {
+      return {
+        deletedContacts: deletedContacts?.length ?? 0,
+        error: `Contacts were deleted, but the contact type could not be removed: ${deleteTypeError.message}`,
+      }
+    }
+
+    return { deletedContacts: deletedContacts?.length ?? 0, error: null }
   } catch (err) {
-    return { error: err instanceof Error ? err.message : 'Failed to delete contact list' }
+    return {
+      deletedContacts: null,
+      error: err instanceof Error ? err.message : 'Failed to delete contact list',
+    }
   }
 }
 

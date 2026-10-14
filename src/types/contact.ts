@@ -13,6 +13,8 @@ export interface Contact {
   engagement: number
   enriched: boolean
   phone?: string
+  phone_1?: string
+  phone_2?: string
   createdAt?: string
 }
 
@@ -28,8 +30,8 @@ export interface ContactRow {
   company_category: string | null
   notes: string | null
   created_at: string | null
-  phone?: string | null
-  contact_no?: string | null
+  phone_1?: string | null
+  phone_2?: string | null
 }
 
 export interface ContactInput {
@@ -42,6 +44,8 @@ export interface ContactInput {
   contact_type?: string
   company_category?: string
   notes?: string | null
+  // Legacy form callers are normalized to phone_1 by contactsService.
   phone?: string | null
-  contact_no?: string | null
+  phone_1?: string | null
+  phone_2?: string | null
 }

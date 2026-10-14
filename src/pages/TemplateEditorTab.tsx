@@ -29,14 +29,13 @@ const DEFAULT_TEMPLATE_HTML = `<!DOCTYPE html>
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>New Template</title>
 </head>
-<body style="margin: 0; padding: 0; background-color: #F3F4F6;">
-  <table width="100%" cellpadding="0" cellspacing="0" role="presentation" style="background-color: #F3F4F6;">
+<body style="margin: 0; padding: 0; background-color: #D9DADE; font-family: Arial, Helvetica, sans-serif; font-size: 15px; color: #374151; line-height: 1.6;">
+  <table data-te-role="email-wrapper" width="100%" cellpadding="0" cellspacing="0" role="presentation" style="width: 100%; background-color: #D9DADE;">
     <tr>
-      <td align="center" style="background-color: #F3F4F6; padding: 32px 16px;">
-        <table width="600" cellpadding="0" cellspacing="0" role="presentation" style="width: 600px; background-color: #FFFFFF; border-radius: 12px; overflow: hidden;">
+      <td align="center" valign="top" style="padding: 32px 16px; background-color: #D9DADE;">
+        <table data-te-role="container" width="600" cellpadding="0" cellspacing="0" role="presentation" style="width: 600px; max-width: 100%; margin: 0 auto; background-color: #FFFFFF; border-radius: 12px; overflow: hidden;">
           <tr>
-            <td style="padding: 32px; min-height: 500px; height: 500px;">
-            </td>
+            <td data-te-role="editable-section" valign="top" style="height: 507px; padding: 32px; background-color: #FFFFFF;"></td>
           </tr>
         </table>
       </td>
@@ -44,6 +43,11 @@ const DEFAULT_TEMPLATE_HTML = `<!DOCTYPE html>
   </table>
 </body>
 </html>`;
+
+const BUILT_IN_TEMPLATE_FORMAT_NAME = 'template format';
+const BUILT_IN_TEMPLATE_FORMAT_HTML = `<!DOCTYPE html><html lang="en"><head>
+<style>* { box-sizing: border-box; } body {margin: 0;}#ics8{margin:0;padding:0;background-color:#F3F4F6;}#izfq{background-color:#F3F4F6;}#ij7mu{background-color:#d1d1d2;padding:32px 16px;}#i1kv4{width:600px;background-color:#fbf9f9;border-radius:12px;overflow:visible;}#i7jtq{padding:32px;height:auto;}#i8ohg{display:block;width:160px;height:auto;margin:0 auto 16px;border:0;}#ixlac{width:100%;text-align:center;margin:0 0 16px;}#igc1c{display:inline-block;max-width:100%;height:auto;border:0;}#imp9j{font-family:Arial, Helvetica, sans-serif;font-size:15px;line-height:1.6;color:#374151;margin:0 0 12px;}#ipnls{margin:0 0 16px;background-color:#F3F4F6;padding:28px 24px;font-family:Arial, Helvetica, sans-serif;font-size:12px;line-height:1.6;color:#6B7280;text-align:center;}#iplb2{width:100%;}#i7opi{text-align:center;}#igo3z{font-weight:bold;color:#374151;margin:0 0 6px;}#i2p0y{margin:0 0 10px;}#ijprf{font-size:12px;}#ifthd{color:#2563EB;text-decoration:underline;}#im3nl{color:#9CA3AF;padding:0 6px;}#iyybr{color:#2563EB;text-decoration:underline;}</style><meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1.0"/><title>New Template</title></head><body style="margin:0;padding:0;background-color:#F3F4F6;"><table width="100%" cellpadding="0" cellspacing="0" role="presentation" style="background-color:#F3F4F6;"><tbody><tr><td align="center" style="background-color:#d1d1d2;padding:32px 16px;"><table width="600" cellpadding="0" cellspacing="0" role="presentation" style="width:600px;background-color:#fbf9f9;border-radius:12px;overflow:visible;"><tbody><tr><td style="padding:32px;height:auto;">
+<img src="data:image/svg+xml;charset=UTF-8,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%22200%22%20height%3D%2280%22%3E%3Crect%20width%3D%22100%25%22%20height%3D%22100%25%22%20fill%3D%22%231E3A8A%22%2F%3E%3Ctext%20x%3D%2250%25%22%20y%3D%2256%25%22%20fill%3D%22%23FFFFFF%22%20font-family%3D%22Arial%2C%20sans-serif%22%20font-size%3D%2228%22%20font-weight%3D%22bold%22%20text-anchor%3D%22middle%22%20letter-spacing%3D%226%22%3EIUOVA%3C%2Ftext%3E%3C%2Fsvg%3E" style="display:block;width:160px;height:auto;margin:0 auto 16px;border:0;"/><div data-te-role="image-wrapper" style="width:100%;text-align:center;margin:0 0 16px;"><img src="data:image/svg+xml;charset=UTF-8,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%22600%22%20height%3D%22320%22%3E%3Crect%20width%3D%22100%25%22%20height%3D%22100%25%22%20fill%3D%22%23EEF2F7%22%2F%3E%3Ctext%20x%3D%2250%25%22%20y%3D%2246%25%22%20fill%3D%22%2394A3B8%22%20font-family%3D%22Arial%2C%20sans-serif%22%20font-size%3D%2220%22%20text-anchor%3D%22middle%22%3EDouble-click%20to%20add%20an%20image%3C%2Ftext%3E%3Ctext%20x%3D%2250%25%22%20y%3D%2262%25%22%20fill%3D%22%23CBD5E1%22%20font-family%3D%22Arial%2C%20sans-serif%22%20font-size%3D%2214%22%20text-anchor%3D%22middle%22%3Eor%20select%20it%20and%20click%20Replace%3C%2Ftext%3E%3C%2Fsvg%3E" alt="Add an image" style="display:inline-block;max-width:100%;height:auto;border:0;"/></div><div style="font-family:Arial, Helvetica, sans-serif;font-size:15px;line-height:1.6;color:#374151;margin:0 0 12px;">Rich text block — type anything here. Placeholders like {{first_name}} are preserved.</div><div data-te-footer="" role="contentinfo" style="margin:0 0 16px;background-color:#F3F4F6;padding:28px 24px;font-family:Arial, Helvetica, sans-serif;font-size:12px;line-height:1.6;color:#6B7280;text-align:center;"><table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="width:100%;"><tbody><tr><td align="center" style="text-align:center;"><div data-footer-part="company" style="font-weight:bold;color:#374151;margin:0 0 6px;">IUOVA Design Company</div><div data-footer-part="address" style="margin:0 0 10px;">IUOVA · 504 Felix Towers, Lbs Road · Off No, Bhandup West · Mumbai, Maharashtra 400078 · India</div><div data-footer-part="links" style="font-size:12px;"><a href="#" data-footer-part="prefs" style="color:#2563EB;text-decoration:underline;">Update your preferences</a><span style="color:#9CA3AF;padding:0 6px;">·</span><a href="#" data-footer-part="unsub" style="color:#2563EB;text-decoration:underline;">Unsubscribe</a></div></td></tr></tbody></table></div></td></tr></tbody></table></td></tr></tbody></table></body></html>`;
 
 /**
  * Resolve the stored HTML for a template through the EXISTING template
@@ -128,6 +132,7 @@ export default function TemplateEditorTab({ onToast, onNavigate }: TemplateEdito
   const [dirty, setDirty] = useState(false);
   const [editorKey, setEditorKey] = useState(0);
   const [saving, setSaving] = useState(false);
+  const [draftTemplateName, setDraftTemplateName] = useState('');
 
   const [fullscreen, setFullscreen] = useState(false);
 
@@ -294,6 +299,7 @@ export default function TemplateEditorTab({ onToast, onNavigate }: TemplateEdito
         loadedHtmlRef.current = html;
         setHtmlContent(html);
         setSelectedTemplate(t);
+        setDraftTemplateName(t.name);
         setMode('visual');
         setEditorKey((k) => k + 1);
         setDirty(false);
@@ -336,15 +342,36 @@ export default function TemplateEditorTab({ onToast, onNavigate }: TemplateEdito
 
   const startNewTemplate = () => {
     const proceed = () => {
-      const html = toEmailSafeHtml(DEFAULT_TEMPLATE_HTML);
+      const html = DEFAULT_TEMPLATE_HTML;
       loadedHtmlRef.current = html;
       setSelectedTemplate(null);
+      setDraftTemplateName('');
       setHtmlContent(html);
       setEditorKey((k) => k + 1);
       setMode('visual');
       setDirty(false);
       setTemplateLoadError(null);
       onToast('New blank template created.', 'info');
+    };
+    if (dirty) setUnsavedAction(() => proceed);
+    else proceed();
+  };
+
+  const loadBuiltInTemplateFormat = () => {
+    const proceed = () => {
+      const html = toEmailSafeHtml(BUILT_IN_TEMPLATE_FORMAT_HTML);
+      const savedTemplate = templates.find(
+        (template) => template.name.trim().toLowerCase() === BUILT_IN_TEMPLATE_FORMAT_NAME
+      );
+      loadedHtmlRef.current = html;
+      setSelectedTemplate(savedTemplate || null);
+      setDraftTemplateName(BUILT_IN_TEMPLATE_FORMAT_NAME);
+      setHtmlContent(html);
+      setEditorKey((key) => key + 1);
+      setMode('visual');
+      setDirty(false);
+      setTemplateLoadError(null);
+      onToast('Built-in template format loaded. Edit it and save your changes.', 'success');
     };
     if (dirty) setUnsavedAction(() => proceed);
     else proceed();
@@ -379,7 +406,7 @@ export default function TemplateEditorTab({ onToast, onNavigate }: TemplateEdito
     }
     if (!selectedTemplate) {
       setSaveAsMode('new');
-      setSaveAsName('Untitled Template');
+      setSaveAsName(draftTemplateName || 'Untitled Template');
       setSaveAsOpen(true);
       return;
     }
@@ -401,7 +428,7 @@ export default function TemplateEditorTab({ onToast, onNavigate }: TemplateEdito
 
   const openSaveAs = () => {
     setSaveAsMode('copy');
-    setSaveAsName(selectedTemplate ? `${selectedTemplate.name} (Copy)` : 'Untitled Template');
+    setSaveAsName(selectedTemplate ? `${selectedTemplate.name} (Copy)` : `${draftTemplateName || 'Untitled Template'} (Copy)`);
     setSaveAsOpen(true);
   };
 
@@ -422,6 +449,7 @@ export default function TemplateEditorTab({ onToast, onNavigate }: TemplateEdito
       setTemplates((prev) => [...prev, created].sort((a, b) => a.name.localeCompare(b.name)));
       loadedHtmlRef.current = html;
       setSelectedTemplate(created);
+      setDraftTemplateName(created.name);
       setHtmlContent(html);
       setDirty(false);
       setSaveAsOpen(false);
@@ -612,6 +640,15 @@ export default function TemplateEditorTab({ onToast, onNavigate }: TemplateEdito
         </button>
         <button type="button" className="te-tb-btn" style={toolButton} onClick={startNewTemplate}>
           + New Template
+        </button>
+        <button
+          type="button"
+          className="te-tb-btn"
+          style={{ ...toolButton, color: '#1D4ED8', borderColor: '#BFDBFE', background: '#EFF6FF' }}
+          onClick={loadBuiltInTemplateFormat}
+          disabled={templatesLoading}
+        >
+          Template Format
         </button>
         <input
           ref={fileInputRef}

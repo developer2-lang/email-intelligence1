@@ -42,7 +42,8 @@ export function leadToContactRow(row: Record<string, any>): Record<string, any> 
     geography: cleanStr(row.geography),
     role: cleanStr(row.role),
     job_title: cleanStr(row.job_title),
-    phone: cleanStr(row.phone),
+    phone_1: cleanStr(row.phone),
+    phone_2: cleanStr(row.phone_2),
     contact_type: LEAD_SEARCH_TYPE,
     company_category: LEAD_SEARCH_TYPE,
   };

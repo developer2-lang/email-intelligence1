@@ -128,14 +128,17 @@ export default function ContactTypesTab({ onToast }: ContactTypesTabProps) {
     if (!deletingId) return;
     setShowDeleteConfirm(false);
 
-    const { error } = await deleteContactType(deletingId);
+    const { deletedContacts, error } = await deleteContactType(deletingId);
     if (error) {
       onToast('Failed to delete contact list: ' + error, 'error');
       setDeletingId(null);
       return;
     }
 
-    onToast('Contact list deleted', 'success');
+    onToast(
+      `Contact list deleted${deletedContacts === null ? '' : ` with ${deletedContacts} contact${deletedContacts === 1 ? '' : 's'}`}`,
+      'success'
+    );
     await loadContactTypes();
     setDeletingId(null);
   };
@@ -333,8 +336,8 @@ export default function ContactTypesTab({ onToast }: ContactTypesTabProps) {
 
             <div className="modal-body">
               <div style={{ color: 'var(--text2)', marginBottom: 16 }}>
-                This action cannot be undone. The contact list will be removed, but
-                existing contacts assigned to this list will not be deleted.
+                This permanently removes the contact type and deletes every contact assigned to it from All Contacts.
+                This action cannot be undone.
               </div>
             </div>
 

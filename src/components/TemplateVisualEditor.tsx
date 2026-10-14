@@ -481,7 +481,7 @@ const getDocumentHtml = (editor: Editor): string => {
   // clean — EXCEPT the explicit Container marker (`data-te-role="container"`),
   // which must survive so the container hierarchy is reconstructed on reload
   // and preserved verbatim on preview/send.
-  html = html.replace(/\s+data-te-role=(?:"(?!container|image-wrapper|section|link")[^"]*"|'(?!container|image-wrapper|section|link')[^']*')/gi, '');
+  html = html.replace(/\s+data-te-role=(?:"(?!container|image-wrapper|section|link|editable-section")[^"]*"|'(?!container|image-wrapper|section|link|editable-section')[^']*')/gi, '');
   // Uncap all fixed heights so email renders completely without mobile clipping
   html = cleanUnlimitedHeight(html);
   return html;
@@ -2512,6 +2512,16 @@ function ContainerPropertiesPanel({
           max={1200}
         />
       </Field>
+      <Field label="Container Height">
+        <NumberInput
+          value={pxToNum(getCellStyle('height'))}
+          onChange={(value) => {
+            const height = parseFloat(value);
+            setCellStyle('height', Number.isFinite(height) && height > 0 ? `${height}px` : '');
+          }}
+          min={0}
+        />
+      </Field>
       <Field label="Border Radius">
         <NumberInput
           value={pxToNum(getStyle('border-radius')) || '12'}
@@ -3435,7 +3445,6 @@ function PropertiesPanel({ editor, component, tick, onError }: PropertiesPanelPr
             value={getElementHeight()}
             onChange={setElementHeight}
             min={0}
-            max={1200}
           />
         </Field>
         <Field label="Spacing">
@@ -4308,7 +4317,7 @@ const TemplateVisualEditor = forwardRef<TemplateVisualEditorHandle, TemplateVisu
     const [device, setDevice] = useState(() => (typeof window !== 'undefined' && window.innerWidth <= 768 ? 'mobile' : 'desktop'));
     const [isEmpty, setIsEmpty] = useState(true);
     const [contentCollapsed, setContentCollapsed] = useState(false);
-    const [propsCollapsed, setPropsCollapsed] = useState(true);
+    const [propsCollapsed, setPropsCollapsed] = useState(false);
 
     useEffect(() => {
       onChangeRef.current = onChange;
@@ -5159,6 +5168,17 @@ const TemplateVisualEditor = forwardRef<TemplateVisualEditorHandle, TemplateVisu
       // Load the template content. Placeholders such as {{first_name}} are
       // preserved verbatim — nothing is replaced or rewritten at edit time.
       editor.setComponents(initialHtml || '', { asDocument: true });
+      const findEditableStarterSection = (component: Component): Component | null => {
+        if (component.getAttributes?.()['data-te-role'] === 'editable-section') return component;
+        for (const child of component.components().models) {
+          const section = findEditableStarterSection(child);
+          if (section) return section;
+        }
+        return null;
+      };
+      const wrapper = editor.getWrapper();
+      const starterSection = wrapper ? findEditableStarterSection(wrapper) : null;
+      if (starterSection) editor.select(starterSection);
       // Never allow resizing the email background scaffold (see
       // `disableWrapperResize` / requirement #17). Runs after components are
       // parsed so the wrapper subtree exists.

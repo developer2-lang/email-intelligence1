@@ -287,7 +287,7 @@ export default {
       // Mirror into contacts — best-effort update (only if contact already exists).
       const { error: mirrorError } = await serviceClient
         .from("contacts")
-        .update({ phone })
+        .update({ phone_1: phone })
         .eq("linkedin_url", linkedinUrl);
       if (mirrorError) console.error("Contact mirror error:", mirrorError);
 

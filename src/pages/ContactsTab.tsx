@@ -59,6 +59,44 @@ function normalizeEmail(raw: string): string {
   return s;
 }
 
+function getPhoneColumnMapping(headers: string[]): { phone1: string; phone2: string } {
+  const token = (header: string) => header.toLowerCase().replace(/[^a-z0-9]/g, '');
+  const phone2Aliases = new Set([
+    'phone2', 'phonenumber2', 'contactnumber2', 'contactno2', 'workphone',
+    'workphonenumber', 'officephone', 'businessphone', 'secondaryphone',
+    'alternatephone', 'altphone', 'telephone2',
+  ]);
+  const phone1Aliases = new Set([
+    'phone1', 'phonenumber1', 'contactnumber1', 'contactno1', 'mobile',
+    'mobilenumber', 'mobileno', 'primaryphone', 'cell', 'cellphone',
+  ]);
+  const genericPhoneAliases = new Set([
+    'phone', 'phonenumber', 'contactnumber', 'contactno', 'telephone',
+  ]);
+  const tokens = headers.map(token);
+  const phoneCandidates = headers.filter((_, index) =>
+    /phone|mobile|telephone|contactno|contactnumber/.test(tokens[index])
+  );
+  if (phoneCandidates.length === 1) {
+    return { phone1: phoneCandidates[0], phone2: '' };
+  }
+  const findAlias = (aliases: Set<string>) => {
+    const index = tokens.findIndex(value => aliases.has(value));
+    return index < 0 ? '' : headers[index];
+  };
+
+  let phone2 = findAlias(phone2Aliases);
+  let phone1 = findAlias(phone1Aliases) || findAlias(genericPhoneAliases);
+  if (!phone1) {
+    phone1 = phoneCandidates.find(header => header !== phone2) || '';
+  }
+  if (!phone2 && phoneCandidates.length > 1) {
+    phone2 = phoneCandidates.find(header => header !== phone1) || '';
+  }
+
+  return { phone1, phone2 };
+}
+
 function fmtShortDate(value?: string | null): string {
   if (!value) return '—';
   const d = new Date(value);
@@ -346,6 +384,7 @@ export default function ContactsTab({
   const [afName, setAfName] = useState('');
   const [afEmail, setAfEmail] = useState('');
   const [afPhone, setAfPhone] = useState('');
+  const [afPhone2, setAfPhone2] = useState('');
   const [afCompany, setAfCompany] = useState('');
   const [afDesig, setAfDesig] = useState('');
   const [afIndustry, setAfIndustry] = useState('');
@@ -359,6 +398,8 @@ export default function ContactsTab({
   const [uploadBuffer, setUploadBuffer] = useState<any[]>([]);
   const [isDragging, setIsDragging] = useState(false);
   const [importType, setImportType] = useState('New Lead');
+  const [phone1Column, setPhone1Column] = useState('');
+  const [phone2Column, setPhone2Column] = useState('');
 
   // ─── DRAG & DROP FOR CONTACT TYPE TABS ───
   const [dragOverTabId, setDragOverTabId] = useState<string | null>(null);
@@ -520,7 +561,8 @@ export default function ContactsTab({
         (c.company || '').toLowerCase().includes(search) ||
         (c.email || '').toLowerCase().includes(search) ||
         (c.designation || '').toLowerCase().includes(search) ||
-        (c.phone || '').toLowerCase().includes(search)
+        (c.phone || '').toLowerCase().includes(search) ||
+        (c.phone_2 || '').toLowerCase().includes(search)
       );
     }
 
@@ -681,6 +723,7 @@ export default function ContactsTab({
     setAfName('');
     setAfEmail('');
     setAfPhone('');
+    setAfPhone2('');
     setAfCompany('');
     setAfDesig('');
     setAfIndustry('');
@@ -697,7 +740,8 @@ export default function ContactsTab({
     setEditingId(id);
     setAfName(c.name || '');
     setAfEmail(c.email || '');
-    setAfPhone(c.phone || (c as any).contact_no || '');
+    setAfPhone(c.phone_1 || '');
+    setAfPhone2(c.phone_2 || '');
     setAfCompany(c.company || '');
     setAfDesig(c.designation || '');
     setAfIndustry(c.industry || '');
@@ -731,7 +775,8 @@ export default function ContactsTab({
       contact_type: afType,
       company_category: afCat,
       notes: afNotes.trim(),
-      phone: afPhone.trim() || null,
+      phone_1: afPhone.trim() || null,
+      phone_2: afPhone2.trim() || null,
     };
 
     setSubmitting(true);
@@ -955,6 +1000,12 @@ export default function ContactsTab({
     return tabs;
   }, [contactTypes, contacts, leadRows, leadMirrorTabName]);
 
+  useEffect(() => {
+    if (typeTabs.some(tab => tab.id !== 'all' && tab.id === importType)) return;
+    const firstAvailableType = typeTabs.find(tab => tab.id !== 'all');
+    if (firstAvailableType) setImportType(firstAvailableType.id);
+  }, [typeTabs, importType]);
+
   // Whether the lead-mirror tab is currently active
   const isLeadMirrorTab =
     String(cTypeFilter || '').toLowerCase() === String(leadMirrorTabName || LEAD_MIRROR_TAB).toLowerCase() ||
@@ -1149,6 +1200,9 @@ export default function ContactsTab({
           rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { defval: '' });
         }
         setUploadBuffer(rows);
+        const mapping = getPhoneColumnMapping(Object.keys(rows[0] || {}));
+        setPhone1Column(mapping.phone1);
+        setPhone2Column(mapping.phone2);
       } catch (err: any) {
         onToast('Error reading file: ' + err.message, 'error');
       }
@@ -1159,8 +1213,14 @@ export default function ContactsTab({
 
   const confirmImport = async () => {
     if (uploadBuffer.length === 0) return;
+    const selectedImportType = typeTabs.find(tab => tab.id === importType && tab.id !== 'all')?.id;
+    if (!selectedImportType) {
+      onToast('Select a valid contact type before importing', 'error');
+      return;
+    }
 
     const existingEmails = await fetchAllContactEmails();
+    const seenEmails = new Set(existingEmails);
     const toInsert: ContactInput[] = [];
     let added = 0;
     let skipped = 0;
@@ -1184,14 +1244,16 @@ export default function ContactsTab({
         designation: pickRowValue(row, ['Designation', 'Role', 'Title']),
         industry: pickRowValue(row, ['Industry']),
         city: pickRowValue(row, ['City']),
-        phone: pickRowValue(row, ['Contact Number 1', 'Contact Number', 'Phone', 'Phone Number', 'Mobile', 'Mobile Number', 'Contact No', 'Contact No.']) || undefined,
-        contact_type: importType,
+        phone_1: (phone1Column ? pickRowValue(row, [phone1Column]) : '') || null,
+        phone_2: (phone2Column ? pickRowValue(row, [phone2Column]) : '') || null,
+        contact_type: selectedImportType,
         company_category: pickRowValue(row, ['Company Category', 'Category']) || 'Domestic',
         notes: pickRowValue(row, ['Notes']),
       };
 
       emails.forEach(email => {
-        if (existingEmails.has(email)) { skipped++; return; }
+        if (seenEmails.has(email)) { skipped++; return; }
+        seenEmails.add(email);
         toInsert.push({ ...base, email });
         added++;
       });
@@ -1223,6 +1285,8 @@ export default function ContactsTab({
     onToast(`${added} contacts imported ${skipped ? ` (${skipped} skipped)` : ''}`, 'success');
     setUploadBuffer([]);
     setUploadFileName('');
+    setPhone1Column('');
+    setPhone2Column('');
   };
 
   return (
@@ -1554,9 +1618,10 @@ export default function ContactsTab({
                   Company {cSortKey === 'company' && <span className="ct-sort-arrow">{cSortDir === 1 ? '↑' : '↓'}</span>}
                 </th>
                 <th>Email</th>
-                <th className="ct-sortable" onClick={() => handleSort('phone')}>
-                  Phone {cSortKey === 'phone' && <span className="ct-sort-arrow">{cSortDir === 1 ? '↑' : '↓'}</span>}
+                <th className="ct-sortable" onClick={() => handleSort('phone_1')}>
+                  Phone 1 {cSortKey === 'phone_1' && <span className="ct-sort-arrow">{cSortDir === 1 ? '↑' : '↓'}</span>}
                 </th>
+                <th>Phone 2</th>
                 <th>Designation</th>
                 <th>Type</th>
                 <th>Category</th>
@@ -1566,7 +1631,7 @@ export default function ContactsTab({
             <tbody>
               {loading ? (
                 <tr>
-                  <td colSpan={10}>
+                  <td colSpan={11}>
                     <div className="empty-state">
                       <div style={{ display: 'inline-flex', alignItems: 'center', gap: 10 }}>
                         <span className="spinner"></span>
@@ -1577,7 +1642,7 @@ export default function ContactsTab({
                 </tr>
               ) : paginatedContacts.length === 0 ? (
                 <tr>
-                  <td colSpan={10}>
+                  <td colSpan={11}>
                     <div className="empty-state">
                       <div className="empty-icon">🔍</div>
                       <div className="empty-title">No contacts found</div>
@@ -1658,7 +1723,7 @@ export default function ContactsTab({
                         <span className="ct-email">{c.email}</span>
                       </td>
                       <td>
-                        {c.phone ? (
+                        {(c.phone_1 || c.phone) ? (
                           <span
                             className="ct-phone"
                             style={{
@@ -1668,8 +1733,15 @@ export default function ContactsTab({
                               whiteSpace: 'nowrap',
                             }}
                           >
-                            {c.phone}
+                            {c.phone_1 || c.phone}
                           </span>
+                        ) : (
+                          <span style={{ color: 'var(--text4)' }}>—</span>
+                        )}
+                      </td>
+                      <td>
+                        {c.phone_2 ? (
+                          <span className="ct-phone">{c.phone_2}</span>
                         ) : (
                           <span style={{ color: 'var(--text4)' }}>—</span>
                         )}
@@ -1831,12 +1903,21 @@ export default function ContactsTab({
                   />
                 </div>
                 <div className="form-group">
-                  <label>Contact No.</label>
+                  <label>Phone 1</label>
                   <input
                     type="tel"
                     placeholder="e.g. +91 98765 43210"
                     value={afPhone}
                     onChange={(e) => setAfPhone(e.target.value)}
+                  />
+                </div>
+                <div className="form-group">
+                  <label>Phone 2</label>
+                  <input
+                    type="tel"
+                    placeholder="Optional second number"
+                    value={afPhone2}
+                    onChange={(e) => setAfPhone2(e.target.value)}
                   />
                 </div>
                 <div className="form-group">
@@ -1985,10 +2066,32 @@ export default function ContactsTab({
                   Expected Header Format
                 </div>
                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-                  {['Name', 'Company', 'Email', 'Designation', 'Industry', 'Contact Type', 'City', 'Notes'].map(col => (
+                  {['Name', 'Company', 'Email', 'Phone 1', 'Phone 2', 'Designation', 'Industry', 'Contact Type', 'City', 'Notes'].map(col => (
                     <span key={col} className="chip">{col}</span>
                   ))}
                 </div>
+                {uploadBuffer.length > 0 && (
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginTop: 12 }}>
+                    <label className="form-group">
+                      <span>Phone 1 column</span>
+                      <select className="ct-select" value={phone1Column} onChange={e => setPhone1Column(e.target.value)}>
+                        <option value="">Do not import</option>
+                        {Object.keys(uploadBuffer[0] || {}).filter(column => column !== phone2Column).map(column => (
+                          <option key={column} value={column}>{column}</option>
+                        ))}
+                      </select>
+                    </label>
+                    <label className="form-group">
+                      <span>Phone 2 column</span>
+                      <select className="ct-select" value={phone2Column} onChange={e => setPhone2Column(e.target.value)}>
+                        <option value="">Do not import</option>
+                        {Object.keys(uploadBuffer[0] || {}).filter(column => column !== phone1Column).map(column => (
+                          <option key={column} value={column}>{column}</option>
+                        ))}
+                      </select>
+                    </label>
+                  </div>
+                )}
               </div>
 
               {/* Data Preview */}
@@ -2036,7 +2139,13 @@ export default function ContactsTab({
             <div className="modal-footer">
               <button
                 className="btn btn-ghost"
-                onClick={() => { setIsUploadModalOpen(false); setUploadBuffer([]); setUploadFileName(''); }}
+                onClick={() => {
+                  setIsUploadModalOpen(false);
+                  setUploadBuffer([]);
+                  setUploadFileName('');
+                  setPhone1Column('');
+                  setPhone2Column('');
+                }}
               >
                 Cancel
               </button>
