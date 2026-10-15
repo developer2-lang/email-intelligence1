@@ -203,8 +203,13 @@ export function resolveSegmentRecipients(
   if (isManualAudience(normalizedSegment) && !SEGMENT_RULES.some((r) => r.match(name))) {
     const byEmail = new Map<string, SegmentContact>();
     for (const c of all) {
-      if (c && c.email && isDeliverableRecipientEmail(c.email)) {
-        byEmail.set(String(c.email).trim().toLowerCase(), c);
+      const em1 = String(c?.email || c?.email_1 || '').trim().toLowerCase();
+      const em2 = String(c?.email_2 || '').trim().toLowerCase();
+      if (em1 && isDeliverableRecipientEmail(em1)) {
+        byEmail.set(em1, { ...c, email: em1 });
+      }
+      if (em2 && isDeliverableRecipientEmail(em2)) {
+        byEmail.set(em2, { ...c, email: em2 });
       }
     }
     const seen = new Set<string>();
@@ -217,16 +222,28 @@ export function resolveSegmentRecipients(
     return result;
   }
 
-  // "All Contacts" / empty → every contact with a valid, deliverable email.
+  // "All Contacts" / empty → every contact with a valid, deliverable email (email and email_2).
   if (!normalizedSegment || name === 'all contacts') {
     const seen = new Set<string>();
     const result: SegmentContact[] = [];
     for (const c of all) {
-      if (!c || !isDeliverableRecipientEmail(c.email)) continue;
-      const key = String(c.email).trim().toLowerCase();
-      if (seen.has(key)) continue;
-      seen.add(key);
-      result.push(c);
+      if (!c) continue;
+      const em1 = String(c.email || c.email_1 || '').trim();
+      const em2 = String(c.email_2 || '').trim();
+      if (em1 && isDeliverableRecipientEmail(em1)) {
+        const key = em1.toLowerCase();
+        if (!seen.has(key)) {
+          seen.add(key);
+          result.push({ ...c, email: em1 });
+        }
+      }
+      if (em2 && isDeliverableRecipientEmail(em2)) {
+        const key = em2.toLowerCase();
+        if (!seen.has(key)) {
+          seen.add(key);
+          result.push({ ...c, email: em2 });
+        }
+      }
     }
     return result;
   }
@@ -236,11 +253,22 @@ export function resolveSegmentRecipients(
   const result: SegmentContact[] = [];
   for (const c of all) {
     if (!c || !contactMatchesSegment(c, normalizedSegment)) continue;
-    if (!isDeliverableRecipientEmail(c.email)) continue;
-    const key = String(c.email).trim().toLowerCase();
-    if (seen.has(key)) continue;
-    seen.add(key);
-    result.push(c);
+    const em1 = String(c.email || c.email_1 || '').trim();
+    const em2 = String(c.email_2 || '').trim();
+    if (em1 && isDeliverableRecipientEmail(em1)) {
+      const key = em1.toLowerCase();
+      if (!seen.has(key)) {
+        seen.add(key);
+        result.push({ ...c, email: em1 });
+      }
+    }
+    if (em2 && isDeliverableRecipientEmail(em2)) {
+      const key = em2.toLowerCase();
+      if (!seen.has(key)) {
+        seen.add(key);
+        result.push({ ...c, email: em2 });
+      }
+    }
   }
   return result;
 }
@@ -263,11 +291,23 @@ export function resolveContactListRecipients(members: SegmentContact[]): Segment
   const seen = new Set<string>();
   const result: SegmentContact[] = [];
   for (const c of Array.isArray(members) ? members : []) {
-    if (!c || !isDeliverableRecipientEmail(c.email)) continue;
-    const key = String(c.email).trim().toLowerCase();
-    if (seen.has(key)) continue;
-    seen.add(key);
-    result.push(c);
+    if (!c) continue;
+    const em1 = String(c.email || c.email_1 || '').trim();
+    const em2 = String(c.email_2 || '').trim();
+    if (em1 && isDeliverableRecipientEmail(em1)) {
+      const key = em1.toLowerCase();
+      if (!seen.has(key)) {
+        seen.add(key);
+        result.push({ ...c, email: em1 });
+      }
+    }
+    if (em2 && isDeliverableRecipientEmail(em2)) {
+      const key = em2.toLowerCase();
+      if (!seen.has(key)) {
+        seen.add(key);
+        result.push({ ...c, email: em2 });
+      }
+    }
   }
   return result;
 }

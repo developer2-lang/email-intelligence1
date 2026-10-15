@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import * as XLSX from 'xlsx'
 import jsPDF from 'jspdf'
 import autoTable from 'jspdf-autotable'
@@ -1072,6 +1072,36 @@ export default function LeadSearch({ onNavigate, onBack }: LeadSearchProps = {})
       )
     : companyFilteredLeads
 
+  // ─── DUAL HORIZONTAL SCROLLBARS (top + bottom, synced) ───
+  const leadTableRef = useRef<HTMLDivElement | null>(null)
+  const leadTableScrollbarRef = useRef<HTMLDivElement | null>(null)
+  const [leadTableDimensions, setLeadTableDimensions] = useState({ clientWidth: 0, scrollWidth: 0 })
+
+  useEffect(() => {
+    const table = leadTableRef.current
+    if (!table) return
+
+    const measure = () => {
+      setLeadTableDimensions({ clientWidth: table.clientWidth, scrollWidth: table.scrollWidth })
+    }
+    measure()
+
+    const observer = new ResizeObserver(measure)
+    observer.observe(table)
+    if (table.firstElementChild) {
+      observer.observe(table.firstElementChild)
+    }
+    return () => observer.disconnect()
+  }, [leads.length, filteredLeads.length, loading, searched])
+
+  const handleLeadTableScroll = (source: 'table' | 'scrollbar') => {
+    const sourceElement = source === 'table' ? leadTableRef.current : leadTableScrollbarRef.current
+    const targetElement = source === 'table' ? leadTableScrollbarRef.current : leadTableRef.current
+    if (sourceElement && targetElement && targetElement.scrollLeft !== sourceElement.scrollLeft) {
+      targetElement.scrollLeft = sourceElement.scrollLeft
+    }
+  }
+
   const csvCell = (v: unknown): string => {
     const s = String(v ?? '').replace(/[\r\n\t]+/g, ' ').trim()
     return `"${s.replace(/"/g, '""')}"`
@@ -1959,7 +1989,38 @@ export default function LeadSearch({ onNavigate, onBack }: LeadSearchProps = {})
           </button>
         </div>
       )}
-      <div className="table-wrap">
+      {leadTableDimensions.scrollWidth > leadTableDimensions.clientWidth && (
+        <div
+          className="ct-table-scrollbar"
+          ref={leadTableScrollbarRef}
+          onScroll={() => handleLeadTableScroll('scrollbar')}
+          aria-hidden="true"
+          style={{
+            borderTopLeftRadius: 'var(--r)',
+            borderTopRightRadius: 'var(--r)',
+            border: '1px solid var(--border)',
+            borderBottom: 'none',
+            marginBottom: -1,
+          }}
+        >
+          <div
+            style={{
+              width: leadTableDimensions.scrollWidth,
+              minWidth: leadTableDimensions.scrollWidth,
+              height: 1,
+            }}
+          />
+        </div>
+      )}
+      <div
+        className="table-wrap"
+        ref={leadTableRef}
+        onScroll={() => handleLeadTableScroll('table')}
+        style={leadTableDimensions.scrollWidth > leadTableDimensions.clientWidth ? {
+          borderTopLeftRadius: 0,
+          borderTopRightRadius: 0,
+        } : undefined}
+      >
         {filteredLeads.length > 0 ? (
           <table>
             <thead>

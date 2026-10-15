@@ -9,8 +9,6 @@ type DashboardTabKey =
   | 'contacts'
   | 'campaigns'
   | 'sequences'
-  | 'analytics'
-  | 'settings'
 
 interface DashboardTabProps {
   contacts: any[]

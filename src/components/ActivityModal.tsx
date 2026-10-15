@@ -83,10 +83,13 @@ export default function ActivityModal({
       if (contactIds.length > 0) {
         const { data: contacts } = await supabase
           .from('contacts')
-          .select('id, full_name, email')
+          .select('id, full_name, email, email_2')
           .in('id', contactIds)
         for (const c of (contacts as Record<string, any>[]) || []) {
-          contactMap.set(String(c.id), c)
+          contactMap.set(String(c.id), {
+            ...c,
+            email: c.email || c.email_2 || '',
+          })
         }
       }
 

@@ -5,8 +5,6 @@ export type TabKey =
   | 'followups'
   | 'sequences'
   | 'sequence-builder'
-  | 'analytics'
-  | 'settings'
   | 'template-editor'
   | 'template-library'
   | 'contact-types'

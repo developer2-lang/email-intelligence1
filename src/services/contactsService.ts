@@ -3,13 +3,24 @@ import type { Contact, ContactInput, ContactRow } from '../types/contact'
 
 const TABLE = 'contacts'
 
+function normalizeLinkedinUrl(url?: string | null): string | null {
+  if (!url) return null
+  const trimmed = url.trim()
+  if (!trimmed) return null
+  if (/^https?:\/\//i.test(trimmed)) return trimmed
+  return `https://${trimmed.replace(/^\/+/, '')}`
+}
+
 function toInsertRow(input: ContactInput): Record<string, unknown> {
   const phone1 = (input.phone_1 ?? input.phone ?? '').trim()
   const phone2 = (input.phone_2 ?? '').trim()
+  const email1 = (input.email ?? input.email_1 ?? '').trim().toLowerCase()
+  const email2 = (input.email_2 ?? '').trim().toLowerCase()
 
   return {
     full_name: input.full_name.trim(),
-    email: input.email.trim().toLowerCase(),
+    email: email1 || null,
+    email_2: email2 || null,
     company: input.company.trim(),
     designation: input.designation?.trim() || null,
     industry: input.industry?.trim() || null,
@@ -19,15 +30,21 @@ function toInsertRow(input: ContactInput): Record<string, unknown> {
     notes: input.notes?.trim() || null,
     phone_1: phone1 || null,
     phone_2: phone2 || null,
+    linkedin_url: normalizeLinkedinUrl(input.linkedin_url),
   }
 }
 
 function mapRowToContact(row: ContactRow): Contact {
+  const primaryEmail = (row.email || row.email_1 || '').toLowerCase().trim()
+  const email2 = (row.email_2 || '').toLowerCase().trim()
+
   return {
     id: String(row.id),
     name: row.full_name || '',
     company: row.company || '',
-    email: (row.email || '').toLowerCase().trim(),
+    email: primaryEmail || email2,
+    email_1: primaryEmail || email2,
+    email_2: email2,
     designation: row.designation || '',
     industry: row.industry || '',
     city: row.city || '',
@@ -40,6 +57,7 @@ function mapRowToContact(row: ContactRow): Contact {
     phone: (row.phone_1 || '').trim(),
     phone_1: (row.phone_1 || '').trim(),
     phone_2: (row.phone_2 || '').trim(),
+    linkedin_url: (row.linkedin_url || '').trim(),
     createdAt: row.created_at || '',
   }
 }
@@ -60,12 +78,13 @@ export async function fetchContacts(): Promise<{ data: Contact[]; error: string 
 }
 
 export async function fetchAllContactEmails(): Promise<Set<string>> {
-  const { data } = await supabase.from(TABLE).select('email')
-  return new Set(
-    ((data as { email: string | null }[] | null) ?? [])
-      .map(c => (c.email || '').toLowerCase().trim())
-      .filter(Boolean)
-  )
+  const { data } = await supabase.from(TABLE).select('email, email_2')
+  const set = new Set<string>()
+  for (const row of ((data as { email?: string | null; email_2?: string | null }[] | null) ?? [])) {
+    if (row.email) set.add(row.email.toLowerCase().trim())
+    if (row.email_2) set.add(row.email_2.toLowerCase().trim())
+  }
+  return set
 }
 
 export async function insertContact(input: ContactInput): Promise<{ data: Contact | null; error: string | null }> {

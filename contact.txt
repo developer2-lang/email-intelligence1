@@ -568,12 +568,7 @@ Manage, segment, and enrich audience profiles across intelligence pipelines
         <PlusIcon /> Add Contact
       </button>
 
-      <button
-        onClick={() => { onNavigate('settings'); onToast('Search and import leads using Lusha', 'info'); }}
-        className="inline-flex items-center justify-center px-3.5 py-2 text-xs font-semibold rounded-lg bg-amber-500/10 dark:bg-amber-500/15 text-amber-800 dark:text-amber-300 border border-amber-300/60 dark:border-amber-700/50 hover:bg-amber-500/20 shadow-xs transition-all active:scale-[0.98]"
-      >
-        <SparklesIcon /> Lusha Leads
-      </button>
+     
 
       <button
         onClick={() => setIsUploadModalOpen(true)}

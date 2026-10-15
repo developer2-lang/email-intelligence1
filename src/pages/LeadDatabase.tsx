@@ -1,4 +1,4 @@
-import { useState, useMemo, useCallback, useEffect } from 'react';
+import { useState, useMemo, useCallback, useEffect, useRef } from 'react';
 import { AV_COLORS } from '../constants/constants';
 import { supabase } from '../supabase';
 import SearchableSelect from '../components/SearchableSelect';
@@ -353,6 +353,36 @@ export default function LeadDatabase({ onToast }: LeadDatabaseProps) {
     return filteredLeads.slice(start, start + pageSize);
   }, [filteredLeads, safePage, pageSize]);
 
+  // ─── DUAL HORIZONTAL SCROLLBARS (top + bottom, synced) ───
+  const leadDbTableRef = useRef<HTMLDivElement | null>(null);
+  const leadDbScrollbarRef = useRef<HTMLDivElement | null>(null);
+  const [leadDbDimensions, setLeadDbDimensions] = useState({ clientWidth: 0, scrollWidth: 0 });
+
+  useEffect(() => {
+    const table = leadDbTableRef.current;
+    if (!table) return;
+
+    const measure = () => {
+      setLeadDbDimensions({ clientWidth: table.clientWidth, scrollWidth: table.scrollWidth });
+    };
+    measure();
+
+    const observer = new ResizeObserver(measure);
+    observer.observe(table);
+    if (table.firstElementChild) {
+      observer.observe(table.firstElementChild);
+    }
+    return () => observer.disconnect();
+  }, [leads.length, filteredLeads.length, loading]);
+
+  const handleLeadDbScroll = (source: 'table' | 'scrollbar') => {
+    const sourceElement = source === 'table' ? leadDbTableRef.current : leadDbScrollbarRef.current;
+    const targetElement = source === 'table' ? leadDbScrollbarRef.current : leadDbTableRef.current;
+    if (sourceElement && targetElement && targetElement.scrollLeft !== sourceElement.scrollLeft) {
+      targetElement.scrollLeft = sourceElement.scrollLeft;
+    }
+  };
+
   // ─── SORT HANDLER ───
   const handleSort = (key: SortKey) => {
     if (sortKey === key) {
@@ -558,36 +588,68 @@ export default function LeadDatabase({ onToast }: LeadDatabaseProps) {
         </div>
 
         {/* ─── LEADS TABLE ─── */}
-        <div className="ct-table-wrap">
-          <table className="ct-table" style={{ minWidth: 1280 }}>
+        {leadDbDimensions.scrollWidth > leadDbDimensions.clientWidth && (
+          <div
+            className="ct-table-scrollbar"
+            ref={leadDbScrollbarRef}
+            onScroll={() => handleLeadDbScroll('scrollbar')}
+            aria-hidden="true"
+          >
+            <div
+              style={{
+                width: leadDbDimensions.scrollWidth,
+                minWidth: leadDbDimensions.scrollWidth,
+                height: 1,
+              }}
+            />
+          </div>
+        )}
+        <div
+          className="ct-table-wrap"
+          ref={leadDbTableRef}
+          onScroll={() => handleLeadDbScroll('table')}
+        >
+          <table className="ct-table ct-table-fixed" style={{ minWidth: 1530 }}>
+            <colgroup>
+              <col style={{ width: 210 }} />
+              <col style={{ width: 230 }} />
+              <col style={{ width: 130 }} />
+              <col style={{ width: 190 }} />
+              <col style={{ width: 180 }} />
+              <col style={{ width: 140 }} />
+              <col style={{ width: 130 }} />
+              <col style={{ width: 90 }} />
+              <col style={{ width: 110 }} />
+              <col style={{ width: 116 }} />
+            </colgroup>
             <thead>
               <tr>
-                <th className="ct-sortable" onClick={() => handleSort('full_name')}>
+                <th className="ct-sortable" style={{ width: 210 }} onClick={() => handleSort('full_name')}>
                   Name {sortArrow('full_name')}
                   {nameFilter && <span className="ct-filter-dot" />}
                 </th>
-                <th>
+                <th style={{ width: 230 }}>
                   Email{emailFilter && <span className="ct-filter-dot" />}
                 </th>
-                <th>
+                <th style={{ width: 130 }}>
                   Phone{phoneFilter && <span className="ct-filter-dot" />}
                 </th>
-                <th className="ct-sortable" onClick={() => handleSort('company_name')}>
+                <th className="ct-sortable" style={{ width: 190 }} onClick={() => handleSort('company_name')}>
                   Company {sortArrow('company_name')}
                   {companyFilter && <span className="ct-filter-dot" />}
                 </th>
-                <th>
+                <th style={{ width: 180 }}>
                   Designation{designationFilter && <span className="ct-filter-dot" />}
                 </th>
-                <th className="ct-sortable" onClick={() => handleSort('industry')}>
+                <th className="ct-sortable" style={{ width: 140 }} onClick={() => handleSort('industry')}>
                   Industry {sortArrow('industry')}
                   {industryFilter && <span className="ct-filter-dot" />}
                 </th>
-                <th>
+                <th style={{ width: 130 }}>
                   Geography{geographyFilter && <span className="ct-filter-dot" />}
                 </th>
-                <th>LinkedIn</th>
-                <th className="ct-sortable" onClick={() => handleSort('created_at')}>
+                <th style={{ width: 90 }}>LinkedIn</th>
+                <th className="ct-sortable" style={{ width: 110 }} onClick={() => handleSort('created_at')}>
                   Created {sortArrow('created_at')}
                 </th>
                 <th style={{ textAlign: 'right', width: 116 }}>Actions</th>

@@ -1,7 +1,6 @@
 import type { RefObject } from 'react'
 import type { ApiState, CampTabState, StoredApiKeys, TabKey } from '../types'
 import type { ActivityItem, EngagedContact } from '../services/dashboardService'
-import AnalyticsTab from '../pages/AnalyticsTab'
 import CampaignsTab from '../pages/CampaignsTab'
 import ContactTypesTab from '../pages/ContactTypesTab'
 import ContactsTab from '../pages/ContactsTab'
@@ -9,7 +8,6 @@ import DashboardTab from '../pages/DashboardTab'
 import FollowupsTab from '../pages/FollowupsTab'
 import SequenceBuilderTab from '../pages/SequenceBuilderTab'
 import SequencesTab from '../pages/SequencesTab'
-import SettingsTab from '../pages/SettingsTab'
 import TemplateEditorTab from '../pages/TemplateEditorTab'
 import TemplatesPage from '../pages/TemplatesPage'
 import LeadSearch from '../pages/LeadSearch'
@@ -128,39 +126,11 @@ export default function AppRoutes(props: AppRoutesProps) {
         />
       )
 
-    case 'analytics':
-      return (
-        <AnalyticsTab
-          onToast={props.onToast}
-          onNavigate={props.onNavigate}
-        />
-      )
-
     case 'template-editor':
       return <TemplateEditorTab onToast={props.onToast} onNavigate={props.onNavigate} />
 
     case 'template-library':
       return <TemplatesPage onNavigate={props.onNavigate} onToast={props.onToast} />
-
-    case 'settings':
-      return (
-        <SettingsTab
-          contacts={props.contacts}
-          apiState={props.apiState}
-          storedApiKeys={props.storedApiKeys}
-          onPersistApiKeys={props.onPersistApiKeys}
-          onPersistContacts={props.onPersistContacts}
-          onToast={props.onToast}
-          isSyncing={props.isSyncing}
-          triggerMailchimpSync={props.triggerMailchimpSync}
-          prefFrom={props.prefFrom}
-          setPrefFrom={props.setPrefFrom}
-          prefReply={props.prefReply}
-          setPrefReply={props.setPrefReply}
-          prefSig={props.prefSig}
-          setPrefSig={props.setPrefSig}
-        />
-      )
 
     case 'contact-types':
       return <ContactTypesTab onToast={props.onToast} />

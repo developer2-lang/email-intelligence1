@@ -319,6 +319,66 @@ const DELAY_OPTIONS = [
     return configs.slice(start, start + FOLLOWUP_PAGE_SIZE)
   }, [configs, effectivePage])
 
+  // ─── DUAL HORIZONTAL SCROLLBARS (top + bottom, synced) ───
+  const fuTableRef = useRef<HTMLDivElement | null>(null)
+  const fuTableScrollbarRef = useRef<HTMLDivElement | null>(null)
+  const [fuTableDimensions, setFuTableDimensions] = useState({ clientWidth: 0, scrollWidth: 0 })
+
+  useEffect(() => {
+    const table = fuTableRef.current
+    if (!table) return
+
+    const measure = () => {
+      setFuTableDimensions({ clientWidth: table.clientWidth, scrollWidth: table.scrollWidth })
+    }
+    measure()
+
+    const observer = new ResizeObserver(measure)
+    observer.observe(table)
+    if (table.firstElementChild) {
+      observer.observe(table.firstElementChild)
+    }
+    return () => observer.disconnect()
+  }, [tab, configs.length, visibleConfigs.length, configsLoading])
+
+  const handleFuTableScroll = (source: 'table' | 'scrollbar') => {
+    const sourceElement = source === 'table' ? fuTableRef.current : fuTableScrollbarRef.current
+    const targetElement = source === 'table' ? fuTableScrollbarRef.current : fuTableRef.current
+    if (sourceElement && targetElement && targetElement.scrollLeft !== sourceElement.scrollLeft) {
+      targetElement.scrollLeft = sourceElement.scrollLeft
+    }
+  }
+
+  // Pending queue scroll sync
+  const pendingTableRef = useRef<HTMLDivElement | null>(null)
+  const pendingScrollbarRef = useRef<HTMLDivElement | null>(null)
+  const [pendingDimensions, setPendingDimensions] = useState({ clientWidth: 0, scrollWidth: 0 })
+
+  useEffect(() => {
+    const table = pendingTableRef.current
+    if (!table) return
+
+    const measure = () => {
+      setPendingDimensions({ clientWidth: table.clientWidth, scrollWidth: table.scrollWidth })
+    }
+    measure()
+
+    const observer = new ResizeObserver(measure)
+    observer.observe(table)
+    if (table.firstElementChild) {
+      observer.observe(table.firstElementChild)
+    }
+    return () => observer.disconnect()
+  }, [tab, pending.length, pendingLoading])
+
+  const handlePendingScroll = (source: 'table' | 'scrollbar') => {
+    const sourceElement = source === 'table' ? pendingTableRef.current : pendingScrollbarRef.current
+    const targetElement = source === 'table' ? pendingScrollbarRef.current : pendingTableRef.current
+    if (sourceElement && targetElement && targetElement.scrollLeft !== sourceElement.scrollLeft) {
+      targetElement.scrollLeft = sourceElement.scrollLeft
+    }
+  }
+
   const alreadyFollowupCampaignIds = useMemo(
     () => new Set(configs.map((c) => String(c.followup_campaign_id || ''))),
     [configs],
@@ -1219,7 +1279,28 @@ const DELAY_OPTIONS = [
               </div>
             </div>
 
-            <div className="fu-table-wrap">
+            {fuTableDimensions.scrollWidth > fuTableDimensions.clientWidth && (
+              <div
+                className="ct-table-scrollbar"
+                ref={fuTableScrollbarRef}
+                onScroll={() => handleFuTableScroll('scrollbar')}
+                aria-hidden="true"
+              >
+                <div
+                  style={{
+                    width: fuTableDimensions.scrollWidth,
+                    minWidth: fuTableDimensions.scrollWidth,
+                    height: 1,
+                  }}
+                />
+              </div>
+            )}
+
+            <div
+              className="fu-table-wrap"
+              ref={fuTableRef}
+              onScroll={() => handleFuTableScroll('table')}
+            >
               <table className="fu-table">
                 <colgroup>
                   <col style={{ width: '15%' }} />
@@ -2696,7 +2777,28 @@ const DELAY_OPTIONS = [
             </div>
           </div>
 
-          <div className="table-wrap">
+          {pendingDimensions.scrollWidth > pendingDimensions.clientWidth && (
+            <div
+              className="ct-table-scrollbar"
+              ref={pendingScrollbarRef}
+              onScroll={() => handlePendingScroll('scrollbar')}
+              aria-hidden="true"
+            >
+              <div
+                style={{
+                  width: pendingDimensions.scrollWidth,
+                  minWidth: pendingDimensions.scrollWidth,
+                  height: 1,
+                }}
+              />
+            </div>
+          )}
+
+          <div
+            className="table-wrap"
+            ref={pendingTableRef}
+            onScroll={() => handlePendingScroll('table')}
+          >
             <table>
               <thead>
                 <tr>

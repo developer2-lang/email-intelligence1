@@ -50,8 +50,14 @@ export default function App() {
   )
   const [prefs, setPrefs] = useLocalStorage<SenderPrefs>('ei_sender_prefs', DEFAULT_PREFS)
 
-  // ─── UI STATE ───
   const [activeTab, setActiveTab] = useState<TabKey>(() => tabFromHash() ?? 'dashboard')
+
+  // Automatically reset to dashboard if activeTab was 'analytics' or 'settings'
+  useEffect(() => {
+    if ((activeTab as string) === 'analytics' || (activeTab as string) === 'settings') {
+      setActiveTab('dashboard')
+    }
+  }, [activeTab])
   const [toasts, setToasts] = useState<ToastMessage[]>([])
   const [isUploadModalOpen, setIsUploadModalOpen] = useState(false)
   const [campTabState, setCampTabState] = useState<CampTabState>('list')

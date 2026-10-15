@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useMemo, useEffect, useLayoutEffect, useCallback, useRef } from 'react';
 import { supabase } from '../supabase';
 import { AV_COLORS, LEAD_MIRROR_TAB } from '../constants/constants';
 import type { Contact, ContactInput } from '../types/contact';
@@ -28,6 +28,21 @@ interface ImportRow {
   [key: string]: unknown;
 }
 
+export interface ParsedImportContact {
+  name: string;
+  company: string;
+  email_1: string;
+  email_2: string;
+  phone_1: string;
+  phone_2: string;
+  designation: string;
+  linkedin_url: string;
+  industry: string;
+  city: string;
+  notes: string;
+  company_category: string;
+}
+
 const EMAIL_EMPTY_SENTINELS = new Set([
   'na', 'n/a', '-', '—', 'nil', 'none', 'null', 'unknown', 'blank', 'undefined', 'not available',
 ]);
@@ -47,16 +62,198 @@ function pickRowValue(row: ImportRow, keys: string[]): string {
   return '';
 }
 
-function normalizeEmail(raw: string): string {
-  const s = raw
-    .trim()
-    .toLowerCase()
-    .replace(/^mailto:/i, '')
-    .replace(/^[,;]+|[,;]+$/g, '');
-  if (!s || EMAIL_EMPTY_SENTINELS.has(s)) return '';
-  if (GENERIC_ORG_EMAILS.has(s)) return '';
-  if (!EMAIL_RE.test(s)) return '';
-  return s;
+function cleanEmailText(text: string): string {
+  if (!text) return '';
+  return text.replace(/\/@/g, '@').trim();
+}
+
+function extractAllEmails(text: string): string[] {
+  if (!text) return [];
+  const cleaned = cleanEmailText(text);
+  const matches = cleaned.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g) || [];
+  const result: string[] = [];
+  for (const m of matches) {
+    const norm = m.toLowerCase().trim().replace(/^[,;]+|[,;]+$/g, '');
+    if (norm && !result.includes(norm) && !GENERIC_ORG_EMAILS.has(norm) && !EMAIL_EMPTY_SENTINELS.has(norm)) {
+      result.push(norm);
+    }
+  }
+  return result;
+}
+
+function extractAllPhones(text: string): string[] {
+  if (!text) return [];
+  const re = /(?:\+?\d{1,4}[\s-]?)?(?:\(?\d{2,5}\)?[\s-]?)?\d{3,5}[\s-]?\d{3,5}/g;
+  const matches = text.match(re) || [];
+  const valid: string[] = [];
+  for (const m of matches) {
+    const digits = m.replace(/\D/g, '');
+    if (digits.length >= 9 && digits.length <= 15) {
+      const clean = m.trim().replace(/^[\/\s-]+|[\/\s-]+$/g, '');
+      if (clean && !valid.includes(clean)) {
+        valid.push(clean);
+      }
+    }
+  }
+  return valid;
+}
+
+function inferNameFromEmail(email: string): string {
+  if (!email) return '';
+  const local = email.split('@')[0].replace(/\d+$/, '');
+  const parts = local
+    .replace(/([a-z])([A-Z])/g, '$1 $2')
+    .split(/[._\-\s]+/)
+    .filter(Boolean);
+  if (parts.length > 0) {
+    return parts.map(p => p.charAt(0).toUpperCase() + p.slice(1).toLowerCase()).join(' ');
+  }
+  return '';
+}
+
+function extractNameFromCell(text: string, emails: string[], phones: string[]): string {
+  if (!text) return '';
+  let rem = cleanEmailText(text);
+  for (const e of emails) rem = rem.replace(new RegExp(e, 'gi'), ' ');
+  rem = rem.replace(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g, ' ');
+  for (const p of phones) rem = rem.replace(p, ' ');
+  rem = rem.replace(/\b(sales manager|ceo|coo|managing director|director|general manager|vp|vice president|manager|head of [a-z]+)\b/gi, ' ');
+  rem = rem.replace(/[\/\-\+\:\(\)\d]/g, ' ').replace(/\s+/g, ' ').trim();
+  if (rem.length >= 2 && !/^\d+$/.test(rem) && !/^(email|phone|company|contact|date|sr|no)$/i.test(rem)) {
+    return rem.split(' ').map(w => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()).join(' ');
+  }
+  return '';
+}
+
+function smartParseImportRow(row: ImportRow, phone1Col?: string, phone2Col?: string): ParsedImportContact | null {
+  const nonEmpties = Object.values(row).map(v => String(v || '').trim()).filter(Boolean);
+  if (nonEmpties.length === 0) return null;
+  // Ignore header rows
+  if (nonEmpties.length === 1 && /^(ceo\/coo|sr\.?\s*no\.?|date|company\s*name)$/i.test(nonEmpties[0])) return null;
+
+  // 1. Company
+  let company = pickRowValue(row, ['Company', 'Company Name', 'Account', 'Organization', 'Client']);
+  if (!company) {
+    for (const [k, v] of Object.entries(row)) {
+      if (/company|account|organization|client/i.test(k) && v) {
+        company = String(v).trim();
+        break;
+      }
+    }
+  }
+
+  // 2. Explicit Name
+  let name = pickRowValue(row, ['Name', 'Client Name', 'Full Name', 'Contact Name', 'Person']);
+
+  // 3. Scan all fields for emails, phones, linkedin, designation
+  const allEmails: string[] = [];
+  const allPhones: string[] = [];
+  let linkedin = pickRowValue(row, ['LinkedIn', 'LinkedIn URL', 'Linkedin', 'linkedin_url', 'Linkedin URL', 'Profile URL', 'LinkedIn Profile']);
+  let designation = pickRowValue(row, ['Designation', 'Role', 'Title', 'Job Title']);
+  const industry = pickRowValue(row, ['Industry', 'Sector']);
+  const city = pickRowValue(row, ['City', 'Location']);
+  const notes = pickRowValue(row, ['Notes', 'Remarks', 'Comments']);
+  const companyCategory = pickRowValue(row, ['Company Category', 'Category']) || 'Domestic';
+
+  // Manual column overrides for phone if set
+  if (phone1Col && row[phone1Col]) {
+    for (const p of extractAllPhones(String(row[phone1Col]))) {
+      if (!allPhones.includes(p)) allPhones.push(p);
+    }
+  }
+  if (phone2Col && row[phone2Col]) {
+    for (const p of extractAllPhones(String(row[phone2Col]))) {
+      if (!allPhones.includes(p)) allPhones.push(p);
+    }
+  }
+
+  // Also check explicit Email columns first
+  const explicitEmail1 = pickRowValue(row, ['Email 1', 'Work Email ID 1', 'Email ID 1', 'email_1', 'Email']);
+  if (explicitEmail1) {
+    for (const em of extractAllEmails(explicitEmail1)) {
+      if (!allEmails.includes(em)) allEmails.push(em);
+    }
+  }
+  const explicitEmail2 = pickRowValue(row, ['Email 2', 'Work Email ID 2', 'Email ID 2', 'email_2']);
+  if (explicitEmail2) {
+    for (const em of extractAllEmails(explicitEmail2)) {
+      if (!allEmails.includes(em)) allEmails.push(em);
+    }
+  }
+
+  for (const [k, val] of Object.entries(row)) {
+    if (!val) continue;
+    const str = String(val).trim();
+    if (!str) continue;
+
+    // Check linkedin URL
+    if (!linkedin && /linkedin\.com\/in\//i.test(str)) {
+      const match = str.match(/https?:\/\/(?:www\.)?linkedin\.com\/in\/[^\s,\/]+/i);
+      if (match) linkedin = match[0];
+    }
+
+    // Check designation
+    if (!designation) {
+      if (/\b(sales manager|ceo|coo|managing director|director|general manager|vp|vice president|manager|head of [a-z]+)\b/i.test(str)) {
+        const m = str.match(/\b(sales manager|ceo|coo|managing director|director|general manager|vp|vice president|manager|head of [a-z]+)\b/i);
+        if (m) designation = m[0].toUpperCase();
+      } else if (/ceo\/coo/i.test(k)) {
+        designation = 'CEO/COO';
+      }
+    }
+
+    // Emails
+    for (const em of extractAllEmails(str)) {
+      if (!allEmails.includes(em)) allEmails.push(em);
+    }
+
+    // Phones
+    for (const ph of extractAllPhones(str)) {
+      if (!allPhones.includes(ph)) allPhones.push(ph);
+    }
+  }
+
+  // Extract name from cell text if still not found
+  if (!name) {
+    for (const [k, val] of Object.entries(row)) {
+      if (!val || /company|date|sr\.?\s*no/i.test(k)) continue;
+      const extracted = extractNameFromCell(String(val), allEmails, allPhones);
+      if (extracted) {
+        name = extracted;
+        break;
+      }
+    }
+  }
+
+  // Infer name from Email 1 if still not found
+  if (!name && allEmails[0]) {
+    name = inferNameFromEmail(allEmails[0]);
+  }
+
+  // Fallback name if company exists
+  if (!name && company) {
+    name = company + ' Contact';
+  }
+
+  // If completely empty row (no company, no email, no phone, no name)
+  if (!company && allEmails.length === 0 && allPhones.length === 0 && !name) {
+    return null;
+  }
+
+  return {
+    name: name || 'Contact',
+    company: company || 'Unknown Company',
+    email_1: allEmails[0] || '',
+    email_2: allEmails[1] || '',
+    phone_1: allPhones[0] || '',
+    phone_2: allPhones[1] || '',
+    designation: designation || '',
+    linkedin_url: linkedin || '',
+    industry: industry || '',
+    city: city || '',
+    notes: notes || '',
+    company_category: companyCategory || 'Domestic',
+  };
 }
 
 function getPhoneColumnMapping(headers: string[]): { phone1: string; phone2: string } {
@@ -193,21 +390,7 @@ const UsersIcon = ({ size = 20 }: { size?: number }) => (
   </svg>
 );
 
-const LeadIcon = ({ size = 20 }: { size?: number }) => (
-  <svg {...iconProps} width={size} height={size}>
-    <circle cx="12" cy="12" r="10" />
-    <circle cx="12" cy="12" r="6" />
-    <circle cx="12" cy="12" r="2" />
-  </svg>
-);
-
-const EngagementIcon = ({ size = 20 }: { size?: number }) => (
-  <svg {...iconProps} width={size} height={size}>
-    <polyline points="22 12 18 12 15 21 9 3 6 12 2 12" />
-  </svg>
-);
-
-const EnrichmentIcon = ({ size = 20 }: { size?: number }) => (
+const _EnrichmentIcon = ({ size = 20 }: { size?: number }) => (
   <svg {...iconProps} width={size} height={size}>
     <path d="M6 3h12l4 6-10 13L2 9l4-6z" />
     <path d="M11 3 8 9l4 13 4-13-3-6" />
@@ -223,18 +406,32 @@ const DatabaseIcon = ({ size = 20 }: { size?: number }) => (
   </svg>
 );
 
-const UserIcon = ({ size = 20 }: { size?: number }) => (
-  <svg {...iconProps} width={size} height={size}>
-    <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
-    <circle cx="12" cy="7" r="4" />
-  </svg>
-);
-
-const CheckIcon = ({ size = 20 }: { size?: number }) => (
+const _CheckIcon = ({ size = 20 }: { size?: number }) => (
   <svg {...iconProps} width={size} height={size}>
     <polyline points="20 6 9 17 4 12" />
   </svg>
 );
+
+const contactFieldIconPaths = {
+  person: 'M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2M12 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8z',
+  email: 'M4 4h16v16H4zM22 6l-10 7L2 6',
+  phone: 'M22 16.92v3a2 2 0 0 1-2.18 2 19.8 19.8 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6A19.8 19.8 0 0 1 2.12 4.2 2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72l.45 2.7a2 2 0 0 1-.57 1.72L7.1 10.03a16 16 0 0 0 6 6l1.89-1.89a2 2 0 0 1 1.72-.57l2.7.45a2 2 0 0 1 1.72 1.9z',
+  company: 'M3 21h18M5 21V7l8-4v18M19 21V11l-6-4M9 9v.01M9 12v.01M9 15v.01M9 18v.01',
+  role: 'M3 7h18v14H3zM16 7V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v2M3 12h18M10 12v2h4v-2',
+  link: 'M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71',
+  industry: 'M4 4h16v16H4zM8 8h2v2H8zM14 8h2v2h-2zM8 14h2v2H8zM14 14h2v2h-2z',
+  location: 'M20 10c0 5-8 12-8 12S4 15 4 10a8 8 0 1 1 16 0zM12 10a2 2 0 1 0 0-4 2 2 0 0 0 0 4z',
+  group: 'M16 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2M10 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM20 8v6M23 11h-6',
+  notes: 'M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8zM14 2v6h6M8 13h8M8 17h8',
+} as const;
+
+function ContactFieldIcon({ name }: { name: keyof typeof contactFieldIconPaths }) {
+  return (
+    <svg {...iconProps} width={14} height={14} aria-hidden="true">
+      <path d={contactFieldIconPaths[name]} />
+    </svg>
+  );
+}
 
 // ─── Small presentational components ───────────────────────────────────────
 
@@ -336,7 +533,7 @@ interface ContactsTabProps {
   apiState: { lusha: boolean; mailchimp: boolean };
   onPersistContacts: (contacts: any[]) => void;
   onToast: (msg: string, type?: string) => void;
-  onNavigate: (tab: 'dashboard' | 'contacts' | 'campaigns' | 'sequences' | 'analytics' | 'settings' | 'contact-types') => void;
+  onNavigate: (tab: 'dashboard' | 'contacts' | 'campaigns' | 'sequences' | 'contact-types') => void;
   isUploadModalOpen: boolean;
   setIsUploadModalOpen: (open: boolean) => void;
   onQueueSelectedContacts?: (emails: string[]) => void;
@@ -347,7 +544,7 @@ export default function ContactsTab({
   apiState,
   onPersistContacts,
   onToast,
-  onNavigate,
+  onNavigate: _onNavigate,
   isUploadModalOpen,
   setIsUploadModalOpen,
   onQueueSelectedContacts,
@@ -383,8 +580,10 @@ export default function ContactsTab({
   const [submitting, setSubmitting] = useState(false);
   const [afName, setAfName] = useState('');
   const [afEmail, setAfEmail] = useState('');
+  const [afEmail2, setAfEmail2] = useState('');
   const [afPhone, setAfPhone] = useState('');
   const [afPhone2, setAfPhone2] = useState('');
+  const [afLinkedin, setAfLinkedin] = useState('');
   const [afCompany, setAfCompany] = useState('');
   const [afDesig, setAfDesig] = useState('');
   const [afIndustry, setAfIndustry] = useState('');
@@ -396,14 +595,33 @@ export default function ContactsTab({
   // ─── EXCEL UPLOADER STATE ───
   const [uploadFileName, setUploadFileName] = useState('');
   const [uploadBuffer, setUploadBuffer] = useState<any[]>([]);
+  const [smartContactsBuffer, setSmartContactsBuffer] = useState<ParsedImportContact[]>([]);
   const [isDragging, setIsDragging] = useState(false);
   const [importType, setImportType] = useState('New Lead');
   const [phone1Column, setPhone1Column] = useState('');
   const [phone2Column, setPhone2Column] = useState('');
 
+  // Automatically parse uploaded rows into clean contacts with Smart Auto-Extraction
+  useEffect(() => {
+    if (uploadBuffer.length === 0) {
+      setSmartContactsBuffer([]);
+      return;
+    }
+    const parsed = uploadBuffer
+      .map(row => smartParseImportRow(row, phone1Column, phone2Column))
+      .filter((c): c is ParsedImportContact => Boolean(c));
+    setSmartContactsBuffer(parsed);
+  }, [uploadBuffer, phone1Column, phone2Column]);
+
   // ─── DRAG & DROP FOR CONTACT TYPE TABS ───
   const [dragOverTabId, setDragOverTabId] = useState<string | null>(null);
   const [draggedContactId, setDraggedContactId] = useState<string | null>(null);
+  const contactTabsRef = useRef<HTMLDivElement | null>(null);
+  const contactTabsScrollbarRef = useRef<HTMLDivElement | null>(null);
+  const [contactTabsDimensions, setContactTabsDimensions] = useState({ clientWidth: 0, scrollWidth: 0 });
+  const contactTableRef = useRef<HTMLDivElement | null>(null);
+  const contactTableScrollbarRef = useRef<HTMLDivElement | null>(null);
+  const [contactTableDimensions, setContactTableDimensions] = useState({ clientWidth: 0, scrollWidth: 0 });
 
   // ─── LEAD MIRROR STATE (lead search4 tab) ───
   const [leadRows, setLeadRows] = useState<LeadRow[]>([]);
@@ -560,7 +778,10 @@ export default function ContactsTab({
         (c.name || '').toLowerCase().includes(search) ||
         (c.company || '').toLowerCase().includes(search) ||
         (c.email || '').toLowerCase().includes(search) ||
+        (c.email_1 || '').toLowerCase().includes(search) ||
+        (c.email_2 || '').toLowerCase().includes(search) ||
         (c.designation || '').toLowerCase().includes(search) ||
+        (c.linkedin_url || '').toLowerCase().includes(search) ||
         (c.phone || '').toLowerCase().includes(search) ||
         (c.phone_2 || '').toLowerCase().includes(search)
       );
@@ -664,8 +885,7 @@ export default function ContactsTab({
 
   const handleEnrichOne = (id: any) => {
     if (!apiState.lusha) {
-      onToast('Connect Lusha in Settings & APIs to enable enrichment', 'warn');
-      onNavigate('settings');
+      onToast('Lusha is not connected to enable enrichment', 'warn');
       return;
     }
     const c = contacts.find(x => x.id === id);
@@ -709,8 +929,7 @@ export default function ContactsTab({
 
   const handleBulkEnrich = () => {
     if (!apiState.lusha) {
-      onToast('Connect Lusha in Settings & APIs to enable enrichment', 'warn');
-      onNavigate('settings');
+      onToast('Lusha is not connected to enable enrichment', 'warn');
       return;
     }
     onToast(`Enrichment initiated for ${selectedIds.size} contacts`, 'info');
@@ -722,8 +941,10 @@ export default function ContactsTab({
     setEditingId(null);
     setAfName('');
     setAfEmail('');
+    setAfEmail2('');
     setAfPhone('');
     setAfPhone2('');
+    setAfLinkedin('');
     setAfCompany('');
     setAfDesig('');
     setAfIndustry('');
@@ -739,9 +960,11 @@ export default function ContactsTab({
     if (!c) return;
     setEditingId(id);
     setAfName(c.name || '');
-    setAfEmail(c.email || '');
+    setAfEmail(c.email_1 || c.email || '');
+    setAfEmail2(c.email_2 || '');
     setAfPhone(c.phone_1 || '');
     setAfPhone2(c.phone_2 || '');
+    setAfLinkedin(c.linkedin_url || '');
     setAfCompany(c.company || '');
     setAfDesig(c.designation || '');
     setAfIndustry(c.industry || '');
@@ -754,20 +977,27 @@ export default function ContactsTab({
 
   const handleSubmitContactForm = async () => {
     if (submitting) return;
-    if (!afName.trim() || !afEmail.trim() || !afCompany.trim()) {
-      onToast('Name, email and company are required', 'error');
+    if (!afName.trim() || (!afEmail.trim() && !afEmail2.trim()) || !afCompany.trim()) {
+      onToast('Name, at least one email, and company are required', 'error');
       return;
     }
 
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-    if (!emailRegex.test(afEmail.trim())) {
-      onToast('Please enter a valid email address', 'error');
+    if (afEmail.trim() && !emailRegex.test(afEmail.trim())) {
+      onToast('Please enter a valid email address for Email', 'error');
+      return;
+    }
+    if (afEmail2.trim() && !emailRegex.test(afEmail2.trim())) {
+      onToast('Please enter a valid email address for Email 2', 'error');
       return;
     }
 
+    const primaryEmail = afEmail.trim() || afEmail2.trim();
     const payload: ContactInput = {
       full_name: afName.trim(),
-      email: afEmail.trim(),
+      email: primaryEmail,
+      email_1: afEmail.trim() || null,
+      email_2: afEmail2.trim() || null,
       company: afCompany.trim(),
       designation: afDesig.trim(),
       industry: afIndustry.trim(),
@@ -777,6 +1007,7 @@ export default function ContactsTab({
       notes: afNotes.trim(),
       phone_1: afPhone.trim() || null,
       phone_2: afPhone2.trim() || null,
+      linkedin_url: afLinkedin.trim() || null,
     };
 
     setSubmitting(true);
@@ -797,8 +1028,18 @@ export default function ContactsTab({
         return;
       }
 
-      if (contacts.some(c => c.email.toLowerCase() === payload.email.toLowerCase())) {
-        onToast('A contact with this email already exists', 'warn');
+      const checkEmail1 = afEmail.trim().toLowerCase();
+      const checkEmail2 = afEmail2.trim().toLowerCase();
+      const isDuplicate = contacts.some(c => {
+        const c1 = (c.email_1 || c.email || '').toLowerCase().trim();
+        const c2 = (c.email_2 || '').toLowerCase().trim();
+        if (checkEmail1 && (c1 === checkEmail1 || c2 === checkEmail1)) return true;
+        if (checkEmail2 && (c1 === checkEmail2 || c2 === checkEmail2)) return true;
+        return false;
+      });
+
+      if (isDuplicate) {
+        onToast('A contact with this email address already exists', 'warn');
         return;
       }
 
@@ -999,6 +1240,51 @@ export default function ContactsTab({
     tabs.push({ id: leadMirrorTabName, label: leadMirrorTabName, count: leadRows.length });
     return tabs;
   }, [contactTypes, contacts, leadRows, leadMirrorTabName]);
+
+  useEffect(() => {
+    const tabs = contactTabsRef.current;
+    if (!tabs) return;
+
+    const measure = () => {
+      setContactTabsDimensions({ clientWidth: tabs.clientWidth, scrollWidth: tabs.scrollWidth });
+    };
+    measure();
+
+    const observer = new ResizeObserver(measure);
+    observer.observe(tabs);
+    Array.from(tabs.children).forEach(child => observer.observe(child));
+    return () => observer.disconnect();
+  }, [typeTabs, editingTabId, editingTabValue]);
+
+  const handleContactTabsScroll = (source: 'tabs' | 'scrollbar') => {
+    const sourceElement = source === 'tabs' ? contactTabsRef.current : contactTabsScrollbarRef.current;
+    const targetElement = source === 'tabs' ? contactTabsScrollbarRef.current : contactTabsRef.current;
+    if (sourceElement && targetElement && targetElement.scrollLeft !== sourceElement.scrollLeft) {
+      targetElement.scrollLeft = sourceElement.scrollLeft;
+    }
+  };
+
+  useLayoutEffect(() => {
+    const table = contactTableRef.current;
+    if (!table) return;
+
+    const measure = () => {
+      setContactTableDimensions({ clientWidth: table.clientWidth, scrollWidth: table.scrollWidth });
+    };
+    measure();
+
+    const observer = new ResizeObserver(measure);
+    observer.observe(table);
+    return () => observer.disconnect();
+  }, [cTypeFilter, leadMirrorTabName, contacts.length, leadRows.length]);
+
+  const handleContactTableScroll = (source: 'table' | 'scrollbar') => {
+    const sourceElement = source === 'table' ? contactTableRef.current : contactTableScrollbarRef.current;
+    const targetElement = source === 'table' ? contactTableScrollbarRef.current : contactTableRef.current;
+    if (sourceElement && targetElement && targetElement.scrollLeft !== sourceElement.scrollLeft) {
+      targetElement.scrollLeft = sourceElement.scrollLeft;
+    }
+  };
 
   useEffect(() => {
     if (typeTabs.some(tab => tab.id !== 'all' && tab.id === importType)) return;
@@ -1212,7 +1498,10 @@ export default function ContactsTab({
   };
 
   const confirmImport = async () => {
-    if (uploadBuffer.length === 0) return;
+    if (smartContactsBuffer.length === 0) {
+      onToast('No valid contacts found in the uploaded file', 'warn');
+      return;
+    }
     const selectedImportType = typeTabs.find(tab => tab.id === importType && tab.id !== 'all')?.id;
     if (!selectedImportType) {
       onToast('Select a valid contact type before importing', 'error');
@@ -1221,42 +1510,58 @@ export default function ContactsTab({
 
     const existingEmails = await fetchAllContactEmails();
     const seenEmails = new Set(existingEmails);
+    const seenPhones = new Set<string>();
     const toInsert: ContactInput[] = [];
     let added = 0;
     let skipped = 0;
 
-    uploadBuffer.forEach((row: ImportRow) => {
-      const e1 = normalizeEmail(pickRowValue(row, ['Work Email ID 1', 'Email ID 1']));
-      const e2 = normalizeEmail(pickRowValue(row, ['Work Email ID 2', 'Email ID 2']));
-      const emails: string[] = [];
-      if (e1 || e2) {
-        if (e1) emails.push(e1);
-        if (e2 && e2 !== e1) emails.push(e2);
-      } else {
-        const alt = normalizeEmail(pickRowValue(row, ['Email', 'Email address']));
-        if (alt) emails.push(alt);
+    smartContactsBuffer.forEach((c) => {
+      const email1 = (c.email_1 || '').trim().toLowerCase();
+      const email2 = (c.email_2 || '').trim().toLowerCase();
+      const phone1Digits = (c.phone_1 || '').replace(/\D/g, '');
+      const phone2Digits = (c.phone_2 || '').replace(/\D/g, '');
+
+      // Must have at least an email OR a phone OR a name
+      if (!email1 && !email2 && !phone1Digits && !phone2Digits && !c.name) {
+        skipped++;
+        return;
       }
-      if (emails.length === 0) { skipped++; return; }
 
-      const base: Omit<ContactInput, 'email'> = {
-        full_name: pickRowValue(row, ['Name', 'Client Name', 'Full Name']),
-        company: pickRowValue(row, ['Company', 'Company Name']),
-        designation: pickRowValue(row, ['Designation', 'Role', 'Title']),
-        industry: pickRowValue(row, ['Industry']),
-        city: pickRowValue(row, ['City']),
-        phone_1: (phone1Column ? pickRowValue(row, [phone1Column]) : '') || null,
-        phone_2: (phone2Column ? pickRowValue(row, [phone2Column]) : '') || null,
+      // Deduplicate by email if email present
+      if (email1 && seenEmails.has(email1)) {
+        skipped++;
+        return;
+      }
+
+      // Deduplicate phone-only rows
+      if (!email1 && phone1Digits && seenPhones.has(phone1Digits)) {
+        skipped++;
+        return;
+      }
+
+      if (email1) seenEmails.add(email1);
+      if (email2) seenEmails.add(email2);
+      if (phone1Digits) seenPhones.add(phone1Digits);
+      if (phone2Digits) seenPhones.add(phone2Digits);
+
+      toInsert.push({
+        full_name: c.name || 'Contact',
+        company: c.company || 'Unknown Company',
+        email: email1 || email2 || '',
+        email_1: email1 || null,
+        email_2: email2 || null,
+        phone: c.phone_1 || c.phone_2 || '',
+        phone_1: c.phone_1 || null,
+        phone_2: c.phone_2 || null,
+        designation: c.designation || null,
+        industry: c.industry || null,
+        city: c.city || null,
+        linkedin_url: c.linkedin_url || null,
         contact_type: selectedImportType,
-        company_category: pickRowValue(row, ['Company Category', 'Category']) || 'Domestic',
-        notes: pickRowValue(row, ['Notes']),
-      };
-
-      emails.forEach(email => {
-        if (seenEmails.has(email)) { skipped++; return; }
-        seenEmails.add(email);
-        toInsert.push({ ...base, email });
-        added++;
+        company_category: c.company_category || 'Domestic',
+        notes: c.notes || null,
       });
+      added++;
     });
 
     if (toInsert.length > 0) {
@@ -1266,24 +1571,28 @@ export default function ContactsTab({
         return;
       }
 
-      // Automatically queue newly imported contacts for weekly email
-      void queueContactsForWeeklyEmail(
-        toInsert.map(c => ({
-          email: c.email,
-          full_name: c.full_name,
-          company: c.company,
-          designation: c.designation,
-          industry: c.industry,
-        }))
-      );
+      // Automatically queue newly imported contacts with email for weekly email
+      const queueable = toInsert.filter(c => c.email && c.email.includes('@'));
+      if (queueable.length > 0) {
+        void queueContactsForWeeklyEmail(
+          queueable.map(c => ({
+            email: c.email!,
+            full_name: c.full_name,
+            company: c.company,
+            designation: c.designation,
+            industry: c.industry,
+          }))
+        );
+      }
 
       setLoading(true);
       await refreshContacts();
     }
 
     setIsUploadModalOpen(false);
-    onToast(`${added} contacts imported ${skipped ? ` (${skipped} skipped)` : ''}`, 'success');
+    onToast(`${added} contacts successfully imported${skipped ? ` (${skipped} skipped)` : ''}`, 'success');
     setUploadBuffer([]);
+    setSmartContactsBuffer([]);
     setUploadFileName('');
     setPhone1Column('');
     setPhone2Column('');
@@ -1307,12 +1616,6 @@ export default function ContactsTab({
             <PlusIcon size={15} /> Add Contact
           </button>
           <button
-            className="btn btn-secondary"
-            onClick={() => { onNavigate('settings'); onToast('Search and import leads using Lusha', 'info'); }}
-          >
-            <SparklesIcon size={15} /> Lusha Leads
-          </button>
-          <button
             className="btn"
             onClick={() => setIsUploadModalOpen(true)}
           >
@@ -1331,11 +1634,6 @@ export default function ContactsTab({
       <div className="stats-row">
         <StatCard label="Total Contacts" value={metrics.total} sub="All database profiles" icon={<UsersIcon />} tone="indigo" />
         <StatCard label="Active Database Profiles" value={metrics.activeProfiles} sub="Non-newsletter records" icon={<DatabaseIcon />} tone="sky" />
-        <StatCard label="New Leads" value={metrics.newLeads} sub="Freshly captured prospects" icon={<LeadIcon />} tone="blue" />
-        <StatCard label="Unqualified Prospects" value={metrics.unqualified} sub="Prospect segment" icon={<UserIcon />} tone="purple" />
-        <StatCard label="High Engagement" value={metrics.highEngagement} sub="Engagement score ≥ 70" icon={<EngagementIcon />} tone="green" />
-        <StatCard label="Enriched via Lusha" value={metrics.enriched} sub="Lusha enrichment applied" icon={<EnrichmentIcon />} tone="amber" />
-        <StatCard label="Verified Contact Meta" value={metrics.verifiedMeta} sub="Industry + role + city filled" icon={<CheckIcon />} tone="teal" />
       </div>
 
       {/* ─── CONTACTS TABLE PANEL ─── */}
@@ -1374,7 +1672,23 @@ export default function ContactsTab({
         </div>
 
         {/* Segment pills */}
-        <div className="ct-tabs">
+        {contactTabsDimensions.scrollWidth > contactTabsDimensions.clientWidth && (
+          <div
+            className="ct-tabs-scrollbar"
+            ref={contactTabsScrollbarRef}
+            onScroll={() => handleContactTabsScroll('scrollbar')}
+            role="region"
+            aria-label="Scroll contact lists"
+            tabIndex={0}
+          >
+            <div style={{ width: contactTabsDimensions.scrollWidth, minWidth: contactTabsDimensions.scrollWidth, height: 1 }} />
+          </div>
+        )}
+        <div
+          className="ct-tabs"
+          ref={contactTabsRef}
+          onScroll={() => handleContactTabsScroll('tabs')}
+        >
           {typeTabs.map(tab => {
             const isLeadMirror =
               tab.id.toLowerCase() === leadMirrorTabName.toLowerCase() ||
@@ -1488,20 +1802,47 @@ export default function ContactsTab({
               </div>
             </div>
 
-            <div className="ct-table-wrap">
-              <table className="ct-table">
+            {contactTableDimensions.scrollWidth > contactTableDimensions.clientWidth && (
+              <div
+                className="ct-table-scrollbar"
+                ref={contactTableScrollbarRef}
+                onScroll={() => handleContactTableScroll('scrollbar')}
+                aria-hidden="true"
+              >
+                <div style={{ width: contactTableDimensions.scrollWidth, minWidth: contactTableDimensions.scrollWidth, height: 1 }} />
+              </div>
+            )}
+            <div
+              className="ct-table-wrap"
+              ref={contactTableRef}
+              onScroll={() => handleContactTableScroll('table')}
+            >
+              <table className="ct-table ct-table-fixed" style={{ minWidth: 1540 }}>
+                <colgroup>
+                  <col style={{ width: 44 }} />
+                  <col style={{ width: 210 }} />
+                  <col style={{ width: 230 }} />
+                  <col style={{ width: 130 }} />
+                  <col style={{ width: 190 }} />
+                  <col style={{ width: 180 }} />
+                  <col style={{ width: 140 }} />
+                  <col style={{ width: 130 }} />
+                  <col style={{ width: 90 }} />
+                  <col style={{ width: 110 }} />
+                  <col style={{ width: 116 }} />
+                </colgroup>
                 <thead>
                   <tr>
-                    <th style={{ width: 44 }}>#</th>
-                    <th>Name</th>
-                    <th>Email</th>
-                    <th>Phone</th>
-                    <th>Company</th>
-                    <th>Designation</th>
-                    <th>Industry</th>
-                    <th>Geography</th>
-                    <th>LinkedIn</th>
-                    <th>Created</th>
+                    <th style={{ width: 44, textAlign: 'center' }}>#</th>
+                    <th style={{ width: 210 }}>Name</th>
+                    <th style={{ width: 230 }}>Email</th>
+                    <th style={{ width: 130 }}>Phone</th>
+                    <th style={{ width: 190 }}>Company</th>
+                    <th style={{ width: 180 }}>Designation</th>
+                    <th style={{ width: 140 }}>Industry</th>
+                    <th style={{ width: 130 }}>Geography</th>
+                    <th style={{ width: 90 }}>LinkedIn</th>
+                    <th style={{ width: 110 }}>Created</th>
                     <th style={{ textAlign: 'right', width: 116 }}>Actions</th>
                   </tr>
                 </thead>
@@ -1597,41 +1938,78 @@ export default function ContactsTab({
         {/* ─── CONTACTS TABLE ─── */}
         {!isLeadMirrorTab && (
         <>
-        <div className="ct-table-wrap">
-          <table className="ct-table">
+        {contactTableDimensions.scrollWidth > contactTableDimensions.clientWidth && (
+          <div
+            className="ct-table-scrollbar"
+            ref={contactTableScrollbarRef}
+            onScroll={() => handleContactTableScroll('scrollbar')}
+            aria-hidden="true"
+          >
+            <div style={{ width: contactTableDimensions.scrollWidth, minWidth: contactTableDimensions.scrollWidth, height: 1 }} />
+          </div>
+        )}
+        <div
+          className="ct-table-wrap"
+          ref={contactTableRef}
+          onScroll={() => handleContactTableScroll('table')}
+        >
+          <table className="ct-table ct-table-fixed" style={{ minWidth: 1890 }}>
+            <colgroup>
+              <col style={{ width: 40 }} />
+              <col style={{ width: 44 }} />
+              <col style={{ width: 220 }} />
+              <col style={{ width: 190 }} />
+              <col style={{ width: 220 }} />
+              <col style={{ width: 220 }} />
+              <col style={{ width: 140 }} />
+              <col style={{ width: 140 }} />
+              <col style={{ width: 190 }} />
+              <col style={{ width: 110 }} />
+              <col style={{ width: 130 }} />
+              <col style={{ width: 130 }} />
+              <col style={{ width: 116 }} />
+            </colgroup>
             <thead>
               <tr>
-                <th style={{ width: 40, cursor: 'grab' }} title="Drag to reorder or drop into Campaign Editor">
+                <th style={{ width: 40, cursor: 'grab', textAlign: 'center' }} title="Drag to reorder or drop into Campaign Editor">
                   <GripIcon size={14} style={{ opacity: 0.4 }} />
                 </th>
-                <th style={{ width: 42 }}>
+                <th style={{ width: 44, textAlign: 'center' }}>
                   <input
                     type="checkbox"
                     checked={filteredContacts.length > 0 && selectedIds.size === filteredContacts.length}
                     onChange={(e) => handleSelectAll(e.target.checked)}
                   />
                 </th>
-                <th className="ct-sortable" onClick={() => handleSort('name')}>
+                <th className="ct-sortable" style={{ width: 220 }} onClick={() => handleSort('name')}>
                   Name {cSortKey === 'name' && <span className="ct-sort-arrow">{cSortDir === 1 ? '↑' : '↓'}</span>}
                 </th>
-                <th className="ct-sortable" onClick={() => handleSort('company')}>
+                <th className="ct-sortable" style={{ width: 190 }} onClick={() => handleSort('company')}>
                   Company {cSortKey === 'company' && <span className="ct-sort-arrow">{cSortDir === 1 ? '↑' : '↓'}</span>}
                 </th>
-                <th>Email</th>
-                <th className="ct-sortable" onClick={() => handleSort('phone_1')}>
+                <th className="ct-sortable" style={{ width: 220 }} onClick={() => handleSort('email')}>
+                  Email {cSortKey === 'email' && <span className="ct-sort-arrow">{cSortDir === 1 ? '↑' : '↓'}</span>}
+                </th>
+                <th className="ct-sortable" style={{ width: 220 }} onClick={() => handleSort('email_2')}>
+                  Email 2 {cSortKey === 'email_2' && <span className="ct-sort-arrow">{cSortDir === 1 ? '↑' : '↓'}</span>}
+                </th>
+                <th className="ct-sortable" style={{ width: 140 }} onClick={() => handleSort('phone_1')}>
                   Phone 1 {cSortKey === 'phone_1' && <span className="ct-sort-arrow">{cSortDir === 1 ? '↑' : '↓'}</span>}
                 </th>
-                <th>Phone 2</th>
-                <th>Designation</th>
-                <th>Type</th>
-                <th>Category</th>
+                <th style={{ width: 140 }}>Phone 2</th>
+                <th style={{ width: 190 }}>Designation</th>
+                <th className="ct-sortable" style={{ width: 110 }} onClick={() => handleSort('linkedin_url')}>
+                  LinkedIn {cSortKey === 'linkedin_url' && <span className="ct-sort-arrow">{cSortDir === 1 ? '↑' : '↓'}</span>}
+                </th>
+                <th style={{ width: 130 }}>Type</th>
+                <th style={{ width: 130 }}>Category</th>
                 <th style={{ textAlign: 'right', width: 116 }}>Actions</th>
               </tr>
             </thead>
             <tbody>
               {loading ? (
                 <tr>
-                  <td colSpan={11}>
+                  <td colSpan={13}>
                     <div className="empty-state">
                       <div style={{ display: 'inline-flex', alignItems: 'center', gap: 10 }}>
                         <span className="spinner"></span>
@@ -1642,7 +2020,7 @@ export default function ContactsTab({
                 </tr>
               ) : paginatedContacts.length === 0 ? (
                 <tr>
-                  <td colSpan={11}>
+                  <td colSpan={13}>
                     <div className="empty-state">
                       <div className="empty-icon">🔍</div>
                       <div className="empty-title">No contacts found</div>
@@ -1720,7 +2098,18 @@ export default function ContactsTab({
                         <div className="ct-sub">{c.industry || '—'}</div>
                       </td>
                       <td>
-                        <span className="ct-email">{c.email}</span>
+                        {c.email_1 || c.email ? (
+                          <span className="ct-email">{c.email_1 || c.email}</span>
+                        ) : (
+                          <span style={{ color: 'var(--text4)' }}>—</span>
+                        )}
+                      </td>
+                      <td>
+                        {c.email_2 ? (
+                          <span className="ct-email">{c.email_2}</span>
+                        ) : (
+                          <span style={{ color: 'var(--text4)' }}>—</span>
+                        )}
                       </td>
                       <td>
                         {(c.phone_1 || c.phone) ? (
@@ -1748,6 +2137,25 @@ export default function ContactsTab({
                       </td>
                       <td>
                         <div className="ct-desig">{c.designation || '—'}</div>
+                      </td>
+                      <td>
+                        {c.linkedin_url ? (
+                          <a
+                            href={c.linkedin_url.startsWith('http') ? c.linkedin_url : `https://${c.linkedin_url}`}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="ct-email"
+                            style={{ display: 'inline-flex', alignItems: 'center', gap: 4, textDecoration: 'none' }}
+                            title={c.linkedin_url}
+                          >
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="#0A66C2" style={{ flexShrink: 0 }}>
+                              <path d="M19 3a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h14m-.5 15.5v-5.3a3.26 3.26 0 0 0-3.26-3.26c-.85 0-1.84.52-2.28 1.3v-1.11h-2.79v8.37h2.79v-4.93c0-.77.62-1.4 1.39-1.4a1.4 1.4 0 0 1 1.4 1.4v4.93h2.75M6.46 10.9v8.37H9.2V10.9H6.46M7.83 6.45c-.88 0-1.6.72-1.6 1.6 0 .88.72 1.6 1.6 1.6.88 0 1.6-.72 1.6-1.6 0-.88-.72-1.6-1.6-1.6Z"/>
+                            </svg>
+                            <span>View</span>
+                          </a>
+                        ) : (
+                          <span style={{ color: 'var(--text4)' }}>—</span>
+                        )}
                       </td>
                       <td>
                         <TypeBadge type={c.type} />
@@ -1867,14 +2275,22 @@ export default function ContactsTab({
       {/* ─── MODAL: CONTACTS ADD/EDIT ─── */}
       {isContactModalOpen && (
         <div className="modal-overlay">
-          <div className="modal modal-wide">
-            <div className="modal-header">
+          <div className="modal modal-wide contact-form-modal">
+            <div className="modal-header contact-form-header">
               <div>
+                <span className="contact-modal-mark" aria-hidden="true">
+                  <UsersIcon size={22} />
+                  <span>+</span>
+                </span>
+              </div>
+              <div className="contact-form-heading">
                 <div className="modal-title">
                   {editingId !== null ? 'Edit Contact Details' : 'Add New Contact'}
                 </div>
-                <div className="ct-sub" style={{ marginTop: 3 }}>
-                  {editingId !== null ? 'Update the contact profile details' : 'Create a new contact profile'}
+                <div className="ct-sub">
+                  {editingId !== null
+                    ? 'Update the contact profile details'
+                    : 'Create a new contact profile to manage your network'}
                 </div>
               </div>
               <button className="modal-close" onClick={() => setIsContactModalOpen(false)} title="Close">
@@ -1883,9 +2299,13 @@ export default function ContactsTab({
             </div>
 
             <div className="modal-body">
-              <div className="form-grid">
+              <div className="contact-section-heading">
+                <span className="contact-section-icon"><ContactFieldIcon name="person" /></span>
+                <span>Basic Information</span>
+              </div>
+              <div className="form-grid contact-form-grid">
                 <div className="form-group">
-                  <label>Full Name *</label>
+                  <label><ContactFieldIcon name="person" />Full Name *</label>
                   <input
                     type="text"
                     placeholder="e.g. Rajiv Sharma"
@@ -1894,7 +2314,7 @@ export default function ContactsTab({
                   />
                 </div>
                 <div className="form-group">
-                  <label>Email Address *</label>
+                  <label><ContactFieldIcon name="email" />Email *</label>
                   <input
                     type="email"
                     placeholder="rajiv@company.com"
@@ -1903,7 +2323,16 @@ export default function ContactsTab({
                   />
                 </div>
                 <div className="form-group">
-                  <label>Phone 1</label>
+                  <label><ContactFieldIcon name="email" />Email 2</label>
+                  <input
+                    type="email"
+                    placeholder="Optional second email"
+                    value={afEmail2}
+                    onChange={(e) => setAfEmail2(e.target.value)}
+                  />
+                </div>
+                <div className="form-group">
+                  <label><ContactFieldIcon name="phone" />Phone 1</label>
                   <input
                     type="tel"
                     placeholder="e.g. +91 98765 43210"
@@ -1912,7 +2341,7 @@ export default function ContactsTab({
                   />
                 </div>
                 <div className="form-group">
-                  <label>Phone 2</label>
+                  <label><ContactFieldIcon name="phone" />Phone 2</label>
                   <input
                     type="tel"
                     placeholder="Optional second number"
@@ -1921,7 +2350,7 @@ export default function ContactsTab({
                   />
                 </div>
                 <div className="form-group">
-                  <label>Company *</label>
+                  <label><ContactFieldIcon name="company" />Company *</label>
                   <input
                     type="text"
                     placeholder="e.g. Bajaj Electricals"
@@ -1930,7 +2359,7 @@ export default function ContactsTab({
                   />
                 </div>
                 <div className="form-group">
-                  <label>Designation</label>
+                  <label><ContactFieldIcon name="role" />Designation</label>
                   <input
                     type="text"
                     placeholder="VP Product Innovation"
@@ -1939,7 +2368,16 @@ export default function ContactsTab({
                   />
                 </div>
                 <div className="form-group">
-                  <label>Industry</label>
+                  <label><ContactFieldIcon name="link" />LinkedIn URL</label>
+                  <input
+                    type="text"
+                    placeholder="https://www.linkedin.com/in/username"
+                    value={afLinkedin}
+                    onChange={(e) => setAfLinkedin(e.target.value)}
+                  />
+                </div>
+                <div className="form-group">
+                  <label><ContactFieldIcon name="industry" />Industry</label>
                   <input
                     type="text"
                     placeholder="Electrical Equipment"
@@ -1948,7 +2386,7 @@ export default function ContactsTab({
                   />
                 </div>
                 <div className="form-group">
-                  <label>City</label>
+                  <label><ContactFieldIcon name="location" />City</label>
                   <input
                     type="text"
                     placeholder="Mumbai"
@@ -1957,15 +2395,15 @@ export default function ContactsTab({
                   />
                 </div>
                 <div className="form-group">
-                  <label>Contact Type</label>
+                  <label><ContactFieldIcon name="group" />Contact Type</label>
                   <select value={afType} onChange={(e) => setAfType(e.target.value)}>
                     {contactTypes.map(ct => (
                       <option key={ct.name} value={ct.name}>{ct.name}</option>
                     ))}
                   </select>
                 </div>
-                <div className="form-group" style={{ gridColumn: 'span 2' }}>
-                  <label>Company Category</label>
+                <div className="form-group">
+                  <label><ContactFieldIcon name="company" />Company Category</label>
                   <select value={afCat} onChange={(e) => setAfCat(e.target.value)}>
                     <option value="OEM">OEM</option>
                     <option value="Startup">Startup</option>
@@ -1975,8 +2413,8 @@ export default function ContactsTab({
                 </div>
               </div>
 
-              <div className="form-group">
-                <label>Notes & Context</label>
+              <div className="form-group contact-notes-group">
+                <label><ContactFieldIcon name="notes" />Notes & Context</label>
                 <textarea
                   rows={3}
                   placeholder="Context regarding initial discussion, background..."
@@ -1998,7 +2436,7 @@ export default function ContactsTab({
                 disabled={submitting}
                 onClick={handleSubmitContactForm}
               >
-                {submitting ? 'Saving...' : editingId !== null ? 'Save Changes' : 'Create Contact'}
+                {submitting ? 'Saving...' : editingId !== null ? 'Save Changes' : 'Save Contact'}
               </button>
             </div>
           </div>
@@ -2062,11 +2500,38 @@ export default function ContactsTab({
               </div>
 
               <div style={{ marginTop: 16 }}>
+                <div style={{
+                  padding: '10px 14px',
+                  background: 'rgba(59, 130, 246, 0.08)',
+                  border: '1px solid rgba(59, 130, 246, 0.25)',
+                  borderRadius: 8,
+                  marginBottom: 14,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  fontSize: 12
+                }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <span style={{ fontSize: 16 }}>✨</span>
+                    <div>
+                      <strong style={{ color: 'var(--blue)' }}>Smart Auto-Extraction Active:</strong>
+                      <span style={{ color: 'var(--text2)', marginLeft: 6 }}>
+                        Automatically extracts Name, Company, Email, Email 2, Phone 1, Phone 2, Designation, and LinkedIn from mixed and unformatted cells.
+                      </span>
+                    </div>
+                  </div>
+                  {smartContactsBuffer.length > 0 && (
+                    <span className="badge" style={{ background: 'var(--blue)', color: '#fff', fontSize: 11, padding: '2px 8px', whiteSpace: 'nowrap' }}>
+                      {smartContactsBuffer.length} Ready
+                    </span>
+                  )}
+                </div>
+
                 <div className="ct-record-count" style={{ textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: 8 }}>
-                  Expected Header Format
+                  Expected Standard Columns (or Auto-Extracted from Cells)
                 </div>
                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-                  {['Name', 'Company', 'Email', 'Phone 1', 'Phone 2', 'Designation', 'Industry', 'Contact Type', 'City', 'Notes'].map(col => (
+                  {['Name', 'Company', 'Email', 'Email 2', 'Phone 1', 'Phone 2', 'Designation', 'LinkedIn', 'Industry', 'Contact Type', 'City', 'Notes'].map(col => (
                     <span key={col} className="chip">{col}</span>
                   ))}
                 </div>
@@ -2075,7 +2540,7 @@ export default function ContactsTab({
                     <label className="form-group">
                       <span>Phone 1 column</span>
                       <select className="ct-select" value={phone1Column} onChange={e => setPhone1Column(e.target.value)}>
-                        <option value="">Do not import</option>
+                        <option value="">Auto-Detect from cells</option>
                         {Object.keys(uploadBuffer[0] || {}).filter(column => column !== phone2Column).map(column => (
                           <option key={column} value={column}>{column}</option>
                         ))}
@@ -2084,7 +2549,7 @@ export default function ContactsTab({
                     <label className="form-group">
                       <span>Phone 2 column</span>
                       <select className="ct-select" value={phone2Column} onChange={e => setPhone2Column(e.target.value)}>
-                        <option value="">Do not import</option>
+                        <option value="">Auto-Detect from cells</option>
                         {Object.keys(uploadBuffer[0] || {}).filter(column => column !== phone1Column).map(column => (
                           <option key={column} value={column}>{column}</option>
                         ))}
@@ -2095,7 +2560,7 @@ export default function ContactsTab({
               </div>
 
               {/* Data Preview */}
-              {uploadBuffer.length > 0 && (
+              {smartContactsBuffer.length > 0 ? (
                 <div style={{ marginTop: 16, border: '1px solid var(--border)', borderRadius: 10, overflow: 'hidden' }}>
                   <div style={{
                     padding: '9px 12px',
@@ -2105,8 +2570,58 @@ export default function ContactsTab({
                     justifyContent: 'space-between',
                     fontSize: 11,
                   }}>
-                    <span style={{ fontWeight: 600, color: 'var(--text2)' }}>Preview First 5 Rows</span>
-                    <span style={{ fontWeight: 700, color: 'var(--green)' }}>{uploadBuffer.length} rows parsed</span>
+                    <span style={{ fontWeight: 600, color: 'var(--text2)' }}>
+                      Preview Extracted Contacts (First {Math.min(smartContactsBuffer.length, 5)} of {smartContactsBuffer.length})
+                    </span>
+                    <span style={{ fontWeight: 700, color: 'var(--green)' }}>
+                      {smartContactsBuffer.length} contacts parsed
+                    </span>
+                  </div>
+                  <div style={{ overflowX: 'auto', maxHeight: 200 }}>
+                    <table style={{ fontSize: 11, width: '100%', borderCollapse: 'collapse' }}>
+                      <thead>
+                        <tr style={{ background: 'var(--surface2)', textAlign: 'left' }}>
+                          <th style={{ padding: '8px 10px', borderRight: '1px solid var(--border)', whiteSpace: 'nowrap' }}>#</th>
+                          <th style={{ padding: '8px 10px', borderRight: '1px solid var(--border)', whiteSpace: 'nowrap' }}>Name</th>
+                          <th style={{ padding: '8px 10px', borderRight: '1px solid var(--border)', whiteSpace: 'nowrap' }}>Company</th>
+                          <th style={{ padding: '8px 10px', borderRight: '1px solid var(--border)', whiteSpace: 'nowrap' }}>Email</th>
+                          <th style={{ padding: '8px 10px', borderRight: '1px solid var(--border)', whiteSpace: 'nowrap' }}>Email 2</th>
+                          <th style={{ padding: '8px 10px', borderRight: '1px solid var(--border)', whiteSpace: 'nowrap' }}>Phone 1</th>
+                          <th style={{ padding: '8px 10px', borderRight: '1px solid var(--border)', whiteSpace: 'nowrap' }}>Phone 2</th>
+                          <th style={{ padding: '8px 10px', borderRight: '1px solid var(--border)', whiteSpace: 'nowrap' }}>Designation</th>
+                          <th style={{ padding: '8px 10px', whiteSpace: 'nowrap' }}>LinkedIn</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {smartContactsBuffer.slice(0, 5).map((c, idx) => (
+                          <tr key={idx} style={{ borderTop: '1px solid var(--border)' }}>
+                            <td style={{ padding: '8px 10px', borderRight: '1px solid var(--border)', color: 'var(--text3)' }}>{idx + 1}</td>
+                            <td style={{ padding: '8px 10px', borderRight: '1px solid var(--border)', fontWeight: 600, color: 'var(--text)' }}>{c.name || '—'}</td>
+                            <td style={{ padding: '8px 10px', borderRight: '1px solid var(--border)', color: 'var(--text2)' }}>{c.company || '—'}</td>
+                            <td style={{ padding: '8px 10px', borderRight: '1px solid var(--border)', color: c.email_1 ? 'var(--blue)' : 'var(--text3)' }}>{c.email_1 || '—'}</td>
+                            <td style={{ padding: '8px 10px', borderRight: '1px solid var(--border)', color: c.email_2 ? 'var(--blue)' : 'var(--text3)' }}>{c.email_2 || '—'}</td>
+                            <td style={{ padding: '8px 10px', borderRight: '1px solid var(--border)', color: c.phone_1 ? 'var(--green)' : 'var(--text3)' }}>{c.phone_1 || '—'}</td>
+                            <td style={{ padding: '8px 10px', borderRight: '1px solid var(--border)', color: c.phone_2 ? 'var(--green)' : 'var(--text3)' }}>{c.phone_2 || '—'}</td>
+                            <td style={{ padding: '8px 10px', borderRight: '1px solid var(--border)', color: 'var(--text3)' }}>{c.designation || '—'}</td>
+                            <td style={{ padding: '8px 10px', color: 'var(--text3)' }}>{c.linkedin_url ? '✓' : '—'}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              ) : uploadBuffer.length > 0 ? (
+                <div style={{ marginTop: 16, border: '1px solid var(--border)', borderRadius: 10, overflow: 'hidden' }}>
+                  <div style={{
+                    padding: '9px 12px',
+                    background: 'var(--surface3)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    fontSize: 11,
+                  }}>
+                    <span style={{ fontWeight: 600, color: 'var(--text2)' }}>Raw Rows</span>
+                    <span style={{ fontWeight: 700, color: 'var(--green)' }}>{uploadBuffer.length} rows</span>
                   </div>
                   <div style={{ overflowX: 'auto', maxHeight: 192 }}>
                     <table style={{ fontSize: 11 }}>
@@ -2133,7 +2648,7 @@ export default function ContactsTab({
                     </table>
                   </div>
                 </div>
-              )}
+              ) : null}
             </div>
 
             <div className="modal-footer">

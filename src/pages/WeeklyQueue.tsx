@@ -207,6 +207,22 @@ const UPDATE_CHUNK_SIZE = 100;
 /** Only these statuses may ever be manually rescheduled. */
 const RESCHEDULABLE_STATUS: QueueStatus = 'pending';
 
+const menuItemBtnStyle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'space-between',
+  width: '100%',
+  padding: '7px 10px',
+  background: 'transparent',
+  border: 'none',
+  borderRadius: 6,
+  fontSize: 12.5,
+  color: 'var(--text1, #1E293B)',
+  cursor: 'pointer',
+  textAlign: 'left',
+  transition: 'background 0.15s ease',
+};
+
 // ─── MAIN COMPONENT ──────────────────────────────────────────────────────────
 export default function WeeklyQueue({ onToast }: WeeklyQueueProps) {
   const [rows, setRows] = useState<QueueRow[]>([]);
@@ -225,10 +241,23 @@ export default function WeeklyQueue({ onToast }: WeeklyQueueProps) {
   const [submitting, setSubmitting] = useState(false);
   const [activity, setActivity] = useState<ActivityFilter | null>(null);
 
-  // ─── MANUAL RESCHEDULING (selected PENDING rows only) ───
+  // ─── SELECTION & MANUAL RESCHEDULING ───
   const [selectedIds, setSelectedIds] = useState<ReadonlySet<string>>(() => new Set<string>());
   const [scheduleOpen, setScheduleOpen] = useState(false);
   const [savingSchedule, setSavingSchedule] = useState(false);
+
+  // ─── BULK DELETION STATE ───
+  const [deleteMenuOpen, setDeleteMenuOpen] = useState(false);
+  const deleteMenuRef = useRef<HTMLDivElement | null>(null);
+  const [bulkDeleteModal, setBulkDeleteModal] = useState<{
+    title: string;
+    description: string;
+    badgeLabel: string;
+    count: number;
+    ids: string[];
+    confirmButtonLabel?: string;
+  } | null>(null);
+  const [deletingBulk, setDeletingBulk] = useState(false);
 
   // ─── DUAL HORIZONTAL SCROLLBARS (top + bottom, synced) ───
   // A thin strip above the table mirrors the native horizontal scrollbar of
@@ -276,13 +305,13 @@ export default function WeeklyQueue({ onToast }: WeeklyQueueProps) {
       setRows(nextRows);
       setFetchError(null);
 
-      // Drop anything from the current selection that is no longer a pending
-      // record in the table we just loaded.
+      // Prune IDs that no longer exist in the table we just loaded.
       setSelectedIds((prev) => {
         if (prev.size === 0) return prev;
+        const validIds = new Set(nextRows.map((r) => r.id));
         const live = new Set<string>();
-        for (const r of nextRows) {
-          if (r.status === RESCHEDULABLE_STATUS && prev.has(r.id)) live.add(r.id);
+        for (const id of prev) {
+          if (validIds.has(id)) live.add(id);
         }
         return live.size === prev.size ? prev : live;
       });
@@ -472,22 +501,25 @@ export default function WeeklyQueue({ onToast }: WeeklyQueueProps) {
     return filteredRows.slice(start, start + pageSize);
   }, [filteredRows, safePage, pageSize]);
 
-  // ─── SELECTION (pending rows only) ───
-  // Selection is a Set of queue row ids. Every read path re-validates it against
-  // the current data (see selectedRows), and fetchQueue() additionally prunes
-  // the stored Set, so a record that has since been sent or deleted can never
-  // take part in a reschedule.
-  const totalPendingRows = useMemo(
+  // ─── SELECTION (any row can be selected for deletion; pending rows for reschedule) ───
+  const _totalPendingRows = useMemo(
     () => dedupedRows.filter((r) => r.status === RESCHEDULABLE_STATUS),
     [dedupedRows]
   );
 
   const selectedRows = useMemo(
-    () => dedupedRows.filter((r) => r.status === RESCHEDULABLE_STATUS && selectedIds.has(r.id)),
+    () => dedupedRows.filter((r) => selectedIds.has(r.id)),
     [dedupedRows, selectedIds]
   );
 
   const selectedCount = selectedRows.length;
+
+  const selectedPendingRows = useMemo(
+    () => selectedRows.filter((r) => r.status === RESCHEDULABLE_STATUS),
+    [selectedRows]
+  );
+
+  const selectedPendingCount = selectedPendingRows.length;
 
   const isRowSelected = (id: string) => selectedIds.has(id);
 
@@ -500,31 +532,172 @@ export default function WeeklyQueue({ onToast }: WeeklyQueueProps) {
     });
   };
 
-  /** Pending rows on the CURRENT page only — i.e. what "select all" can see. */
-  const pageReschedulableRows = useMemo(
-    () => paginatedRows.filter((r) => r.status === RESCHEDULABLE_STATUS),
-    [paginatedRows]
-  );
-
+  /** Rows on the CURRENT page only — for page-level "select all". */
   const allPageSelected =
-    pageReschedulableRows.length > 0 &&
-    pageReschedulableRows.every((r) => selectedIds.has(r.id));
+    paginatedRows.length > 0 &&
+    paginatedRows.every((r) => selectedIds.has(r.id));
 
-  const somePageSelected = pageReschedulableRows.some((r) => selectedIds.has(r.id));
+  const somePageSelected = paginatedRows.some((r) => selectedIds.has(r.id));
 
   const toggleSelectAllOnPage = () => {
     setSelectedIds((prev) => {
       const next = new Set(prev);
       if (allPageSelected) {
-        for (const r of pageReschedulableRows) next.delete(r.id);
+        for (const r of paginatedRows) next.delete(r.id);
       } else {
-        for (const r of pageReschedulableRows) next.add(r.id);
+        for (const r of paginatedRows) next.add(r.id);
       }
       return next;
     });
   };
 
+  const selectAllFiltered = () => {
+    setSelectedIds(new Set(filteredRows.map((r) => r.id)));
+  };
+
+  const _selectAllMatching = (status: QueueStatus) => {
+    const matching = dedupedRows.filter((r) => r.status === status).map((r) => r.id);
+    setSelectedIds(new Set(matching));
+  };
+
   const clearSelection = useCallback(() => setSelectedIds(new Set<string>()), []);
+
+  // ─── CLOSE DELETE MENU ON OUTSIDE CLICK ───
+  useEffect(() => {
+    function handleClickOutside(e: MouseEvent) {
+      if (deleteMenuRef.current && !deleteMenuRef.current.contains(e.target as Node)) {
+        setDeleteMenuOpen(false);
+      }
+    }
+    if (deleteMenuOpen) {
+      document.addEventListener('mousedown', handleClickOutside);
+      return () => document.removeEventListener('mousedown', handleClickOutside);
+    }
+  }, [deleteMenuOpen]);
+
+  // ─── BULK DELETION PROMPTS & EXECUTION ───
+  const promptDeleteSelected = () => {
+    if (selectedRows.length === 0) return;
+    const ids = selectedRows.map((r) => r.id);
+    setBulkDeleteModal({
+      title: `Delete ${selectedRows.length} Selected Contact${selectedRows.length === 1 ? '' : 's'}`,
+      badgeLabel: `${selectedRows.length} contact${selectedRows.length === 1 ? '' : 's'} selected`,
+      description: `Are you sure you want to delete the ${selectedRows.length} selected contact(s) from the weekly email queue? They will be removed immediately.`,
+      count: selectedRows.length,
+      ids,
+      confirmButtonLabel: `Delete ${selectedRows.length} Selected`,
+    });
+  };
+
+  const promptDeleteCategory = (category: QueueStatus | 'opened' | 'not_opened' | 'all') => {
+    if (category === 'all') {
+      const ids = dedupedRows.map((r) => r.id);
+      setBulkDeleteModal({
+        title: `Delete All Queue Records (${ids.length})`,
+        badgeLabel: `Entire Weekly Queue (${ids.length} records)`,
+        description: `Are you sure you want to delete ALL ${ids.length} contacts currently in the weekly email queue? This will completely empty the queue.`,
+        count: ids.length,
+        ids,
+        confirmButtonLabel: `Delete All ${ids.length} Records`,
+      });
+      return;
+    }
+
+    if (category === 'opened') {
+      const rowsToDelete = dedupedRows.filter((r) => r.opened_at != null);
+      setBulkDeleteModal({
+        title: `Delete All Opened Contacts (${rowsToDelete.length})`,
+        badgeLabel: `${rowsToDelete.length} Opened Contacts`,
+        description: `Are you sure you want to delete all ${rowsToDelete.length} contact records that have opened emails?`,
+        count: rowsToDelete.length,
+        ids: rowsToDelete.map((r) => r.id),
+        confirmButtonLabel: `Delete ${rowsToDelete.length} Opened`,
+      });
+      return;
+    }
+
+    if (category === 'not_opened') {
+      const rowsToDelete = dedupedRows.filter((r) => r.sent_at != null && r.opened_at == null);
+      setBulkDeleteModal({
+        title: `Delete All Not Opened Contacts (${rowsToDelete.length})`,
+        badgeLabel: `${rowsToDelete.length} Not Opened Contacts`,
+        description: `Are you sure you want to delete all ${rowsToDelete.length} sent contact records that have not yet opened emails?`,
+        count: rowsToDelete.length,
+        ids: rowsToDelete.map((r) => r.id),
+        confirmButtonLabel: `Delete ${rowsToDelete.length} Not Opened`,
+      });
+      return;
+    }
+
+    const rowsToDelete = dedupedRows.filter((r) => r.status === category);
+    const label = STATUS_META[category].label;
+    setBulkDeleteModal({
+      title: `Delete All ${label} Contacts (${rowsToDelete.length})`,
+      badgeLabel: `${rowsToDelete.length} ${label} Contacts`,
+      description:
+        category === 'pending'
+          ? `Are you sure you want to delete all ${rowsToDelete.length} pending contacts? They will no longer receive the weekly welcome email.`
+          : `Are you sure you want to delete all ${rowsToDelete.length} ${label.toLowerCase()} contacts from the weekly email queue?`,
+      count: rowsToDelete.length,
+      ids: rowsToDelete.map((r) => r.id),
+      confirmButtonLabel: `Delete All ${rowsToDelete.length} ${label}`,
+    });
+  };
+
+  const executeDelete = async (idsToDelete: string[]) => {
+    if (deletingBulk || idsToDelete.length === 0) return;
+    setDeletingBulk(true);
+    try {
+      // Find all target rows and their lowercase emails to also delete any duplicates
+      const targetIdSet = new Set(idsToDelete);
+      const targetRows = rows.filter((r) => targetIdSet.has(r.id));
+      const targetEmails = new Set(
+        targetRows
+          .filter((r) => r.email)
+          .map((r) => (r.email || '').toLowerCase().trim())
+      );
+
+      const allIdsToDelete = rows
+        .filter(
+          (r) =>
+            targetIdSet.has(r.id) ||
+            (r.email && targetEmails.has((r.email || '').toLowerCase().trim()))
+        )
+        .map((r) => r.id);
+
+      const chunks: string[][] = [];
+      for (let i = 0; i < allIdsToDelete.length; i += UPDATE_CHUNK_SIZE) {
+        chunks.push(allIdsToDelete.slice(i, i + UPDATE_CHUNK_SIZE));
+      }
+
+      const results = await Promise.all(
+        chunks.map((chunk) =>
+          supabase.from('weekly_email_queue').delete().in('id', chunk)
+        )
+      );
+
+      const firstErr = results.find((res) => res.error)?.error;
+      if (firstErr) throw firstErr;
+
+      const deletedIdSet = new Set(allIdsToDelete);
+      setRows((prev) => prev.filter((r) => !deletedIdSet.has(r.id)));
+      setSelectedIds((prev) => {
+        const next = new Set(prev);
+        for (const id of allIdsToDelete) next.delete(id);
+        return next;
+      });
+
+      onToast(
+        `Successfully deleted ${idsToDelete.length} contact${idsToDelete.length === 1 ? '' : 's'} from the weekly queue.`,
+        'success'
+      );
+      setBulkDeleteModal(null);
+    } catch (err: any) {
+      onToast(`Failed to delete: ${err?.message || err}`, 'error');
+    } finally {
+      setDeletingBulk(false);
+    }
+  };
 
   // ─── CHANGE SCHEDULE ───
   // Persists the schedule ONLY. No insert, no delete, no `status` write, and
@@ -613,7 +786,7 @@ export default function WeeklyQueue({ onToast }: WeeklyQueueProps) {
     }
   };
 
-  // ─── REMOVE FROM QUEUE ───
+  // ─── REMOVE SINGLE ROW FROM QUEUE ───
   const handleConfirmRemove = async () => {
     if (submitting || !removeTarget) return;
     setSubmitting(true);
@@ -626,9 +799,16 @@ export default function WeeklyQueue({ onToast }: WeeklyQueueProps) {
         onToast('Failed to remove from queue: ' + error.message, 'error');
         return;
       }
+      const targetId = removeTarget.id;
       setRemoveTarget(null);
       onToast('Contact removed from the weekly queue', 'success');
-      setRows((prev) => prev.filter((r) => r.id !== removeTarget.id));
+      setRows((prev) => prev.filter((r) => r.id !== targetId));
+      setSelectedIds((prev) => {
+        if (!prev.has(targetId)) return prev;
+        const next = new Set(prev);
+        next.delete(targetId);
+        return next;
+      });
     } catch (e: any) {
       onToast('Failed to remove from queue: ' + (e?.message || e), 'error');
     } finally {
@@ -775,42 +955,291 @@ export default function WeeklyQueue({ onToast }: WeeklyQueueProps) {
             <div className="ct-panel-title">Weekly Email Queue</div>
             <div className="ct-record-count">
               {filteredRows.length} records
-              {selectedCount > 0 ? ` · ${selectedCount} pending selected` : ''}
+              {selectedCount > 0 ? (
+                <>
+                  {' · '}
+                  <span style={{ fontWeight: 600, color: 'var(--accent, #2563EB)' }}>
+                    {selectedCount} selected
+                  </span>
+                  {selectedPendingCount > 0 && selectedPendingCount < selectedCount
+                    ? ` (${selectedPendingCount} pending)`
+                    : ''}
+                </>
+              ) : ''}
             </div>
           </div>
-          <div className="ct-toolbar-right">
+          <div className="ct-toolbar-right" style={{ flexWrap: 'wrap', gap: 8 }}>
+            {/* ── Change Schedule ── */}
             <button
               className="btn btn-primary"
-              disabled={selectedCount === 0 || savingSchedule}
+              disabled={selectedPendingCount === 0 || savingSchedule}
               title={
                 selectedCount === 0
                   ? 'Select one or more pending records to change their schedule'
-                  : `Change the schedule for ${selectedCount} pending record${selectedCount === 1 ? '' : 's'}`
+                  : selectedPendingCount === 0
+                    ? 'None of the selected records are pending'
+                    : `Change the schedule for ${selectedPendingCount} pending record${selectedPendingCount === 1 ? '' : 's'}`
               }
               onClick={() => setScheduleOpen(true)}
             >
               <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
                 <CalendarIcon size={14} />
                 Change Schedule
-                {selectedCount > 0 ? ` (${selectedCount})` : ''}
+                {selectedPendingCount > 0 ? ` (${selectedPendingCount})` : ''}
               </span>
             </button>
+
+            {/* ── Delete Selected Button (Active when any records selected) ── */}
             {selectedCount > 0 && (
-              <button className="btn btn-ghost" onClick={clearSelection} disabled={savingSchedule}>
+              <button
+                className="btn"
+                style={{
+                  background: '#DC2626',
+                  borderColor: '#DC2626',
+                  color: '#ffffff',
+                  fontWeight: 600,
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 6,
+                }}
+                disabled={deletingBulk}
+                onClick={promptDeleteSelected}
+                title={`Delete ${selectedCount} selected contact${selectedCount === 1 ? '' : 's'}`}
+              >
+                <TrashIcon size={14} />
+                Delete Selected ({selectedCount})
+              </button>
+            )}
+
+            {/* ── Clear Selection ── */}
+            {selectedCount > 0 && (
+              <button
+                className="btn btn-ghost"
+                onClick={clearSelection}
+                disabled={savingSchedule || deletingBulk}
+              >
                 Clear
               </button>
             )}
-            {totalPendingRows.length > 0 && selectedCount < totalPendingRows.length && (
+
+            {/* ── Delete Options Dropdown ── */}
+            <div ref={deleteMenuRef} style={{ position: 'relative', display: 'inline-block' }}>
+              <button
+                type="button"
+                className="btn"
+                onClick={() => setDeleteMenuOpen((v) => !v)}
+                title="Delete options (pending, sent, opened, failed, all)"
+                style={{
+                  background: '#FEF2F2',
+                  color: '#DC2626',
+                  borderColor: '#FECACA',
+                  fontWeight: 600,
+                  fontSize: 12.5,
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 6,
+                }}
+              >
+                <TrashIcon size={14} />
+                Delete...
+                <span style={{ fontSize: 9, marginLeft: 2 }}>▼</span>
+              </button>
+
+              {deleteMenuOpen && (
+                <div
+                  style={{
+                    position: 'absolute',
+                    top: 'calc(100% + 6px)',
+                    right: 0,
+                    zIndex: 200,
+                    minWidth: 260,
+                    background: '#ffffff',
+                    border: '1px solid #E2E8F0',
+                    borderRadius: 10,
+                    boxShadow: '0 10px 25px -5px rgba(0, 0, 0, 0.15), 0 8px 10px -6px rgba(0, 0, 0, 0.1)',
+                    padding: '6px',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: 2,
+                  }}
+                >
+                  <div
+                    style={{
+                      padding: '6px 10px 4px',
+                      fontSize: 10.5,
+                      fontWeight: 700,
+                      color: '#94A3B8',
+                      textTransform: 'uppercase',
+                      letterSpacing: '0.05em',
+                    }}
+                  >
+                    Quick Delete Actions
+                  </div>
+
+                  {selectedCount > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setDeleteMenuOpen(false);
+                        promptDeleteSelected();
+                      }}
+                      style={menuItemBtnStyle}
+                      onMouseEnter={(e) => (e.currentTarget.style.background = '#FEE2E2')}
+                      onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
+                    >
+                      <span style={{ display: 'flex', alignItems: 'center', gap: 8, color: '#DC2626', fontWeight: 600 }}>
+                        <TrashIcon size={13} />
+                        Delete Selected ({selectedCount})
+                      </span>
+                    </button>
+                  )}
+
+                  {summary.pending > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setDeleteMenuOpen(false);
+                        promptDeleteCategory('pending');
+                      }}
+                      style={menuItemBtnStyle}
+                      onMouseEnter={(e) => (e.currentTarget.style.background = '#F8FAFC')}
+                      onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
+                    >
+                      <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                        <span style={{ width: 8, height: 8, borderRadius: '50%', background: '#F59E0B' }} />
+                        Delete All Pending ({summary.pending})
+                      </span>
+                    </button>
+                  )}
+
+                  {summary.sent > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setDeleteMenuOpen(false);
+                        promptDeleteCategory('sent');
+                      }}
+                      style={menuItemBtnStyle}
+                      onMouseEnter={(e) => (e.currentTarget.style.background = '#F8FAFC')}
+                      onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
+                    >
+                      <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                        <span style={{ width: 8, height: 8, borderRadius: '50%', background: '#10B981' }} />
+                        Delete All Sent ({summary.sent})
+                      </span>
+                    </button>
+                  )}
+
+                  {engagement.opened > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setDeleteMenuOpen(false);
+                        promptDeleteCategory('opened');
+                      }}
+                      style={menuItemBtnStyle}
+                      onMouseEnter={(e) => (e.currentTarget.style.background = '#F8FAFC')}
+                      onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
+                    >
+                      <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                        <span style={{ width: 8, height: 8, borderRadius: '50%', background: '#059669' }} />
+                        Delete All Opened ({engagement.opened})
+                      </span>
+                    </button>
+                  )}
+
+                  {engagement.notOpened > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setDeleteMenuOpen(false);
+                        promptDeleteCategory('not_opened');
+                      }}
+                      style={menuItemBtnStyle}
+                      onMouseEnter={(e) => (e.currentTarget.style.background = '#F8FAFC')}
+                      onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
+                    >
+                      <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                        <span style={{ width: 8, height: 8, borderRadius: '50%', background: '#64748B' }} />
+                        Delete All Not Opened ({engagement.notOpened})
+                      </span>
+                    </button>
+                  )}
+
+                  {summary.failed > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setDeleteMenuOpen(false);
+                        promptDeleteCategory('failed');
+                      }}
+                      style={menuItemBtnStyle}
+                      onMouseEnter={(e) => (e.currentTarget.style.background = '#F8FAFC')}
+                      onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
+                    >
+                      <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                        <span style={{ width: 8, height: 8, borderRadius: '50%', background: '#EF4444' }} />
+                        Delete All Failed ({summary.failed})
+                      </span>
+                    </button>
+                  )}
+
+                  {summary.skipped > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setDeleteMenuOpen(false);
+                        promptDeleteCategory('skipped');
+                      }}
+                      style={menuItemBtnStyle}
+                      onMouseEnter={(e) => (e.currentTarget.style.background = '#F8FAFC')}
+                      onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
+                    >
+                      <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                        <span style={{ width: 8, height: 8, borderRadius: '50%', background: '#94A3B8' }} />
+                        Delete All Skipped ({summary.skipped})
+                      </span>
+                    </button>
+                  )}
+
+                  <div style={{ height: 1, background: '#E2E8F0', margin: '4px 0' }} />
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setDeleteMenuOpen(false);
+                      promptDeleteCategory('all');
+                    }}
+                    style={{
+                      ...menuItemBtnStyle,
+                      color: '#DC2626',
+                      fontWeight: 600,
+                    }}
+                    onMouseEnter={(e) => (e.currentTarget.style.background = '#FEE2E2')}
+                    onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
+                  >
+                    <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <TrashIcon size={14} />
+                      Delete All Queue Records ({dedupedRows.length})
+                    </span>
+                  </button>
+                </div>
+              )}
+            </div>
+
+            {/* ── Quick selection helper ── */}
+            {filteredRows.length > 0 && selectedCount < filteredRows.length && (
               <button
                 className="btn btn-ghost"
-                onClick={() => setSelectedIds(new Set(totalPendingRows.map((r) => r.id)))}
-                disabled={savingSchedule}
-                title={`Select all ${totalPendingRows.length} pending records`}
+                onClick={selectAllFiltered}
+                disabled={savingSchedule || deletingBulk}
+                title={`Select all ${filteredRows.length} filtered records`}
                 style={{ fontSize: 12.5 }}
               >
-                Select All Pending ({totalPendingRows.length})
+                Select All ({filteredRows.length})
               </button>
             )}
+
             <div className="ct-search">
               <span className="ct-search-ic">
                 <SearchIcon size={15} />
@@ -865,21 +1294,21 @@ export default function WeeklyQueue({ onToast }: WeeklyQueueProps) {
                     ref={(el) => {
                       if (el) el.indeterminate = !allPageSelected && somePageSelected;
                     }}
-                    disabled={pageReschedulableRows.length === 0}
+                    disabled={paginatedRows.length === 0}
                     onChange={toggleSelectAllOnPage}
                     title={
-                      pageReschedulableRows.length === 0
-                        ? 'No pending records on this page'
+                      paginatedRows.length === 0
+                        ? 'No records on this page'
                         : allPageSelected
-                          ? 'Deselect all pending records on this page'
-                          : 'Select all pending records on this page'
+                          ? 'Deselect all records on this page'
+                          : 'Select all records on this page'
                     }
-                    aria-label="Select all pending records on this page"
+                    aria-label="Select all records on this page"
                     style={{
                       accentColor: '#2563EB',
                       width: 16,
                       height: 16,
-                      cursor: pageReschedulableRows.length === 0 ? 'not-allowed' : 'pointer',
+                      cursor: paginatedRows.length === 0 ? 'not-allowed' : 'pointer',
                       margin: 0,
                     }}
                   />
@@ -928,42 +1357,34 @@ export default function WeeklyQueue({ onToast }: WeeklyQueueProps) {
                 paginatedRows.map((r) => {
                   const avatarBg = AV_COLORS[(r.full_name || 'A').charCodeAt(0) % AV_COLORS.length];
                   const meta = STATUS_META[r.status];
-                  // Selection is restricted to PENDING rows. Everything else
-                  // (sending / sent / opened / not opened / failed / skipped)
-                  // renders a disabled checkbox so it can never be picked.
-                  const canSelect = r.status === RESCHEDULABLE_STATUS;
                   return (
                     <tr
                       key={r.id}
                       style={{
                         background: isRowSelected(r.id) ? '#EFF6FF' : undefined,
-                        cursor: canSelect ? 'pointer' : undefined,
+                        cursor: 'pointer',
                       }}
                       onClick={(e) => {
                         const target = e.target as HTMLElement;
                         if (target.closest('button, a, input, select, textarea')) return;
-                        if (canSelect) {
-                          toggleRowSelection(r.id);
-                        }
+                        toggleRowSelection(r.id);
                       }}
                     >
                       <td style={{ textAlign: 'center' }}>
-                        {canSelect ? (
-                          <input
-                            type="checkbox"
-                            checked={isRowSelected(r.id)}
-                            onChange={() => toggleRowSelection(r.id)}
-                            title={`Select ${r.full_name || r.email || 'this contact'}`}
-                            aria-label={`Select ${r.full_name || r.email || r.id}`}
-                            style={{
-                              accentColor: '#2563EB',
-                              width: 16,
-                              height: 16,
-                              margin: 0,
-                              cursor: 'pointer',
-                            }}
-                          />
-                        ) : null}
+                        <input
+                          type="checkbox"
+                          checked={isRowSelected(r.id)}
+                          onChange={() => toggleRowSelection(r.id)}
+                          title={`Select ${r.full_name || r.email || 'this contact'}`}
+                          aria-label={`Select ${r.full_name || r.email || r.id}`}
+                          style={{
+                            accentColor: '#2563EB',
+                            width: 16,
+                            height: 16,
+                            margin: 0,
+                            cursor: 'pointer',
+                          }}
+                        />
                       </td>
                       <td>
                         <div className="ct-name-cell">
@@ -1270,7 +1691,7 @@ export default function WeeklyQueue({ onToast }: WeeklyQueueProps) {
       {/* ─── MODAL: CHANGE SCHEDULE (pending records only) ─── */}
       {scheduleOpen && (
         <ChangeScheduleModal
-          rows={selectedRows}
+          rows={selectedPendingRows}
           submitting={savingSchedule}
           onClose={() => setScheduleOpen(false)}
           onSubmit={(plan) => void handleChangeSchedule(plan)}
@@ -1289,7 +1710,107 @@ export default function WeeklyQueue({ onToast }: WeeklyQueueProps) {
           }`}
           initialTab={activity.initialTab}
           rows={activityRows}
+          onDeleteRows={executeDelete}
+          onToast={onToast}
         />
+      )}
+
+      {/* ─── MODAL: BULK / CATEGORY DELETE CONFIRMATION ─── */}
+      {bulkDeleteModal && (
+        <div className="modal-overlay" style={{ zIndex: 1100 }}>
+          <div className="modal" style={{ maxWidth: 460 }}>
+            <div className="modal-header">
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                <div
+                  style={{
+                    width: 36,
+                    height: 36,
+                    borderRadius: '50%',
+                    background: '#FEE2E2',
+                    color: '#DC2626',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    flexShrink: 0,
+                  }}
+                >
+                  <TrashIcon size={18} />
+                </div>
+                <div>
+                  <div className="modal-title" style={{ fontSize: 16 }}>
+                    {bulkDeleteModal.title}
+                  </div>
+                  <div className="ct-sub" style={{ marginTop: 2 }}>
+                    {bulkDeleteModal.badgeLabel}
+                  </div>
+                </div>
+              </div>
+              <button
+                className="modal-close"
+                onClick={() => !deletingBulk && setBulkDeleteModal(null)}
+                disabled={deletingBulk}
+                title="Close"
+              >
+                <CloseIcon size={16} />
+              </button>
+            </div>
+            <div className="modal-body" style={{ padding: '16px 20px' }}>
+              <div style={{ fontSize: 13.5, color: 'var(--text2)', lineHeight: 1.6 }}>
+                {bulkDeleteModal.description}
+              </div>
+              <div
+                style={{
+                  marginTop: 14,
+                  padding: '10px 14px',
+                  borderRadius: 8,
+                  background: '#FEF2F2',
+                  border: '1px solid #FECACA',
+                  color: '#991B1B',
+                  fontSize: 12.5,
+                  display: 'flex',
+                  alignItems: 'flex-start',
+                  gap: 8,
+                  lineHeight: 1.5,
+                }}
+              >
+                <span style={{ fontSize: 14 }}>⚠️</span>
+                <span>
+                  <strong>Warning:</strong> This action cannot be undone. Contacts deleted from the
+                  queue will not be processed or emailed.
+                </span>
+              </div>
+            </div>
+            <div className="modal-footer">
+              <button
+                className="btn btn-ghost"
+                onClick={() => setBulkDeleteModal(null)}
+                disabled={deletingBulk}
+              >
+                Cancel
+              </button>
+              <button
+                className="btn"
+                style={{
+                  background: '#DC2626',
+                  borderColor: '#DC2626',
+                  color: '#fff',
+                  fontWeight: 600,
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 8,
+                }}
+                disabled={deletingBulk}
+                onClick={() => void executeDelete(bulkDeleteModal.ids)}
+              >
+                <TrashIcon size={14} />
+                {deletingBulk
+                  ? 'Deleting...'
+                  : bulkDeleteModal.confirmButtonLabel ||
+                    `Delete ${bulkDeleteModal.count} Contact${bulkDeleteModal.count === 1 ? '' : 's'}`}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );
