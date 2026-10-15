@@ -1108,12 +1108,6 @@ export default function SequenceBuilderTab({ onNavigate, onToast }: SequenceBuil
   return (
     <div className="seqb">
       <div className="seq-header">
-        <div style={{ minWidth: '0' }}>
-          <div className="seq-title">Sequence Builder</div>
-          <div className="seq-subtitle">
-            Every sequence's emails shown as columns, straight from its branch-step records.
-          </div>
-        </div>
         <button className="btn btn-primary btn-new-seq" onClick={() => onNavigate('sequences')}>
           + New Sequence
         </button>

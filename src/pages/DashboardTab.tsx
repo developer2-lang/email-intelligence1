@@ -245,9 +245,6 @@ export default function DashboardTab({
   if (loading) return <DashboardSkeleton />
   if (error) return <DashboardError message={error} onRetry={onRetry} />
 
-  const hour = new Date().getHours()
-  const greeting = hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening'
-
   const contactsSub =
     contacts.length > 0
       ? `${uniqueCompanies} ${uniqueCompanies === 1 ? 'company' : 'companies'}`
@@ -273,13 +270,6 @@ export default function DashboardTab({
 
   return (
     <div className="page active">
-      <div className="dash-header">
-        <div>
-          <div className="dash-greeting">{greeting} 👋</div>
-          <div className="dash-subtitle">Here's what's happening with your email outreach today.</div>
-        </div>
-      </div>
-
       <div className="dash-cards">
         <DashCard
           label="Total Contacts"

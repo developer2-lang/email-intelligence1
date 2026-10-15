@@ -1180,14 +1180,8 @@ setCompBody('');
 
   return (
     <div className="page active">
-      {/* Tab bar header */}
+      {/* Campaign actions */}
       <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: '18px' }}>
-        <div>
-          <div style={{ fontSize: '18px', fontWeight: 700 }}>Campaigns</div>
-          <div style={{ fontSize: '12px', color: 'var(--text4)', marginTop: '2px' }}>
-            Build and monitor your outreach campaigns
-          </div>
-        </div>
         <div style={{ display: 'flex', gap: '8px' }}>
           {campTabState !== 'list' && (
             <button className="btn btn-ghost btn-sm" onClick={() => setCampTabState('list')}>Back to campaigns</button>

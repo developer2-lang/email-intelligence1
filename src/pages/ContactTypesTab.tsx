@@ -156,15 +156,6 @@ export default function ContactTypesTab({ onToast }: ContactTypesTabProps) {
 
   return (
     <div className="page active">
-      <div className="contacts-head">
-        <div>
-          <div className="contacts-title">Contact Types</div>
-          <div className="contacts-sub">
-            Manage contact type definitions used for segmentation and filtering
-          </div>
-        </div>
-      </div>
-
       <div className="ct-panel">
         {loading ? (
           <div className="empty-state" style={{ padding: 40 }}>

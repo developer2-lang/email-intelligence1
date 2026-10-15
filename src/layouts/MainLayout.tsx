@@ -8,6 +8,7 @@ import type { TabKey, ToastMessage } from '../types'
 interface MainLayoutProps {
   activeTab: TabKey
   onNavigate: (tab: TabKey) => void
+  onBack: () => void
   toasts: ToastMessage[]
   prefFrom?: string
   userEmail?: string
@@ -15,7 +16,7 @@ interface MainLayoutProps {
   children: ReactNode
 }
 
-export default function MainLayout({ activeTab, onNavigate, toasts, prefFrom, userEmail, onSignOut, children }: MainLayoutProps) {
+export default function MainLayout({ activeTab, onNavigate, onBack, toasts, prefFrom, userEmail, onSignOut, children }: MainLayoutProps) {
   const [navOpen, setNavOpen] = useState(false)
   const meta = NAV_META[activeTab]
 
@@ -70,6 +71,30 @@ export default function MainLayout({ activeTab, onNavigate, toasts, prefFrom, us
                 <line x1="4" y1="17" x2="20" y2="17" />
               </svg>
             </button>
+            {activeTab === 'lead-search' && (
+              <button
+                type="button"
+                className="lead-search-back"
+                onClick={onBack}
+                title="Back to previous page"
+                aria-label="Back to previous page"
+              >
+                <svg
+                  width="18"
+                  height="18"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2.2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  aria-hidden="true"
+                >
+                  <line x1="19" y1="12" x2="5" y2="12" />
+                  <polyline points="12 19 5 12 12 5" />
+                </svg>
+              </button>
+            )}
             <div>
               <div className="topbar-title">{meta.title}</div>
               <div className="topbar-sub">{meta.sub}</div>

@@ -546,24 +546,10 @@ export default function LeadDatabase({ onToast }: LeadDatabaseProps) {
 
   return (
     <div className="page active">
-      {/* ─── TITLE + ACTIONS ─── */}
-      <div className="contacts-head">
-        <div>
-          <div className="contacts-title">Lead Database</div>
-          <div className="contacts-sub">
-            Browse and manage every saved lead from Lead Generation.
-          </div>
-        </div>
-      </div>
-
       {/* ─── TABLE PANEL ─── */}
       <div className="ct-panel">
         {/* Toolbar: search + filters */}
         <div className="ct-toolbar">
-          <div>
-            <div className="ct-panel-title">Leads</div>
-            <div className="ct-record-count">{filteredLeads.length} records</div>
-          </div>
           <div className="ct-toolbar-right">
             {activeFilterCount > 0 && (
               <button className="btn btn-ghost ct-clear-filters" onClick={clearAllFilters}>

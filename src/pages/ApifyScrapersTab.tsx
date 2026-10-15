@@ -199,12 +199,8 @@ export default function ApifyScrapersTab({ onToast }: ApifyScrapersTabProps) {
 
   return (
     <div className="page active">
-      {/* ─── TITLE + ACTIONS ─── */}
+      {/* ─── ACTIONS ─── */}
       <div className="contacts-head">
-        <div>
-          <div className="contacts-title">Apify Scrapers</div>
-          <div className="contacts-sub">Manage your Apify scraper links</div>
-        </div>
         <div className="ct-toolbar-right" style={{ marginTop: 0 }}>
           <button className="btn btn-primary" onClick={openAddModal}>
             <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>

@@ -7,14 +7,14 @@ export const NAV_META: { [key: string]: { title: string; sub: string } } = {
   contacts:   { title: 'Contacts',              sub: 'Manage and enrich your contact database' },
   campaigns:  { title: 'Campaigns',             sub: 'Build, schedule and send email campaigns' },
   followups:  { title: 'Follow-ups',            sub: 'Follow-up to opened or not-opened recipients' },
-  sequences:  { title: 'Sequences',             sub: 'Email drip automation' },
-  'sequence-builder': { title: 'Sequence Builder', sub: 'Design and assemble email drip workflows' },
-  'template-editor': { title: 'Template Editor', sub: 'Design and manage email templates' },
+  sequences:  { title: 'Sequences', sub: 'Email drip automation — enroll contacts and track progress' },
+  'sequence-builder': { title: 'Sequence Builder', sub: "Every sequence's emails shown as columns, straight from its branch-step records." },
+  'template-editor': { title: 'Template Editor', sub: 'Create, upload, edit and save email templates visually' },
   'template-library': { title: 'All Templates', sub: 'Browse, search and manage every saved template' },
   'contact-types': { title: 'Contact Types',    sub: 'Manage contact type definitions' },
   'lead-search': { title: 'Lead Search', sub: 'Find B2B leads by filters' },
   'lead-database': { title: 'Lead Database', sub: 'Browse and manage every saved lead' },
-  'apify':  { title: 'Apify',                    sub: 'Manage your Apify scraper links' },
+  'apify':  { title: 'Apify Scrapers', sub: 'Manage your Apify scraper links' },
   'weekly-queue': { title: 'Weekly Queue', sub: 'One welcome email per new contact, every Thursday (in batches)' },
 };
 

@@ -234,7 +234,7 @@ export default function App() {
   const userEmail = user.email ?? ''
 
   return (
-    <MainLayout activeTab={activeTab} onNavigate={onNavigate} toasts={toasts} prefFrom={prefs.from} userEmail={userEmail} onSignOut={signOut}>
+    <MainLayout activeTab={activeTab} onNavigate={onNavigate} onBack={onBack} toasts={toasts} prefFrom={prefs.from} userEmail={userEmail} onSignOut={signOut}>
       <AppRoutes
         activeTab={activeTab}
         contacts={contacts}
@@ -247,7 +247,6 @@ export default function App() {
         onPersistSequences={setSequences}
         onPersistApiKeys={setStoredApiKeys}
         onNavigate={onNavigate}
-        onBack={onBack}
         onToast={onToast}
         isUploadModalOpen={isUploadModalOpen}
         setIsUploadModalOpen={setIsUploadModalOpen}

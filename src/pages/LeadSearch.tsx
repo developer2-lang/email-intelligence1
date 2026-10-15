@@ -230,10 +230,9 @@ function loadCustomValues(key: string): string[] {
 
 interface LeadSearchProps {
   onNavigate?: (tab: TabKey) => void
-  onBack?: () => void
 }
 
-export default function LeadSearch({ onNavigate, onBack }: LeadSearchProps = {}) {
+export default function LeadSearch({ onNavigate }: LeadSearchProps = {}) {
   const [filters, setFilters] = useState<Filters>(() => {
     const saved = localStorage.getItem('leadSearchFilters')
     return saved ? { ...DEFAULT_FILTERS, ...JSON.parse(saved) } : DEFAULT_FILTERS
@@ -650,16 +649,6 @@ export default function LeadSearch({ onNavigate, onBack }: LeadSearchProps = {})
 
   const removeCustomCompany = (value: string) => {
     setCustomCompanies((prev) => prev.filter((company) => company !== value))
-  }
-
-  const handleBack = () => {
-    if (onBack) {
-      onBack()
-    } else if (onNavigate) {
-      onNavigate('lead-database')
-    } else if (window.history.length > 1) {
-      window.history.back()
-    }
   }
 
   const handleResetSearch = () => {
@@ -1566,52 +1555,6 @@ export default function LeadSearch({ onNavigate, onBack }: LeadSearchProps = {})
           marginBottom: '18px',
         }}
       >
-        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-          <button
-            type="button"
-            onClick={handleBack}
-            className="btn btn-ghost"
-            style={{
-              display: 'inline-flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              width: '36px',
-              height: '36px',
-              padding: 0,
-              borderRadius: '9px',
-              border: '1px solid var(--border2)',
-              background: 'var(--surface)',
-              color: 'var(--text1)',
-              cursor: 'pointer',
-              boxShadow: '0 1px 2px rgba(15, 23, 42, 0.05)',
-              transition: 'all 0.15s ease',
-              flexShrink: 0,
-            }}
-            title="Back to previous page"
-            aria-label="Back to previous page"
-          >
-            <svg
-              width="18"
-              height="18"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2.2"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            >
-              <line x1="19" y1="12" x2="5" y2="12" />
-              <polyline points="12 19 5 12 12 5" />
-            </svg>
-          </button>
-          <div>
-            <div style={{ fontSize: '20px', fontWeight: 700, color: 'var(--text1)' }}>Lead Search</div>
-            <div style={{ fontSize: '12.5px', color: 'var(--text4)', marginTop: '2px' }}>
-              Find B2B leads by filters
-            </div>
-          </div>
-        </div>
-
         {onNavigate && (
           <button
             type="button"

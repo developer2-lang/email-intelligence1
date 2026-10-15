@@ -91,7 +91,12 @@ export async function insertContact(input: ContactInput): Promise<{ data: Contac
   try {
     const res = await supabase.from(TABLE).insert(toInsertRow(input)).select('*')
 
-    if (res.error) return { data: null, error: res.error.message }
+    if (res.error) {
+      if (res.error.message.includes('contacts_linkedin_url_key')) {
+        return { data: null, error: 'A contact with this LinkedIn URL already exists.' }
+      }
+      return { data: null, error: res.error.message }
+    }
     const row = Array.isArray(res.data) && res.data.length > 0 ? (res.data[0] as ContactRow) : null
     return { data: row ? mapRowToContact(row) : null, error: null }
   } catch (err) {
@@ -130,9 +135,42 @@ export async function deleteContacts(ids: string[]): Promise<{ error: string | n
 export async function insertContacts(inputs: ContactInput[]): Promise<{ error: string | null }> {
   try {
     const rows = inputs.map(toInsertRow)
+
+    // Deduplicate any repeated non-empty linkedin_url inside this payload to prevent unique constraint violation
+    const seenLinkedin = new Set<string>()
+    for (const row of rows) {
+      if (row.linkedin_url) {
+        const key = String(row.linkedin_url).toLowerCase().trim()
+        if (seenLinkedin.has(key)) {
+          row.linkedin_url = null
+        } else {
+          seenLinkedin.add(key)
+        }
+      }
+    }
+
     const { error } = await supabase.from(TABLE).insert(rows)
 
-    return { error: error?.message ?? null }
+    if (error) {
+      // If error is duplicate key on linkedin_url (e.g. conflicts with existing row in DB)
+      if (error.message.includes('contacts_linkedin_url_key')) {
+        const { data: existingRows } = await supabase.from(TABLE).select('linkedin_url').not('linkedin_url', 'is', null)
+        const dbLk = new Set((existingRows || []).map((r: any) => String(r.linkedin_url || '').toLowerCase().trim()))
+        for (const row of rows) {
+          if (row.linkedin_url && dbLk.has(String(row.linkedin_url).toLowerCase().trim())) {
+            row.linkedin_url = null
+          }
+        }
+        // Retry insert with conflicts resolved
+        const retry = await supabase.from(TABLE).insert(rows)
+        if (retry.error) return { error: retry.error.message }
+        return { error: null }
+      }
+
+      return { error: error.message }
+    }
+
+    return { error: null }
   } catch (err) {
     return { error: err instanceof Error ? err.message : 'Failed to import contacts' }
   }

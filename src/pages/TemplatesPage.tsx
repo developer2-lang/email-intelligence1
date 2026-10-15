@@ -208,20 +208,14 @@ export default function TemplatesPage({ onNavigate, onToast }: TemplatesPageProp
           marginBottom: '18px',
         }}
       >
-        <div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-            <button
-              type="button"
-              style={{ ...toolButton, padding: '6px 12px' }}
-              onClick={() => onNavigate('template-editor')}
-            >
-              ← Back to Template Editor
-            </button>
-          </div>
-          <div style={{ fontSize: '22px', fontWeight: 700, marginTop: '12px' }}>Templates</div>
-          <div style={{ fontSize: '12.5px', color: 'var(--text4)', marginTop: '2px' }}>
-            Manage all your saved email templates
-          </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+          <button
+            type="button"
+            style={{ ...toolButton, padding: '6px 12px' }}
+            onClick={() => onNavigate('template-editor')}
+          >
+            ← Back to Template Editor
+          </button>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
           <div style={{ position: 'relative' }}>

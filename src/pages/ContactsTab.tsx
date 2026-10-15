@@ -124,7 +124,110 @@ function extractNameFromCell(text: string, emails: string[], phones: string[]): 
   return '';
 }
 
-function smartParseImportRow(row: ImportRow, phone1Col?: string, phone2Col?: string): ParsedImportContact | null {
+function cleanLinkedinUrl(raw: any): string {
+  if (!raw) return '';
+  const str = String(raw).trim();
+  if (!str) return '';
+
+  if (/^(na|n\/a|-|—|nil|none|null|blank|undefined|not available)$/i.test(str)) return '';
+
+  // 1. Matches standard LinkedIn profile or company URLs (including country subdomains like in., www., http/https or bare domain)
+  const domainMatch = str.match(/(?:https?:\/\/)?(?:[a-z]{2,3}\.)?linkedin\.com\/(?:in|company|pub|profile|school)\/[^\s,"'<>]+/i);
+  if (domainMatch) {
+    let url = domainMatch[0].trim().replace(/[,;:!?)]+$/, '');
+    if (!/^https?:\/\//i.test(url)) {
+      url = 'https://' + url.replace(/^\/+/, '');
+    }
+    return url;
+  }
+
+  // 2. Generic linkedin.com/something
+  const genericMatch = str.match(/(?:https?:\/\/)?(?:[a-z]{2,3}\.)?linkedin\.com\/[^\s,"'<>]+/i);
+  if (genericMatch) {
+    let url = genericMatch[0].trim().replace(/[,;:!?)]+$/, '');
+    if (!/^https?:\/\//i.test(url)) {
+      url = 'https://' + url.replace(/^\/+/, '');
+    }
+    return url;
+  }
+
+  return '';
+}
+
+function normalizeLinkedinKey(raw?: string | null): string {
+  if (!raw) return '';
+  return String(raw)
+    .trim()
+    .toLowerCase()
+    .replace(/^https?:\/\//i, '')
+    .replace(/^(?:[a-z]{2,3}\.)?linkedin\.com\//i, '')
+    .replace(/\/+$/, '');
+}
+
+function extractLinkedinFromRow(row: ImportRow, explicitLinkedinCol?: string): string {
+  // 1. If user explicitly selected a LinkedIn column
+  if (explicitLinkedinCol && row[explicitLinkedinCol]) {
+    const fromCol = cleanLinkedinUrl(row[explicitLinkedinCol]);
+    if (fromCol) return fromCol;
+    const rawVal = String(row[explicitLinkedinCol]).trim();
+    if (rawVal && !rawVal.includes(' ') && !/^(na|n\/a|-|—|nil|none|null|blank)$/i.test(rawVal)) {
+      const slug = rawVal.replace(/^https?:\/\//i, '').replace(/^(?:[a-z]{2,3}\.)?linkedin\.com\/in\//i, '').replace(/^\/?in\//i, '').replace(/^\/+/, '');
+      if (slug) return `https://www.linkedin.com/in/${slug}`;
+    }
+  }
+
+  // 2. Look for any column whose header contains 'linkedin' or 'linkdin'
+  for (const [k, val] of Object.entries(row)) {
+    const lowerKey = k.toLowerCase().replace(/[^a-z0-9]/g, '');
+    if (lowerKey.includes('linkedin') || lowerKey.includes('linkdin')) {
+      const fromKey = cleanLinkedinUrl(val);
+      if (fromKey) return fromKey;
+      const rawVal = String(val).trim();
+      if (rawVal && !rawVal.includes(' ') && !/^(na|n\/a|-|—|nil|none|null|blank)$/i.test(rawVal)) {
+        const slug = rawVal.replace(/^https?:\/\//i, '').replace(/^(?:[a-z]{2,3}\.)?linkedin\.com\/in\//i, '').replace(/^\/?in\//i, '').replace(/^\/+/, '');
+        if (slug) return `https://www.linkedin.com/in/${slug}`;
+      }
+    }
+  }
+
+  // 3. Check common aliases via pickRowValue
+  const explicitLinkedin = pickRowValue(row, [
+    'LinkedIn', 'LinkedIn URL', 'Linkedin', 'linkedin_url', 'Linkedin URL',
+    'Profile URL', 'LinkedIn Profile', 'Person Linkedin Url', 'Personal LinkedIn',
+    'LinkedIn Link', 'Linkedin Link', 'Profile Link', 'Social Link', 'Social URL',
+    'Social Profile', 'User Profile', 'LinkedIn ID'
+  ]);
+  if (explicitLinkedin) {
+    const cleaned = cleanLinkedinUrl(explicitLinkedin);
+    if (cleaned) return cleaned;
+    if (!explicitLinkedin.includes(' ') && !/^(na|n\/a|-|—|nil|none|null|blank)$/i.test(explicitLinkedin)) {
+      const slug = explicitLinkedin.replace(/^https?:\/\//i, '').replace(/^(?:[a-z]{2,3}\.)?linkedin\.com\/in\//i, '').replace(/^\/?in\//i, '').replace(/^\/+/, '');
+      if (slug) return `https://www.linkedin.com/in/${slug}`;
+    }
+  }
+
+  // 4. Scan all cells across the row for any cell containing a LinkedIn link
+  for (const [_k, val] of Object.entries(row)) {
+    if (!val) continue;
+    const found = cleanLinkedinUrl(val);
+    if (found) return found;
+  }
+
+  return '';
+}
+
+function getLinkedinColumnMapping(headers: string[]): string {
+  const token = (header: string) => header.toLowerCase().replace(/[^a-z0-9]/g, '');
+  for (const h of headers) {
+    const t = token(h);
+    if (t.includes('linkedin') || t.includes('linkdin')) {
+      return h;
+    }
+  }
+  return '';
+}
+
+function smartParseImportRow(row: ImportRow, phone1Col?: string, phone2Col?: string, linkedinCol?: string): ParsedImportContact | null {
   const nonEmpties = Object.values(row).map(v => String(v || '').trim()).filter(Boolean);
   if (nonEmpties.length === 0) return null;
   // Ignore header rows
@@ -147,7 +250,7 @@ function smartParseImportRow(row: ImportRow, phone1Col?: string, phone2Col?: str
   // 3. Scan all fields for emails, phones, linkedin, designation
   const allEmails: string[] = [];
   const allPhones: string[] = [];
-  let linkedin = pickRowValue(row, ['LinkedIn', 'LinkedIn URL', 'Linkedin', 'linkedin_url', 'Linkedin URL', 'Profile URL', 'LinkedIn Profile']);
+  const linkedin = extractLinkedinFromRow(row, linkedinCol);
   let designation = pickRowValue(row, ['Designation', 'Role', 'Title', 'Job Title']);
   const industry = pickRowValue(row, ['Industry', 'Sector']);
   const city = pickRowValue(row, ['City', 'Location']);
@@ -185,11 +288,6 @@ function smartParseImportRow(row: ImportRow, phone1Col?: string, phone2Col?: str
     const str = String(val).trim();
     if (!str) continue;
 
-    // Check linkedin URL
-    if (!linkedin && /linkedin\.com\/in\//i.test(str)) {
-      const match = str.match(/https?:\/\/(?:www\.)?linkedin\.com\/in\/[^\s,\/]+/i);
-      if (match) linkedin = match[0];
-    }
 
     // Check designation
     if (!designation) {
@@ -389,14 +487,6 @@ const UsersIcon = ({ size = 20 }: { size?: number }) => (
   </svg>
 );
 
-const DatabaseIcon = ({ size = 20 }: { size?: number }) => (
-  <svg {...iconProps} width={size} height={size}>
-    <ellipse cx="12" cy="5" rx="9" ry="3" />
-    <path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3" />
-    <path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5" />
-  </svg>
-);
-
 const contactFieldIconPaths = {
   person: 'M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2M12 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8z',
   email: 'M4 4h16v16H4zM22 6l-10 7L2 6',
@@ -417,49 +507,6 @@ function ContactFieldIcon({ name }: { name: keyof typeof contactFieldIconPaths }
     </svg>
   );
 }
-
-// ─── Small presentational components ───────────────────────────────────────
-
-const CARD_TONES = {
-  indigo: { bg: '#EEF2FF', fg: '#4F46E5' },
-  sky: { bg: '#F0F9FF', fg: '#0369A1' },
-  blue: { bg: '#DBEAFE', fg: '#1D4ED8' },
-  purple: { bg: '#F5F3FF', fg: '#7C3AED' },
-  green: { bg: '#ECFDF5', fg: '#059669' },
-  amber: { bg: '#FFFBEB', fg: '#D97706' },
-  teal: { bg: '#F0FDFA', fg: '#0F766E' },
-} as const;
-
-/** Modern stat card used in the overview grid (icon + label + big number + sub). */
-function StatCard({
-  label,
-  value,
-  sub,
-  icon,
-  tone,
-}: {
-  label: string;
-  value: number;
-  sub: string;
-  icon: React.ReactNode;
-  tone: keyof typeof CARD_TONES;
-}) {
-  const t = CARD_TONES[tone];
-  return (
-    <div className="stat-card">
-      <div className="stat-top">
-        <div className="stat-icon" style={{ background: t.bg, color: t.fg }}>
-          {icon}
-        </div>
-        <div className="stat-label">{label}</div>
-      </div>
-      <div className="stat-value">{value}</div>
-      <div className="stat-delta">{sub}</div>
-    </div>
-  );
-}
-
-/** Small pill badge for a contact's type. */
 function TypeBadge({ type }: { type: string }) {
   return <span className={`tag ${typeTone(type)}`}>{type || '—'}</span>;
 }
@@ -585,6 +632,7 @@ export default function ContactsTab({
   const [importType, setImportType] = useState('New Lead');
   const [phone1Column, setPhone1Column] = useState('');
   const [phone2Column, setPhone2Column] = useState('');
+  const [linkedinColumn, setLinkedinColumn] = useState('');
 
   // Automatically parse uploaded rows into clean contacts with Smart Auto-Extraction
   useEffect(() => {
@@ -593,10 +641,10 @@ export default function ContactsTab({
       return;
     }
     const parsed = uploadBuffer
-      .map(row => smartParseImportRow(row, phone1Column, phone2Column))
+      .map(row => smartParseImportRow(row, phone1Column, phone2Column, linkedinColumn))
       .filter((c): c is ParsedImportContact => Boolean(c));
     setSmartContactsBuffer(parsed);
-  }, [uploadBuffer, phone1Column, phone2Column]);
+  }, [uploadBuffer, phone1Column, phone2Column, linkedinColumn]);
 
   // ─── DRAG & DROP FOR CONTACT TYPE TABS ───
   const [dragOverTabId, setDragOverTabId] = useState<string | null>(null);
@@ -739,19 +787,7 @@ export default function ContactsTab({
   }, [refreshLeads]);
 
 
-  // ─── CONTACT METRICS ───
-  const metrics = useMemo(() => {
-    const total = contacts.length;
-    const activeProfiles = contacts.filter(c => c.type && String(c.type).trim().toLowerCase() !== 'newsletter').length;
-    const newLeads = contacts.filter(c => c.type === 'New Lead').length;
-    const unqualified = contacts.filter(c => c.type === 'Prospect').length;
-    const highEngagement = contacts.filter(c => (c.engagement || 0) >= 70).length;
-    const enriched = contacts.filter(c => c.enriched).length;
-    const verifiedMeta = contacts.filter(
-      c => c.industry && c.industry.trim() && c.designation && c.designation.trim() && c.city && c.city.trim()
-    ).length;
-    return { total, activeProfiles, newLeads, unqualified, highEngagement, enriched, verifiedMeta };
-  }, [contacts]);
+
 
   // ─── CONTACTS FILTERING & SORTING ───
   const filteredContacts = useMemo(() => {
@@ -1468,12 +1504,56 @@ export default function ContactsTab({
             return;
           }
           const wb = XLSX.read(e.target.result, { type: 'binary' });
-          rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { defval: '' });
+          const firstSheet = wb.Sheets[wb.SheetNames[0]];
+          rows = XLSX.utils.sheet_to_json(firstSheet, { defval: '' });
+
+          // Extract embedded cell hyperlinks (e.g. LinkedIn URLs attached to cell text)
+          if (firstSheet && firstSheet['!ref']) {
+            try {
+              const range = XLSX.utils.decode_range(firstSheet['!ref']);
+              const headers: string[] = [];
+              for (let C = range.s.c; C <= range.e.c; ++C) {
+                const headerCell = firstSheet[XLSX.utils.encode_cell({ r: range.s.r, c: C })];
+                headers.push(headerCell ? String(headerCell.v ?? '').trim() : '');
+              }
+              for (let R = range.s.r + 1; R <= range.e.r; ++R) {
+                const rowIdx = R - (range.s.r + 1);
+                if (rowIdx < rows.length && rows[rowIdx]) {
+                  for (let C = range.s.c; C <= range.e.c; ++C) {
+                    const header = headers[C];
+                    if (!header) continue;
+                    const cell = firstSheet[XLSX.utils.encode_cell({ r: R, c: C })];
+                    if (cell) {
+                      let linkUrl = '';
+                      if (cell.l && cell.l.Target) {
+                        linkUrl = String(cell.l.Target).trim();
+                      } else if (cell.f && /HYPERLINK/i.test(cell.f)) {
+                        const formulaMatch = String(cell.f).match(/HYPERLINK\(\s*["']([^"']+)["']/i);
+                        if (formulaMatch && formulaMatch[1]) {
+                          linkUrl = formulaMatch[1].trim();
+                        }
+                      }
+                      if (linkUrl) {
+                        const existingVal = String(rows[rowIdx][header] || '').trim();
+                        if (/linkedin/i.test(linkUrl) || !existingVal || /^(linkedin|profile|view|link|click here|url)$/i.test(existingVal)) {
+                          rows[rowIdx][header] = linkUrl;
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            } catch (hyperlinkErr) {
+              console.warn('Hyperlink extraction note:', hyperlinkErr);
+            }
+          }
         }
         setUploadBuffer(rows);
-        const mapping = getPhoneColumnMapping(Object.keys(rows[0] || {}));
+        const headers = Object.keys(rows[0] || {});
+        const mapping = getPhoneColumnMapping(headers);
         setPhone1Column(mapping.phone1);
         setPhone2Column(mapping.phone2);
+        setLinkedinColumn(getLinkedinColumnMapping(headers));
       } catch (err: any) {
         onToast('Error reading file: ' + err.message, 'error');
       }
@@ -1496,15 +1576,38 @@ export default function ContactsTab({
     const existingEmails = await fetchAllContactEmails();
     const seenEmails = new Set(existingEmails);
     const seenPhones = new Set<string>();
+    const seenLinkedinKeys = new Set<string>();
     const toInsert: ContactInput[] = [];
     let added = 0;
     let skipped = 0;
+
+    // Check existing contacts so re-importing also enriches missing LinkedIn URLs
+    // and guarantees no duplicate key violations on contacts_linkedin_url_key
+    const { data: existingRows } = await supabase
+      .from('contacts')
+      .select('id, email, email_2, linkedin_url');
+    type ExistingContactRef = { id: string; email?: string | null; email_2?: string | null; linkedin_url?: string | null };
+    const existingByEmail = new Map<string, ExistingContactRef>();
+    const existingByLinkedin = new Map<string, ExistingContactRef>();
+    if (existingRows) {
+      for (const r of (existingRows as any[])) {
+        if (r.email) existingByEmail.set(String(r.email).toLowerCase().trim(), r);
+        if (r.email_2) existingByEmail.set(String(r.email_2).toLowerCase().trim(), r);
+        if (r.linkedin_url) {
+          const lk = normalizeLinkedinKey(r.linkedin_url);
+          if (lk) existingByLinkedin.set(lk, r);
+        }
+      }
+    }
+    const toUpdateLinkedIn: Array<{ id: string; linkedin_url: string }> = [];
 
     smartContactsBuffer.forEach((c) => {
       const email1 = (c.email_1 || '').trim().toLowerCase();
       const email2 = (c.email_2 || '').trim().toLowerCase();
       const phone1Digits = (c.phone_1 || '').replace(/\D/g, '');
       const phone2Digits = (c.phone_2 || '').replace(/\D/g, '');
+      const rawLinkedin = (c.linkedin_url || '').trim();
+      const lkKey = normalizeLinkedinKey(rawLinkedin);
 
       // Must have at least an email OR a phone OR a name
       if (!email1 && !email2 && !phone1Digits && !phone2Digits && !c.name) {
@@ -1512,13 +1615,37 @@ export default function ContactsTab({
         return;
       }
 
-      // Deduplicate by email if email present
-      if (email1 && seenEmails.has(email1)) {
+      // 1. If contact already exists in database by email, enrich missing LinkedIn URL
+      const existing = (email1 && existingByEmail.get(email1)) || (email2 && existingByEmail.get(email2));
+      if (existing) {
+        if (rawLinkedin && lkKey && !existing.linkedin_url) {
+          if (!existingByLinkedin.has(lkKey) && !seenLinkedinKeys.has(lkKey)) {
+            toUpdateLinkedIn.push({ id: existing.id, linkedin_url: rawLinkedin });
+            seenLinkedinKeys.add(lkKey);
+            existingByLinkedin.set(lkKey, existing);
+          }
+        }
         skipped++;
         return;
       }
 
-      // Deduplicate phone-only rows
+      // 2. If contact already exists in DB by LinkedIn URL and has no email or phone, skip as duplicate
+      if (!email1 && !email2 && !phone1Digits && !phone2Digits && lkKey && existingByLinkedin.has(lkKey)) {
+        skipped++;
+        return;
+      }
+
+      // 3. Deduplicate by email if email present
+      if (email1 && seenEmails.has(email1)) {
+        skipped++;
+        return;
+      }
+      if (email2 && seenEmails.has(email2)) {
+        skipped++;
+        return;
+      }
+
+      // 4. Deduplicate phone-only rows
       if (!email1 && phone1Digits && seenPhones.has(phone1Digits)) {
         skipped++;
         return;
@@ -1528,6 +1655,15 @@ export default function ContactsTab({
       if (email2) seenEmails.add(email2);
       if (phone1Digits) seenPhones.add(phone1Digits);
       if (phone2Digits) seenPhones.add(phone2Digits);
+
+      // 5. Determine unique LinkedIn URL to insert safely without violating contacts_linkedin_url_key
+      let finalLinkedinUrl: string | null = null;
+      if (rawLinkedin && lkKey) {
+        if (!existingByLinkedin.has(lkKey) && !seenLinkedinKeys.has(lkKey)) {
+          finalLinkedinUrl = rawLinkedin;
+          seenLinkedinKeys.add(lkKey);
+        }
+      }
 
       toInsert.push({
         full_name: c.name || 'Contact',
@@ -1541,13 +1677,23 @@ export default function ContactsTab({
         designation: c.designation || null,
         industry: c.industry || null,
         city: c.city || null,
-        linkedin_url: c.linkedin_url || null,
+        linkedin_url: finalLinkedinUrl,
         contact_type: selectedImportType,
         company_category: c.company_category || 'Domestic',
         notes: c.notes || null,
       });
       added++;
     });
+
+    if (toUpdateLinkedIn.length > 0) {
+      for (const item of toUpdateLinkedIn) {
+        try {
+          await supabase.from('contacts').update({ linkedin_url: item.linkedin_url }).eq('id', item.id);
+        } catch (enrichErr) {
+          console.warn('LinkedIn enrich note:', enrichErr);
+        }
+      }
+    }
 
     if (toInsert.length > 0) {
       const { error } = await insertContacts(toInsert);
@@ -1570,29 +1716,27 @@ export default function ContactsTab({
         );
       }
 
+    }
+
+    if (toInsert.length > 0 || toUpdateLinkedIn.length > 0) {
       setLoading(true);
       await refreshContacts();
     }
 
     setIsUploadModalOpen(false);
-    onToast(`${added} contacts successfully imported${skipped ? ` (${skipped} skipped)` : ''}`, 'success');
+    onToast(`${added} contacts imported${toUpdateLinkedIn.length ? `, ${toUpdateLinkedIn.length} existing contacts enriched with LinkedIn` : ''}${skipped ? ` (${skipped} existing)` : ''}`, 'success');
     setUploadBuffer([]);
     setSmartContactsBuffer([]);
     setUploadFileName('');
     setPhone1Column('');
     setPhone2Column('');
+    setLinkedinColumn('');
   };
 
   return (
     <div className="page active">
-      {/* ─── CONTACTS DIRECTORY TITLE + ACTIONS ─── */}
+      {/* ─── CONTACT ACTIONS ─── */}
       <div className="contacts-head">
-        <div>
-          <div className="contacts-title">Contacts Directory</div>
-          <div className="contacts-sub">
-            Manage, segment, and enrich audience profiles across intelligence pipelines.
-          </div>
-        </div>
         <div className="contacts-actions">
           <button
             className="btn btn-primary"
@@ -1615,20 +1759,10 @@ export default function ContactsTab({
         </div>
       </div>
 
-      {/* ─── OVERVIEW STATISTICS CARDS ─── */}
-      <div className="stats-row">
-        <StatCard label="Total Contacts" value={metrics.total} sub="All database profiles" icon={<UsersIcon />} tone="indigo" />
-        <StatCard label="Active Database Profiles" value={metrics.activeProfiles} sub="Non-newsletter records" icon={<DatabaseIcon />} tone="sky" />
-      </div>
-
       {/* ─── CONTACTS TABLE PANEL ─── */}
       <div className="ct-panel">
-        {/* Toolbar: title + record count, search + category filter */}
+        {/* Toolbar: search + category filter */}
         <div className="ct-toolbar">
-          <div>
-            <div className="ct-panel-title">Contacts</div>
-            <div className="ct-record-count">{contacts.length} records</div>
-          </div>
           <div className="ct-toolbar-right">
             <div className="ct-search">
               <span className="ct-search-ic">
@@ -2521,12 +2655,12 @@ export default function ContactsTab({
                   ))}
                 </div>
                 {uploadBuffer.length > 0 && (
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginTop: 12 }}>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12, marginTop: 12 }}>
                     <label className="form-group">
                       <span>Phone 1 column</span>
                       <select className="ct-select" value={phone1Column} onChange={e => setPhone1Column(e.target.value)}>
                         <option value="">Auto-Detect from cells</option>
-                        {Object.keys(uploadBuffer[0] || {}).filter(column => column !== phone2Column).map(column => (
+                        {Object.keys(uploadBuffer[0] || {}).filter(column => column !== phone2Column && column !== linkedinColumn).map(column => (
                           <option key={column} value={column}>{column}</option>
                         ))}
                       </select>
@@ -2535,7 +2669,16 @@ export default function ContactsTab({
                       <span>Phone 2 column</span>
                       <select className="ct-select" value={phone2Column} onChange={e => setPhone2Column(e.target.value)}>
                         <option value="">Auto-Detect from cells</option>
-                        {Object.keys(uploadBuffer[0] || {}).filter(column => column !== phone1Column).map(column => (
+                        {Object.keys(uploadBuffer[0] || {}).filter(column => column !== phone1Column && column !== linkedinColumn).map(column => (
+                          <option key={column} value={column}>{column}</option>
+                        ))}
+                      </select>
+                    </label>
+                    <label className="form-group">
+                      <span>LinkedIn column</span>
+                      <select className="ct-select" value={linkedinColumn} onChange={e => setLinkedinColumn(e.target.value)}>
+                        <option value="">Auto-Detect from cells</option>
+                        {Object.keys(uploadBuffer[0] || {}).filter(column => column !== phone1Column && column !== phone2Column).map(column => (
                           <option key={column} value={column}>{column}</option>
                         ))}
                       </select>
@@ -2588,7 +2731,9 @@ export default function ContactsTab({
                             <td style={{ padding: '8px 10px', borderRight: '1px solid var(--border)', color: c.phone_1 ? 'var(--green)' : 'var(--text3)' }}>{c.phone_1 || '—'}</td>
                             <td style={{ padding: '8px 10px', borderRight: '1px solid var(--border)', color: c.phone_2 ? 'var(--green)' : 'var(--text3)' }}>{c.phone_2 || '—'}</td>
                             <td style={{ padding: '8px 10px', borderRight: '1px solid var(--border)', color: 'var(--text3)' }}>{c.designation || '—'}</td>
-                            <td style={{ padding: '8px 10px', color: 'var(--text3)' }}>{c.linkedin_url ? '✓' : '—'}</td>
+                            <td style={{ padding: '8px 10px', color: c.linkedin_url ? '#0A66C2' : 'var(--text3)', fontWeight: c.linkedin_url ? 600 : 'normal' }} title={c.linkedin_url}>
+                              {c.linkedin_url ? '✓ Found' : '—'}
+                            </td>
                           </tr>
                         ))}
                       </tbody>

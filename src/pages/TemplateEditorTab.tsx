@@ -585,35 +585,16 @@ export default function TemplateEditorTab({ onToast, onNavigate }: TemplateEdito
 
   return (
     <div className={fullscreen ? 'page active te-fs-page' : 'page active'}>
-      {!fullscreen && (
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'flex-start',
-            justifyContent: 'space-between',
-            gap: '14px',
-            flexWrap: 'wrap',
-            marginBottom: '16px',
-          }}
-        >
-          <div>
-            <div style={{ fontSize: '18px', fontWeight: 700 }}>Template Editor</div>
-            <div style={{ fontSize: '12px', color: 'var(--text4)', marginTop: '2px' }}>
-              Create, upload, edit and save email templates visually
-            </div>
-            {selectedTemplate && (
-              <div style={{ fontSize: '11.5px', color: '#64748B', marginTop: '6px' }}>
-                Editing:{' '}
-                <span style={{ fontWeight: 700, color: '#1D4ED8' }}>{selectedTemplate.name}</span>
-                {selectedTemplate.created_at
-                  ? ` · created ${formatCreatedDate(selectedTemplate.created_at)}`
-                  : ''}
-                {dirty && (
-                  <span style={{ color: '#B45309', marginLeft: '6px' }}>● unsaved changes</span>
-                )}
-              </div>
-            )}
-          </div>
+      {!fullscreen && selectedTemplate && (
+        <div style={{ fontSize: '11.5px', color: '#64748B', marginBottom: '12px' }}>
+          Editing:{' '}
+          <span style={{ fontWeight: 700, color: '#1D4ED8' }}>{selectedTemplate.name}</span>
+          {selectedTemplate.created_at
+            ? ` · created ${formatCreatedDate(selectedTemplate.created_at)}`
+            : ''}
+          {dirty && (
+            <span style={{ color: '#B45309', marginLeft: '6px' }}>● unsaved changes</span>
+          )}
         </div>
       )}
 

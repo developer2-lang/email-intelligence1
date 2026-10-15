@@ -2902,10 +2902,6 @@ export default function SequencesTab({ onPersistSequences, onToast }: SequencesT
     <div>
       {/* Header */}
       <div className="seq-header">
-        <div>
-          <div className="seq-title">Sequences</div>
-          <div className="seq-subtitle">Email drip automation — enroll contacts and track progress</div>
-        </div>
         <button className="btn btn-primary btn-new-seq" onClick={openCreate}>
           <svg
             width="15"
@@ -4301,6 +4297,5 @@ export default function SequencesTab({ onPersistSequences, onToast }: SequencesT
     </div>
   );
 }
-
 
 

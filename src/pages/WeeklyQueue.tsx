@@ -858,16 +858,8 @@ export default function WeeklyQueue({ onToast }: WeeklyQueueProps) {
 
   return (
     <div className="page active">
-      {/* ─── TITLE + ACTIONS ─── */}
+      {/* ─── ACTIONS ─── */}
       <div className="contacts-head">
-        <div>
-          <div className="contacts-title">Weekly Queue</div>
-          <div className="contacts-sub">
-            New contacts are queued automatically and receive one welcome email every Thursday from
-            7:30 AM IST (in batches of 30). Select pending records to move them to a different
-            schedule — all other pending records keep the automatic Thursday slot.
-          </div>
-        </div>
         <div className="ct-toolbar-right">
           <button
             className="btn btn-ghost"

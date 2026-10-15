@@ -1211,10 +1211,6 @@ const DELAY_OPTIONS = [
   return (
     <div className="page active">
       <div className="fu-header">
-        <div>
-          <div className="fu-title">Follow-ups</div>
-          <div className="fu-sub">Build and manage follow-ups for campaign openers</div>
-        </div>
         <div className="fu-header-actions">
           {tab !== 'compose' && (
             <button className="btn btn-primary btn-sm" onClick={openComposer}>
