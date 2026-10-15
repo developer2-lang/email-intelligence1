@@ -502,11 +502,6 @@ export default function WeeklyQueue({ onToast }: WeeklyQueueProps) {
   }, [filteredRows, safePage, pageSize]);
 
   // ─── SELECTION (any row can be selected for deletion; pending rows for reschedule) ───
-  const _totalPendingRows = useMemo(
-    () => dedupedRows.filter((r) => r.status === RESCHEDULABLE_STATUS),
-    [dedupedRows]
-  );
-
   const selectedRows = useMemo(
     () => dedupedRows.filter((r) => selectedIds.has(r.id)),
     [dedupedRows, selectedIds]
@@ -553,11 +548,6 @@ export default function WeeklyQueue({ onToast }: WeeklyQueueProps) {
 
   const selectAllFiltered = () => {
     setSelectedIds(new Set(filteredRows.map((r) => r.id)));
-  };
-
-  const _selectAllMatching = (status: QueueStatus) => {
-    const matching = dedupedRows.filter((r) => r.status === status).map((r) => r.id);
-    setSelectedIds(new Set(matching));
   };
 
   const clearSelection = useCallback(() => setSelectedIds(new Set<string>()), []);

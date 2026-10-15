@@ -806,17 +806,24 @@ const DELAY_OPTIONS = [
 
   // Generate audience segments from database contact_types with counts from contacts
   const getAudienceSegments = useCallback(() => {
+    let totalEmails = 0;
     const contactTypeCounts = new Map<string, number>();
     for (const contact of audienceContacts) {
+      let countForContact = 0;
+      const em1 = (contact.email || contact.email_1 || '').trim().toLowerCase();
+      const em2 = (contact.email_2 || '').trim().toLowerCase();
+      if (em1 && em1 !== '—') countForContact++;
+      if (em2 && em2 !== '—' && em2 !== em1) countForContact++;
+
+      totalEmails += countForContact;
       const type = contact.type?.trim();
       if (type) {
-        contactTypeCounts.set(type, (contactTypeCounts.get(type) || 0) + 1);
+        contactTypeCounts.set(type, (contactTypeCounts.get(type) || 0) + countForContact);
       }
     }
     const segments: Array<{ value: string; label: string; count: number }> = [
-      { value: 'All Contacts', label: 'All Contacts', count: audienceContacts.length },
+      { value: 'All Contacts', label: 'All Contacts', count: totalEmails || audienceContacts.length },
     ];
-    // Add all active contact types from the database, with their counts from contacts
     for (const ct of contactTypes) {
       if (ct.is_active) {
         const count = contactTypeCounts.get(ct.name) || 0;
@@ -831,7 +838,10 @@ const DELAY_OPTIONS = [
   const getSegmentCount = (segment: string) => {
     // If we have selected contacts from drag-and-drop, use that count
     if (selectedContacts.length > 0) return selectedContacts.length;
-    if (segment === 'All Contacts') return audienceContacts.length;
+    if (segment === 'All Contacts') {
+      const allSegment = audienceSegments.find(s => s.value === 'All Contacts');
+      return allSegment ? allSegment.count : audienceContacts.length;
+    }
     const found = audienceSegments.find(s => s.value === segment);
     if (found) return found.count;
     if (segment.includes(',') || segment.includes('@')) {

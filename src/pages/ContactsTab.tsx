@@ -47,7 +47,6 @@ const EMAIL_EMPTY_SENTINELS = new Set([
   'na', 'n/a', '-', '—', 'nil', 'none', 'null', 'unknown', 'blank', 'undefined', 'not available',
 ]);
 const GENERIC_ORG_EMAILS = new Set(['crm@iuova.in']);
-const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 function pickRowValue(row: ImportRow, keys: string[]): string {
   const byLower = new Map(Object.keys(row).map(k => [k.trim().toLowerCase(), k]));
@@ -390,25 +389,11 @@ const UsersIcon = ({ size = 20 }: { size?: number }) => (
   </svg>
 );
 
-const _EnrichmentIcon = ({ size = 20 }: { size?: number }) => (
-  <svg {...iconProps} width={size} height={size}>
-    <path d="M6 3h12l4 6-10 13L2 9l4-6z" />
-    <path d="M11 3 8 9l4 13 4-13-3-6" />
-    <path d="M2 9h20" />
-  </svg>
-);
-
 const DatabaseIcon = ({ size = 20 }: { size?: number }) => (
   <svg {...iconProps} width={size} height={size}>
     <ellipse cx="12" cy="5" rx="9" ry="3" />
     <path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3" />
     <path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5" />
-  </svg>
-);
-
-const _CheckIcon = ({ size = 20 }: { size?: number }) => (
-  <svg {...iconProps} width={size} height={size}>
-    <polyline points="20 6 9 17 4 12" />
   </svg>
 );
 

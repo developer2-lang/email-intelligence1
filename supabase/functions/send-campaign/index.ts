@@ -45,9 +45,8 @@ import { createClient } from 'npm:@supabase/supabase-js@2';
 import { personalizeTemplate } from '../_shared/personalization.ts';
 import { toEmailSafeHtml } from '../_shared/email-render.ts';
 
-const supabaseUrl = Deno.env.get('R_SUPABASE_URL')!;
-const supabaseKey =
-  Deno.env.get('R_SERVICE_ROLE_KEY') || Deno.env.get('SUPABASE_ANON_KEY')!;
+const supabaseUrl = (Deno.env.get('R_SUPABASE_URL') || Deno.env.get('SUPABASE_URL') || '').trim();
+const supabaseKey = (Deno.env.get('R_SERVICE_ROLE_KEY') || Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') || Deno.env.get('R_SUPABASE_ANON_KEY') || Deno.env.get('SUPABASE_ANON_KEY') || '').trim();
 const supabase = createClient(supabaseUrl, supabaseKey);
 
 // ─── Configuration (env) ───────────────────────────────────────────────────
@@ -388,7 +387,11 @@ async function resolveContactsForCampaign(
         .select('*')
         .in('id', openedIds);
       if (contactsError) throw new Error(`Failed to fetch follow-up contacts: ${contactsError.message}`);
-      valid = (rows || []).filter((c: any) => isDeliverableRecipientEmail(c.email));
+      valid = (rows || []).filter((c: any) => {
+        const em1 = String(c?.email || c?.email_1 || '').trim();
+        const em2 = String(c?.email_2 || '').trim();
+        return isDeliverableRecipientEmail(em1) || isDeliverableRecipientEmail(em2);
+      });
     }
     if (valid.length === 0) {
       log(`Campaign ${campaignId} is a follow-up of ${sourceCampaignId} — no ${notOpenedAudience ? 'non-opened' : 'opened'} recipients found; 0 recipients.`);
@@ -401,13 +404,10 @@ async function resolveContactsForCampaign(
       .in('id', selectedContactIds);
     if (contactsError) throw new Error(`Failed to fetch selected contacts: ${contactsError.message}`);
 
-    const seenEmails = new Set<string>();
     valid = (rows || []).filter((c: any) => {
-      if (!isDeliverableRecipientEmail(c.email)) return false;
-      const key = String(c.email).trim().toLowerCase();
-      if (seenEmails.has(key)) return false;
-      seenEmails.add(key);
-      return true;
+      const em1 = String(c?.email || c?.email_1 || '').trim();
+      const em2 = String(c?.email_2 || '').trim();
+      return isDeliverableRecipientEmail(em1) || isDeliverableRecipientEmail(em2);
     });
   } else {
     const segment = String(audienceSegment || '').trim();
@@ -419,13 +419,10 @@ async function resolveContactsForCampaign(
     const { data: contacts, error } = await query;
     if (error) throw new Error(`Failed to fetch contacts: ${error.message}`);
 
-    const seenEmails = new Set<string>();
     valid = (contacts || []).filter((c: any) => {
-      if (!isDeliverableRecipientEmail(c.email)) return false;
-      const key = String(c.email).trim().toLowerCase();
-      if (seenEmails.has(key)) return false;
-      seenEmails.add(key);
-      return true;
+      const em1 = String(c?.email || c?.email_1 || '').trim();
+      const em2 = String(c?.email_2 || '').trim();
+      return isDeliverableRecipientEmail(em1) || isDeliverableRecipientEmail(em2);
     });
   }
 
@@ -454,16 +451,51 @@ async function resolveContactsForCampaign(
 }
 
 // ─── email_logs helpers ────────────────────────────────────────────────────
-async function createEmailLogs(campaignId: string, contacts: any[]): Promise<void> {
+async function createEmailLogs(
+  campaignId: string,
+  contacts: any[],
+  alreadyQueuedKeys?: Set<string>
+): Promise<void> {
   if (contacts.length === 0) return;
-  const rows = contacts.map((c: any) => ({
-    campaign_id: campaignId,
-    contact_id: c.id,
-    email: c.email,
-    status: 'pending',
-    retry_count: 0,
-    tracking_id: crypto.randomUUID(),
-  }));
+  const rows: any[] = [];
+  const seenInBatch = new Set<string>();
+
+  for (const c of contacts) {
+    const em1 = String(c?.email || c?.email_1 || '').trim();
+    const em2 = String(c?.email_2 || '').trim();
+
+    if (isDeliverableRecipientEmail(em1)) {
+      const key = `${c.id}:${em1.toLowerCase()}`;
+      if (!alreadyQueuedKeys?.has(key) && !seenInBatch.has(key)) {
+        seenInBatch.add(key);
+        rows.push({
+          campaign_id: campaignId,
+          contact_id: c.id,
+          email: em1,
+          status: 'pending',
+          retry_count: 0,
+          tracking_id: crypto.randomUUID(),
+        });
+      }
+    }
+
+    if (isDeliverableRecipientEmail(em2) && em2.toLowerCase() !== em1.toLowerCase()) {
+      const key = `${c.id}:${em2.toLowerCase()}`;
+      if (!alreadyQueuedKeys?.has(key) && !seenInBatch.has(key)) {
+        seenInBatch.add(key);
+        rows.push({
+          campaign_id: campaignId,
+          contact_id: c.id,
+          email: em2,
+          status: 'pending',
+          retry_count: 0,
+          tracking_id: crypto.randomUUID(),
+        });
+      }
+    }
+  }
+
+  if (rows.length === 0) return;
   const { error } = await supabase.from('email_logs').insert(rows);
   if (error) {
     // email_logs may predate the tracking columns → retry without tracking_id.
@@ -476,7 +508,7 @@ async function createEmailLogs(campaignId: string, contacts: any[]): Promise<voi
       throw new Error(`Failed to create email logs: ${error.message}`);
     }
   }
-  log(`Queued ${contacts.length} recipient(s) for campaign ${campaignId}`);
+  log(`Queued ${rows.length} recipient email(s) across ${contacts.length} contact(s) for campaign ${campaignId}`);
 }
 
 async function getLogsByCampaign(campaignId: string): Promise<any[]> {
@@ -1180,18 +1212,11 @@ async function sendOneEmail(
  * as email_logs above (the runner never re-creates them), so none is lost and
  * none is double-sent.
  */
-async function sendFirstBatchAndHandOff(
-  campaignId: string,
-  campaign: any,
-  contacts: any[],
-  contactMap: Map<string, any>,
-  mimeAttachments: MimeAttachment[],
-  batchSize: number
-): Promise<{ sent: number; failed: number; total: number; handedOff: boolean; status: string }> {
+async function sendFirstBatchAndHandOff(campaignId: string, campaign: any, contacts: any[], totalEmailsCount: number, contactMap: Map<string, any>, mimeAttachments: MimeAttachment[], batchSize: number): Promise<{ sent: number; failed: number; total: number; handedOff: boolean; status: string }> {
   const claimTimeIso = new Date().toISOString();
   const firstDelayHours = Number(campaign.first_batch_delay_hours);
   const firstDelayMs = Number.isFinite(firstDelayHours) ? Math.max(0, firstDelayHours) * 60 * 60 * 1000 : 2 * 60 * 60 * 1000;
-  const totalBatches = Math.ceil(contacts.length / batchSize);
+  const totalBatches = Math.ceil(totalEmailsCount / batchSize);
 
   log(
     `Campaign ${campaignId} is batched — sending ONLY batch 1 of ${totalBatches} ` +
@@ -1204,7 +1229,7 @@ async function sendFirstBatchAndHandOff(
 
   // Claim + deliver exactly batchSize recipients this invocation.
   const pending = await claimPendingLogs(campaignId, batchSize);
-  const total = contacts.length;
+  const total = totalEmailsCount;
   for (let i = 0; i < pending.length; i++) {
     if (Date.now() - start > TIME_BUDGET_MS) break;
     const logRow = pending[i];
@@ -1252,7 +1277,7 @@ async function sendFirstBatchAndHandOff(
     status: 'scheduled',
     current_batch_number: 1,
     next_batch_at: nextAt,
-    recipient_count: contacts.length,
+    recipient_count: totalEmailsCount,
   });
 
   log(
@@ -1266,7 +1291,7 @@ async function sendFirstBatchAndHandOff(
     logErr(`Analytics sync failed (non-fatal): ${(analyticsError as Error).message}`);
   }
 
-  return { sent, failed, total: contacts.length, handedOff: true, status: 'scheduled' };
+  return { sent, failed, total: totalEmailsCount, handedOff: true, status: 'scheduled' };
 }
 
 // ─── Campaign processing (mirrors the scheduler's processCampaign) ─────────
@@ -1313,9 +1338,13 @@ async function processCampaign(
 
   // Ensure one email_log per recipient (idempotent — never duplicates).
   const existingLogs = await getLogsByCampaign(campaignId);
-  const alreadyQueued = new Set(existingLogs.map((l: any) => l.contact_id));
-  const newContacts = contacts.filter((c: any) => !alreadyQueued.has(c.id));
-  if (newContacts.length > 0) await createEmailLogs(campaignId, newContacts);
+  const alreadyQueued = new Set<string>(
+    existingLogs.map((l: any) => `${l.contact_id}:${String(l.email || '').trim().toLowerCase()}`)
+  );
+  await createEmailLogs(campaignId, contacts, alreadyQueued);
+
+  const allLogsForCampaign = await getLogsByCampaign(campaignId);
+  const totalEmailsQueued = allLogsForCampaign.length;
 
   const contactMap = new Map(contacts.map((c: any) => [c.id, c]));
 
@@ -1332,17 +1361,10 @@ async function processCampaign(
   const configuredBatchSize = Number(campaign.batch_size);
   const isBatchSend =
     sendInBatches && Number.isInteger(configuredBatchSize) && configuredBatchSize > 0 &&
-    Math.ceil(contacts.length / configuredBatchSize) > 1;
+    Math.ceil(totalEmailsQueued / configuredBatchSize) > 1;
 
   if (isBatchSend) {
-    return await sendFirstBatchAndHandOff(
-      campaignId,
-      campaign,
-      contacts,
-      contactMap,
-      mimeAttachments,
-      configuredBatchSize
-    );
+    return await sendFirstBatchAndHandOff(campaignId, campaign, contacts, totalEmailsQueued, contactMap, mimeAttachments, configuredBatchSize);
   }
 
   // Drain pending logs within the invocation time budget.
@@ -1358,7 +1380,7 @@ async function processCampaign(
     const batch = await claimPendingLogs(campaignId);
     if (batch.length === 0) break;
 
-    const total = contacts.length;
+    const total = totalEmailsQueued;
     for (let i = 0; i < batch.length; i++) {
       if (Date.now() - start > TIME_BUDGET_MS) break;
       if (sent + failed >= MAX_EMAILS_PER_RUN) break;

@@ -60,7 +60,9 @@ const CONTACT_ALIASES = [
     lookup.set(normalized, text === null ? '' : text);
   }
   // `{{email}}` still resolves when the contact row has no email address.
-  if (!lookup.has('email')) {
+  if (fallbackEmail) {
+    lookup.set('email', String(fallbackEmail));
+  } else if (!lookup.has('email')) {
     const fallback = valueToText(fallbackEmail);
     if (fallback) lookup.set('email', fallback);
   }

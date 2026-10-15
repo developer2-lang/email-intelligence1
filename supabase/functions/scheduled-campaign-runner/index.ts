@@ -67,8 +67,8 @@
  */ import { createClient } from 'npm:@supabase/supabase-js@2';
 import { personalizeTemplate } from '../_shared/personalization.ts';
 import { toEmailSafeHtml } from '../_shared/email-render.ts';
-const supabaseUrl = Deno.env.get('R_SUPABASE_URL');
-const supabaseKey = Deno.env.get('R_SERVICE_ROLE_KEY') || Deno.env.get('SUPABASE_ANON_KEY');
+const supabaseUrl = (Deno.env.get('R_SUPABASE_URL') || Deno.env.get('SUPABASE_URL') || '').trim();
+const supabaseKey = (Deno.env.get('R_SERVICE_ROLE_KEY') || Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') || Deno.env.get('R_SUPABASE_ANON_KEY') || Deno.env.get('SUPABASE_ANON_KEY') || '').trim();
 const supabase = createClient(supabaseUrl, supabaseKey);
 // ─── Configuration (env) ───────────────────────────────────────────────────
 // R_CRON_SECRET is the single source of truth for scheduled-campaign-runner auth.
@@ -410,7 +410,11 @@ async function resolveContactsForCampaign(campaignId, audienceSegment) {
     } else {
       const { data: rows, error: contactsError } = await supabase.from('contacts').select('*').in('id', openedIds);
       if (contactsError) throw new Error(`Failed to fetch follow-up contacts: ${contactsError.message}`);
-      valid = (rows || []).filter((c)=>isDeliverableRecipientEmail(c.email));
+      valid = (rows || []).filter((c) => {
+        const em1 = String(c?.email || c?.email_1 || '').trim();
+        const em2 = String(c?.email_2 || '').trim();
+        return isDeliverableRecipientEmail(em1) || isDeliverableRecipientEmail(em2);
+      });
     }
     if (valid.length === 0) {
       log(`Campaign ${campaignId} is a follow-up of ${sourceCampaignId} — no ${notOpenedAudience ? 'non-opened' : 'opened'} recipients found; 0 recipients.`);
@@ -424,13 +428,10 @@ async function resolveContactsForCampaign(campaignId, audienceSegment) {
     }
     const { data: contacts, error } = await query;
     if (error) throw new Error(`Failed to fetch contacts: ${error.message}`);
-    const seenEmails = new Set();
-    valid = (contacts || []).filter((c)=>{
-      if (!isDeliverableRecipientEmail(c.email)) return false;
-      const key = String(c.email).trim().toLowerCase();
-      if (seenEmails.has(key)) return false;
-      seenEmails.add(key);
-      return true;
+    valid = (contacts || []).filter((c) => {
+      const em1 = String(c?.email || c?.email_1 || '').trim();
+      const em2 = String(c?.email_2 || '').trim();
+      return isDeliverableRecipientEmail(em1) || isDeliverableRecipientEmail(em2);
     });
   }
   // Link resolved contacts to campaign_contacts (idempotent) — keeps the DB
@@ -459,16 +460,47 @@ async function resolveContactsForCampaign(campaignId, audienceSegment) {
   };
 }
 // ─── email_logs helpers ────────────────────────────────────────────────────
-async function createEmailLogs(campaignId, contacts) {
+async function createEmailLogs(campaignId, contacts, alreadyQueuedKeys) {
   if (contacts.length === 0) return;
-  const rows = contacts.map((c)=>({
-      campaign_id: campaignId,
-      contact_id: c.id,
-      email: c.email,
-      status: 'pending',
-      retry_count: 0,
-      tracking_id: crypto.randomUUID()
-    }));
+  const rows = [];
+  const seenInBatch = new Set();
+
+  for (const c of contacts) {
+    const em1 = String(c?.email || c?.email_1 || '').trim();
+    const em2 = String(c?.email_2 || '').trim();
+
+    if (isDeliverableRecipientEmail(em1)) {
+      const key = `${c.id}:${em1.toLowerCase()}`;
+      if (!alreadyQueuedKeys?.has(key) && !seenInBatch.has(key)) {
+        seenInBatch.add(key);
+        rows.push({
+          campaign_id: campaignId,
+          contact_id: c.id,
+          email: em1,
+          status: 'pending',
+          retry_count: 0,
+          tracking_id: crypto.randomUUID()
+        });
+      }
+    }
+
+    if (isDeliverableRecipientEmail(em2) && em2.toLowerCase() !== em1.toLowerCase()) {
+      const key = `${c.id}:${em2.toLowerCase()}`;
+      if (!alreadyQueuedKeys?.has(key) && !seenInBatch.has(key)) {
+        seenInBatch.add(key);
+        rows.push({
+          campaign_id: campaignId,
+          contact_id: c.id,
+          email: em2,
+          status: 'pending',
+          retry_count: 0,
+          tracking_id: crypto.randomUUID()
+        });
+      }
+    }
+  }
+
+  if (rows.length === 0) return;
   const { error } = await supabase.from('email_logs').insert(rows);
   if (error) {
     // email_logs may predate the tracking columns → retry without tracking_id.
@@ -479,7 +511,7 @@ async function createEmailLogs(campaignId, contacts) {
       throw new Error(`Failed to create email logs: ${error.message}`);
     }
   }
-  log(`Queued ${contacts.length} recipient(s) for campaign ${campaignId}`);
+  log(`Queued ${rows.length} recipient email(s) across ${contacts.length} contact(s) for campaign ${campaignId}`);
 }
 async function getLogsByCampaign(campaignId) {
   const { data, error } = await supabase.from('email_logs').select('*').eq('campaign_id', campaignId);
@@ -1153,9 +1185,13 @@ async function processCampaign(campaignId) {
     }
     // Ensure one email_log per recipient (idempotent — never duplicates).
     const existingLogs = await getLogsByCampaign(campaignId);
-    const alreadyQueued = new Set(existingLogs.map((l)=>l.contact_id));
-    const newContacts = contacts.filter((c)=>!alreadyQueued.has(c.id));
-    if (newContacts.length > 0) await createEmailLogs(campaignId, newContacts);
+    const alreadyQueued = new Set(
+      existingLogs.map((l) => `${l.contact_id}:${String(l.email || '').trim().toLowerCase()}`)
+    );
+    await createEmailLogs(campaignId, contacts, alreadyQueued);
+
+    const allLogsForCampaign = await getLogsByCampaign(campaignId);
+    const totalEmailsQueued = allLogsForCampaign.length;
     const contactMap = new Map(contacts.map((c)=>[
         c.id,
         c
@@ -1186,7 +1222,7 @@ async function processCampaign(campaignId) {
       }
       const batch = await claimPendingLogs(campaignId, runCap - (sent + failed));
       if (batch.length === 0) break;
-      const total = contacts.length;
+      const total = totalEmailsQueued;
       for(let i = 0; i < batch.length; i++){
         // Re-check the budget inside the loop too — a large claimed batch must
         // never push this invocation past the free-tier wall-clock limit.
